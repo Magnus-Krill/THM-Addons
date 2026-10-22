@@ -6,8 +6,13 @@
 
 package xyz.thm.addon.modules;
 
+import baritone.api.BaritoneAPI;
+import baritone.api.IBaritone;
+import baritone.api.pathing.goals.GoalXZ;
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
+import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.Modules;
@@ -18,12 +23,21 @@ import meteordevelopment.meteorclient.systems.modules.player.AutoGap;
 import meteordevelopment.meteorclient.systems.modules.player.Rotation;
 import meteordevelopment.meteorclient.systems.modules.render.FreeLook;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
+import meteordevelopment.meteorclient.utils.Utils;
+import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
+import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.player.SlotUtils;
+import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.client.CameraType;
+import net.minecraft.client.gui.components.AbstractButton;
+import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.screens.DisconnectedScreen;
+import net.minecraft.client.gui.screens.dialog.DialogScreen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
@@ -34,20 +48,30 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownExperienceBottle;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.ItemContainerContents;
+import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ShulkerBoxBlock;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.lwjgl.glfw.GLFW;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.utils.ElytraNavigator;
+import xyz.thm.addon.utils.ElytraPathPlanner;
 import xyz.thm.addon.utils.InventoryManager;
+import xyz.thm.addon.utils.RenderUtilsTHM;
 import xyz.thm.addon.utils.THMUtils;
 import xyz.thm.addon.utils.server.ServerReconnectService;
 import xyz.thm.addon.utils.server.ServerStatusHandler;
@@ -79,10 +103,13 @@ public class ElytraRoute extends Module {
     private static final int SOURCE_READY_MAX_RETRIES = 3;
 
     private final SettingGroup sgRoute = settings.getDefaultGroup();
+    private final SettingGroup sgPath = settings.createGroup("Pathing");
+    private final SettingGroup sgRepair = settings.createGroup("Repair");
     private final SettingGroup sgRestock = settings.createGroup("Restock");
     private final SettingGroup sgFood = settings.createGroup("Food");
     private final SettingGroup sgHome = settings.createGroup("Home");
     private final SettingGroup sgReconnect = settings.createGroup("Reconnect");
+    private final SettingGroup sgMining = settings.createGroup("Mining");
 
     private final Setting<Integer> destinationX = sgRoute.add(new IntSetting.Builder()
         .name("destination-x")
@@ -123,6 +150,13 @@ public class ElytraRoute extends Module {
         .build()
     );
 
+    private final Setting<Boolean> togglePerspective = sgRoute.add(new BoolSetting.Builder()
+        .name("toggle-perspective")
+        .description("Switches to third person while active, then restores your perspective.")
+        .defaultValue(true)
+        .build()
+    );
+
     private final Setting<Boolean> useBounceMode = sgRoute.add(new BoolSetting.Builder()
         .name("use-bounce-mode")
         .description("Use ElytraFly's Bounce mode while routing, then restore your old mode.")
@@ -144,6 +178,130 @@ public class ElytraRoute extends Module {
         .range(1, 240)
         .sliderRange(1, 60)
         .visible(autoReconnect::get)
+        .build()
+    );
+
+    private final Setting<Boolean> smartPathing = sgPath.add(new BoolSetting.Builder()
+        .name("smart-pathing")
+        .description("Plan around obstacles instead of flying straight at the target.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Integer> pathRange = sgPath.add(new IntSetting.Builder()
+        .name("path-range")
+        .description("How far around you the planner searches.")
+        .defaultValue(96)
+        .range(32, 192)
+        .sliderRange(32, 192)
+        .visible(smartPathing::get)
+        .build()
+    );
+
+    private final Setting<Integer> pathLookahead = sgPath.add(new IntSetting.Builder()
+        .name("path-lookahead")
+        .description("How far ahead the route checks for obstacles.")
+        .defaultValue(24)
+        .range(8, 64)
+        .sliderRange(8, 64)
+        .visible(smartPathing::get)
+        .build()
+    );
+
+    private final Setting<Integer> pathBudget = sgPath.add(new IntSetting.Builder()
+        .name("path-budget")
+        .description("Planner nodes per tick. Lower is smoother, higher plans faster.")
+        .defaultValue(600)
+        .range(100, 3000)
+        .sliderRange(100, 3000)
+        .visible(smartPathing::get)
+        .build()
+    );
+
+    private final Setting<Integer> stuckTicks = sgPath.add(new IntSetting.Builder()
+        .name("stuck-ticks")
+        .description("Ticks without progress before the route escapes and replans.")
+        .defaultValue(25)
+        .range(10, 100)
+        .sliderRange(10, 100)
+        .visible(smartPathing::get)
+        .build()
+    );
+
+    private final Setting<Boolean> renderPath = sgRoute.add(new BoolSetting.Builder()
+        .name("render-path")
+        .description("Draws the planned way around obstacles.")
+        .defaultValue(true)
+        .visible(smartPathing::get)
+        .build()
+    );
+
+    private final Setting<SettingColor> pathColor = sgRoute.add(new ColorSetting.Builder()
+        .name("path-color")
+        .description("Color of the planned path.")
+        .defaultValue(new SettingColor(0, 200, 255, 255))
+        .visible(() -> smartPathing.get() && renderPath.get())
+        .build()
+    );
+
+    private final Setting<Boolean> pathTracer = sgRoute.add(new BoolSetting.Builder()
+        .name("path-tracer")
+        .description("Line from the screen centre to the next path point.")
+        .defaultValue(true)
+        .visible(() -> smartPathing.get() && renderPath.get())
+        .build()
+    );
+
+    private final Setting<Boolean> repairElytras = sgRepair.add(new BoolSetting.Builder()
+        .name("repair-elytras")
+        .description("Mend nearly broken elytras with XP bottles.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Integer> repairBelow = sgRepair.add(new IntSetting.Builder()
+        .name("repair-below")
+        .description("Repair once every elytra has at most this much durability left.")
+        .defaultValue(40)
+        .range(1, 400)
+        .sliderRange(1, 200)
+        .visible(repairElytras::get)
+        .build()
+    );
+
+    private final Setting<Integer> repairTarget = sgRepair.add(new IntSetting.Builder()
+        .name("repair-target")
+        .description("Mend elytras up to this durability percent.")
+        .defaultValue(100)
+        .range(10, 100)
+        .sliderRange(10, 100)
+        .visible(repairElytras::get)
+        .build()
+    );
+
+    private final Setting<Boolean> enderChestXp = sgRepair.add(new BoolSetting.Builder()
+        .name("ender-chest-xp")
+        .description("Fetch an XP shulker from your Ender Chest when you have no bottles.")
+        .defaultValue(true)
+        .visible(repairElytras::get)
+        .build()
+    );
+
+    private final Setting<Boolean> returnShulker = sgRepair.add(new BoolSetting.Builder()
+        .name("return-shulker")
+        .description("Put the XP shulker back into the Ender Chest afterwards.")
+        .defaultValue(true)
+        .visible(() -> repairElytras.get() && enderChestXp.get())
+        .build()
+    );
+
+    private final Setting<Integer> repairThrowDelay = sgRepair.add(new IntSetting.Builder()
+        .name("throw-delay")
+        .description("Ticks between thrown XP bottles.")
+        .defaultValue(2)
+        .range(1, 10)
+        .sliderRange(1, 10)
+        .visible(repairElytras::get)
         .build()
     );
 
@@ -241,6 +399,147 @@ public class ElytraRoute extends Module {
         .build()
     );
 
+    private final Setting<String> homeName2 = sgHome.add(new StringSetting.Builder()
+        .name("second-home-name")
+        .description("Optional second home used in turns with the first instead of overwriting it.")
+        .defaultValue("")
+        .visible(periodicHomeSave::get)
+        .build()
+    );
+
+    private final Setting<Integer> homeCommandCooldown = sgHome.add(new IntSetting.Builder()
+        .name("home-command-cooldown")
+        .description("Server cooldown in minutes between home commands.")
+        .defaultValue(10)
+        .range(0, 30)
+        .sliderRange(0, 30)
+        .visible(() -> periodicHomeSave.get() && !homeName2.get().isBlank())
+        .build()
+    );
+
+    // Persisted so a restart continues the delete/set cycle instead of deleting the newest home.
+    private final Setting<Integer> homeCycleStep = sgHome.add(new IntSetting.Builder()
+        .name("home-cycle-step")
+        .description("Next step of the two-home cycle.")
+        .defaultValue(0)
+        .range(0, 3)
+        .visible(() -> false)
+        .build()
+    );
+
+    private final Setting<Boolean> mineObstacles = sgMining.add(new BoolSetting.Builder()
+        .name("mine-obstacles")
+        .description("Breaks blocks in the way with a pickaxe when there is no way to fly around them.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Double> digCost = sgMining.add(new DoubleSetting.Builder()
+        .name("dig-cost")
+        .description("Detour length in blocks that one tick of digging is worth. Lower digs more, higher flies around more.")
+        .defaultValue(0.1)
+        .range(0.01, 2.0)
+        .sliderRange(0.02, 0.5)
+        .visible(mineObstacles::get)
+        .build()
+    );
+
+    private final Setting<Integer> maxBlockTicks = sgMining.add(new IntSetting.Builder()
+        .name("max-block-ticks")
+        .description("Blocks that take longer than this to break are treated as walls.")
+        .defaultValue(60)
+        .range(5, 400)
+        .sliderRange(10, 200)
+        .visible(mineObstacles::get)
+        .build()
+    );
+
+    private final Setting<Double> brakeDistance = sgMining.add(new DoubleSetting.Builder()
+        .name("brake-distance")
+        .description("Holds position this close to a block that is still being broken.")
+        .defaultValue(2.5)
+        .range(1.0, 4.0)
+        .sliderRange(1.0, 4.0)
+        .visible(mineObstacles::get)
+        .build()
+    );
+
+    private final Setting<Boolean> debugRoute = sgMining.add(new BoolSetting.Builder()
+        .name("debug")
+        .description("Prints navigator and mining state to chat every second.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Boolean> mineRotate = sgMining.add(new BoolSetting.Builder()
+        .name("mine-rotate")
+        .description("Looks at blocks while breaking them.")
+        .defaultValue(true)
+        .visible(mineObstacles::get)
+        .build()
+    );
+
+    private final Setting<Boolean> mineAvoidContainers = sgMining.add(new BoolSetting.Builder()
+        .name("avoid-containers")
+        .description("Never breaks chests, spawners and other block entities.")
+        .defaultValue(true)
+        .visible(mineObstacles::get)
+        .build()
+    );
+
+    private final Setting<Integer> mineMinDurability = sgMining.add(new IntSetting.Builder()
+        .name("min-pickaxe-durability")
+        .description("Pickaxes with less durability left are not used.")
+        .defaultValue(20)
+        .range(1, 500)
+        .sliderRange(1, 100)
+        .visible(mineObstacles::get)
+        .build()
+    );
+
+    private final Setting<Boolean> baritoneFallback = sgMining.add(new BoolSetting.Builder()
+        .name("baritone-fallback")
+        .description("When no way through the air exists, lands and lets Baritone walk ahead on the ground, then flies on.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Integer> fallbackDistance = sgMining.add(new IntSetting.Builder()
+        .name("fallback-distance")
+        .description("How far Baritone walks toward the destination before the route tries to fly again.")
+        .defaultValue(64)
+        .range(16, 512)
+        .sliderRange(16, 256)
+        .visible(baritoneFallback::get)
+        .build()
+    );
+
+    private final Setting<Boolean> fallbackBreak = sgMining.add(new BoolSetting.Builder()
+        .name("fallback-break-blocks")
+        .description("Lets Baritone break blocks on the way.")
+        .defaultValue(true)
+        .visible(baritoneFallback::get)
+        .build()
+    );
+
+    private final Setting<Boolean> fallbackPlace = sgMining.add(new BoolSetting.Builder()
+        .name("fallback-place-blocks")
+        .description("Lets Baritone place blocks on the way.")
+        .defaultValue(false)
+        .visible(baritoneFallback::get)
+        .build()
+    );
+
+    private final Setting<Integer> fallbackTimeout = sgMining.add(new IntSetting.Builder()
+        .name("fallback-timeout")
+        .description("Seconds without getting closer before Baritone gives up.")
+        .defaultValue(30)
+        .range(5, 300)
+        .sliderRange(10, 120)
+        .visible(baritoneFallback::get)
+        .build()
+    );
+
     private enum State {
         TAKEOFF_AWAIT_GROUND,
         TAKEOFF_FIRST_JUMP,
@@ -255,14 +554,19 @@ public class ElytraRoute extends Module {
         RESTOCK_CLOSE,
         RESTOCK_BREAK,
         RESTOCK_PICKUP,
+        REPAIR,
         ARRIVED_WAIT,
-        OUT_OF_ELYTRAS_WAIT
+        OUT_OF_ELYTRAS_WAIT,
+        MINER
     }
 
     private enum LandingReason {
         RESTOCK,
         ARRIVAL,
-        OUT_OF_ELYTRAS
+        OUT_OF_ELYTRAS,
+        REPAIR,
+        BLOCKED,
+        MINER
     }
 
     private enum RestockKind {
@@ -277,6 +581,12 @@ public class ElytraRoute extends Module {
         MOVE_SOURCE,
         VERIFY_SOURCE,
         PLACE
+    }
+
+    private enum RepairStep {
+        PLAN, MOVE, CHEST_PLACE, CHEST_OPEN, CHEST_TAKE, CHEST_CLOSE,
+        SHULKER_PLACE, SHULKER_OPEN, SHULKER_TAKE, SHULKER_CLOSE, SHULKER_BREAK, SHULKER_PICKUP,
+        MEND, RETURN_OPEN, RETURN_PUT, RETURN_CLOSE, CHEST_BREAK, CHEST_PICKUP, CLEANUP, DONE
     }
 
     private enum ResumeState {
@@ -310,12 +620,24 @@ public class ElytraRoute extends Module {
     private boolean queuedElytraRestock;
     private boolean foodRestockSuppressed;
     private long homeSaveNextAtMs;
+    private static final long HOME_COOLDOWN_MARGIN_MS = 15_000L;
+    // Not reset with the route: the server cooldown keeps running across toggles.
+    private long lastHomeCommandMs;
+    private long lastHomeSetMs;
+    private static final long HOME_OVERRIDE_WINDOW_MS = 5_000L;
+    private long homeOverrideUntilMs;
+    private String homeOverrideName = "";
+    private boolean finalHomeSaveSent;
     private long routeStartMs;
     private double routeStartDistance;
     private boolean clampingFoodTypes;
 
     private FreeLook freeLookModule;
     private boolean managedFreeLook;
+    private CameraType previousPerspective;
+    private boolean perspectiveChanged;
+    private long lastErrorMs;
+    private static final long STOPPED_BY_ERROR_WINDOW_MS = 3_000L;
 
     private Rotation rotationModule;
     private Setting<Rotation.LockMode> rotationYawLockMode;
@@ -386,6 +708,102 @@ public class ElytraRoute extends Module {
     private final Set<Integer> elytraQuarantinedSlots = new HashSet<>();
     private final Set<String> elytraQuarantinedFingerprints = new HashSet<>();
 
+    private final ElytraNavigator.Config navConfig = new ElytraNavigator.Config();
+    private final WorldTerrain worldTerrain = new WorldTerrain();
+    private final ElytraNavigator navigator = new ElytraNavigator(worldTerrain, navConfig);
+    private ElytraNavigator.Steer navSteer;
+
+    private final SettingColor mineSideColor = new SettingColor(255, 140, 0, 50);
+    private static final double MINE_REACH = 4.4;
+    private static final double MINE_LOOKAHEAD = 5.0;
+    private static final int MINE_TARGET_TIMEOUT = 240;
+    private boolean miningActive;
+    private int debugTicks;
+    private boolean miningHover;
+    private int hoverClimb;
+    private boolean miningSwapped;
+    private double hoverY;
+    private ItemStack mineTool = ItemStack.EMPTY;
+    private int mineToolSlot = -1;
+    private int mineToolCheckTick = -100;
+    private BlockPos mineTarget;
+    private int mineTargetTicks;
+    private final Set<Long> mineFailed = new HashSet<>();
+    private boolean minerStarted;
+    private int minerRuns;
+    private int takeoffClearTicks;
+    private BlockPos fallbackGoal;
+    private double fallbackBestDist;
+    private long fallbackProgressMs;
+    private boolean fallbackStopped;
+    // Baritone settings changed for the fallback, restored when it ends.
+    private boolean baritoneSettingsSaved;
+    private boolean savedAllowBreak, savedAllowPlace;
+    private static final double RESUME_FLIGHT_CHECK_DISTANCE = 16.0;
+    private static final double RESUME_OPEN_HEIGHT = 4.0;
+    private static final int TAKEOFF_CLEAR_TIMEOUT = 200;
+    private static final double FALLBACK_GOAL_REACHED = 3.0;
+    private static final int TAKEOFF_HEADROOM = 4;
+
+    private RepairStep repairStep = RepairStep.PLAN;
+    private boolean repairSuppressed;
+    private boolean repairFailed;
+    private boolean repairChestPlaced;
+    private BlockPos repairChestPos;
+    private BlockPos repairShulkerPos;
+    private String repairShulkerKey;
+    private int repairTicks;
+    private int repairShulkerCount;
+    private int repairChestCount;
+    private int repairBottleCount;
+    private int repairLastDamage;
+    private int repairThrowsWithoutProgress;
+    private boolean repairActionIssued;
+
+    @EventHandler
+    private void onRender(Render3DEvent event) {
+        if (!smartPathing.get() || !renderPath.get() || mc.player == null) return;
+
+        if (mineTarget != null) {
+            RenderUtilsTHM.renderBlocks(event, List.of(mineTarget), mineSideColor, pathColor.get(), ShapeMode.Both);
+        }
+
+        List<ElytraPathPlanner.Pos> points = navigator.remainingPath();
+        if (points.isEmpty()) return;
+
+        int end = Math.min(points.size(), 200);
+        for (int i = 0; i + 1 < end; i++) {
+            ElytraPathPlanner.Pos a = points.get(i);
+            ElytraPathPlanner.Pos b = points.get(i + 1);
+            RenderUtilsTHM.renderLine(event, a.x() + 0.5, a.y() + 0.5, a.z() + 0.5, b.x() + 0.5, b.y() + 0.5, b.z() + 0.5, pathColor.get());
+        }
+
+        if (pathTracer.get()) {
+            ElytraPathPlanner.Pos next = points.get(Math.min(1, points.size() - 1));
+            RenderUtilsTHM.renderTracerToVec(event, new Vec3(next.x() + 0.5, next.y() + 0.5, next.z() + 0.5), pathColor.get());
+        }
+    }
+
+    public int getDestinationX() {
+        return destinationX.get();
+    }
+
+    public int getDestinationZ() {
+        return destinationZ.get();
+    }
+
+    public double getArrivalRadius() {
+        return arrivalRadius.get();
+    }
+
+    /** Retargets the route, e.g. to Stash Finder's next search corner. */
+    public void setDestination(int x, int z) {
+        destinationX.set(x);
+        destinationZ.set(z);
+        navigator.reset();
+        navSteer = null;
+    }
+
     public ElytraRoute() {
         super(THMAddon.MAIN, "elytra-route", "Flies to a target bearing, restocks from inventory shulkers, and manages periodic home saves.");
         INSTANCE = this;
@@ -413,6 +831,12 @@ public class ElytraRoute extends Module {
             return;
         }
 
+        if (periodicHomeSave.get() && homeName2.get().trim().equalsIgnoreCase(homeName.get().trim())) {
+            error("The second home name must differ from the first.");
+            toggle();
+            return;
+        }
+
         homeSaveNextAtMs = System.currentTimeMillis() + (homeSaveIntervalMinutes.get() * 60_000L);
 
         registerReconnectServiceListeners();
@@ -425,11 +849,20 @@ public class ElytraRoute extends Module {
     public void onDeactivate() {
         releaseMovement();
         restoreRotationSnapshot();
+        stopMining();
+        mineFailed.clear();
+        if (minerStarted) stopBaritoneFallback();
+        minerStarted = false;
+        minerRuns = 0;
 
         if (managedFreeLook && freeLookModule != null && freeLookModule.isActive()) {
             freeLookModule.toggle();
         }
         managedFreeLook = false;
+        if (perspectiveChanged) {
+            mc.options.setCameraType(previousPerspective);
+            perspectiveChanged = false;
+        }
 
         closeHandledRestockScreenIfOpen();
         clearSelectedRestockSource();
@@ -461,6 +894,7 @@ public class ElytraRoute extends Module {
             return;
         }
 
+        tickHomeOverride();
         if (!allowMainServerRouteActions("tick")) return;
 
         if (routeStartPending) {
@@ -494,6 +928,11 @@ public class ElytraRoute extends Module {
             updateQueuedRestocksWhileRestocking();
         }
 
+        if (state != State.FLIGHT) {
+            navSteer = null;
+            if (miningSwapped || miningHover) stopMining();
+        }
+
         switch (state) {
             case TAKEOFF_AWAIT_GROUND -> tickTakeoffAwaitGround();
             case TAKEOFF_FIRST_JUMP -> tickTakeoffFirstJump();
@@ -508,8 +947,10 @@ public class ElytraRoute extends Module {
             case RESTOCK_CLOSE -> tickRestockClose();
             case RESTOCK_BREAK -> tickRestockBreak();
             case RESTOCK_PICKUP -> tickRestockPickup();
+            case REPAIR -> tickRepair();
             case ARRIVED_WAIT -> tickArrivedWait();
             case OUT_OF_ELYTRAS_WAIT -> tickOutOfElytrasWait();
+            case MINER -> tickMinerFallback();
         }
     }
 
@@ -542,6 +983,11 @@ public class ElytraRoute extends Module {
 
     private void forceRouteFlightMovement() {
         ElytraFly elytraFly = Modules.get().get(ElytraFly.class);
+        if (miningHover) {
+            holdForMining();
+            return;
+        }
+
         mc.options.keyUp.setDown(true);
 
         if (shouldUseRouteBounceMode(elytraFly) && !mc.player.isFallFlying() && !mc.player.onGround()) {
@@ -620,6 +1066,11 @@ public class ElytraRoute extends Module {
             return;
         }
 
+        if (needsRepair()) {
+            beginRepair(mc.player.isFallFlying());
+            return;
+        }
+
         if (countTotalFlightReadyElytras() <= 0) {
             if (restockElytras.get()) startRestockInterrupt(RestockKind.ELYTRA, ResumeState.ROUTE_FLIGHT);
             else beginLanding(LandingReason.OUT_OF_ELYTRAS);
@@ -639,6 +1090,14 @@ public class ElytraRoute extends Module {
         managedFreeLook = autoFreeLook.get() && freeLookModule != null;
         if (managedFreeLook && !freeLookModule.isActive()) {
             freeLookModule.toggle();
+        }
+
+        if (togglePerspective.get() && !perspectiveChanged) {
+            previousPerspective = mc.options.getCameraType();
+            if (previousPerspective != CameraType.THIRD_PERSON_BACK) {
+                mc.options.setCameraType(CameraType.THIRD_PERSON_BACK);
+                perspectiveChanged = true;
+            }
         }
 
         rotationModule = Modules.get().get(Rotation.class);
@@ -671,11 +1130,13 @@ public class ElytraRoute extends Module {
             return true;
         }
 
-        mainServerGateTicks++;
-        releaseMovement();
-        restoreRotationSnapshot();
-        closeHandledRestockScreenIfOpen();
-        if (mc.player != null && !routeStartPending) pauseBounceElytraFlyForGroundControl();
+        // Release the route's keys once; doing it every tick locks the player in place in the lobby.
+        if (++mainServerGateTicks == 1) {
+            releaseMovement();
+            restoreRotationSnapshot();
+            closeHandledRestockScreenIfOpen();
+            if (mc.player != null && !routeStartPending) pauseBounceElytraFlyForGroundControl();
+        }
 
         if (serverState == ServerState.UNKNOWN
             && mainServerGateTicks < MAIN_SERVER_GATE_UNKNOWN_GRACE_TICKS
@@ -710,6 +1171,15 @@ public class ElytraRoute extends Module {
 
     private void resumeRouteAfterReconnect(String source) {
         if (mc.player == null || mc.level == null) return;
+
+        if (state == State.REPAIR) {
+            warning("Repair was interrupted by the reconnect; any blocks placed for it were left where they are.");
+            resetRepairRuntime();
+        }
+
+        // Restores Baritone's settings and drops its old goal; the next fallback starts fresh.
+        if (minerStarted || baritoneSettingsSaved) stopBaritoneFallback();
+        minerStarted = false;
 
         if (placedShulkerPos != null) {
             reconnectPaused = false;
@@ -753,7 +1223,7 @@ public class ElytraRoute extends Module {
     }
 
     private void closeHandledRestockScreenIfOpen() {
-        if (!isRestockState(state)) return;
+        if (!isRestockState(state) && state != State.REPAIR) return;
         if (mc.gui.screen() instanceof AbstractContainerScreen<?>) mc.gui.screen().onClose();
     }
 
@@ -790,6 +1260,17 @@ public class ElytraRoute extends Module {
         if (!(mc.gui.screen() instanceof DisconnectedScreen)) return;
         info("Clearing stale DisconnectedScreen while Elytra Route is live in-world.");
         mc.gui.setScreen(null);
+    }
+
+    @Override
+    public void error(String message, Object... args) {
+        lastErrorMs = System.currentTimeMillis();
+        super.error(message, args);
+    }
+
+    /** True when the route switched itself off because of an error just now, not because the player stopped it. */
+    public boolean stoppedByError() {
+        return !isActive() && System.currentTimeMillis() - lastErrorMs < STOPPED_BY_ERROR_WINDOW_MS;
     }
 
     private ServerReconnectService reconnectService() {
@@ -973,9 +1454,13 @@ public class ElytraRoute extends Module {
         restockOpenedSourceValidated = false;
         clearInvalidSourceTracking();
         clearDeferredRestockFailure();
+        resetRepairRuntime();
     }
 
     private void resetRuntime() {
+        minerStarted = false;
+        minerRuns = 0;
+        mineFailed.clear();
         state = State.TAKEOFF_AWAIT_GROUND;
         landingReason = LandingReason.RESTOCK;
         activeRestockKind = RestockKind.NONE;
@@ -1008,6 +1493,12 @@ public class ElytraRoute extends Module {
         lastLandingChunkWarningAtMs = 0L;
         clearReconnectRuntime(true);
         clearDeferredRestockFailure();
+        repairSuppressed = false;
+        resetRepairRuntime();
+        navigator.reset();
+        navSteer = null;
+        finalHomeSaveSent = false;
+        homeOverrideUntilMs = 0L;
     }
 
     private boolean isElytraFlyCompatible(ElytraFly elytraFly, boolean announce) {
@@ -1159,18 +1650,6 @@ public class ElytraRoute extends Module {
         rotationPitchAngle = (Setting<Double>) rotationModule.settings.get("pitch-angle");
     }
 
-    private void takeRotationSnapshotIfNeeded() {
-        if (rotationModule == null || rotationSnapshotTaken) return;
-        if (rotationYawLockMode == null || rotationYawAngle == null || rotationPitchLockMode == null || rotationPitchAngle == null) return;
-
-        rotationSnapshotTaken = true;
-        rotationWasActive = rotationModule.isActive();
-        rotationPrevYawLockMode = rotationYawLockMode.get();
-        rotationPrevYawAngle = rotationYawAngle.get();
-        rotationPrevPitchLockMode = rotationPitchLockMode.get();
-        rotationPrevPitchAngle = rotationPitchAngle.get();
-    }
-
     private void steerRouteYaw(float yaw) {
         ElytraFly elytraFly = Modules.get().get(ElytraFly.class);
         if (isBounceElytraFly(elytraFly) && !bounceElytraFlyPaused) {
@@ -1179,21 +1658,8 @@ public class ElytraRoute extends Module {
             return;
         }
 
-        if (!ownRouteRotation(yaw) && mc.player != null) mc.player.setYRot(normalizeYaw(yaw));
-    }
-
-    private boolean ownRouteRotation(float yaw) {
-        if (rotationModule == null || rotationYawLockMode == null || rotationYawAngle == null || rotationPitchLockMode == null || rotationPitchAngle == null) return false;
-        takeRotationSnapshotIfNeeded();
-
-        rotationYawLockMode.set(Rotation.LockMode.Simple);
-        rotationYawAngle.set((double) normalizeYaw(yaw));
-        rotationPitchLockMode.set(Rotation.LockMode.Simple);
-        rotationPitchAngle.set(0.0);
-
-        if (!rotationModule.isActive()) rotationModule.toggle();
-        routeRotationOwned = true;
-        return true;
+        // Set the yaw directly: driving Meteor's Rotation module left it saved on (camera locked) when the game closed mid-route.
+        if (mc.player != null) mc.player.setYRot(normalizeYaw(yaw));
     }
 
     private void restoreRotationSnapshot() {
@@ -1215,6 +1681,8 @@ public class ElytraRoute extends Module {
     private void enterFlightState() {
         state = State.FLIGHT;
         stateTicks = 0;
+        navigator.reset();
+        navSteer = null;
         steerRouteYaw(computeBearingYaw());
     }
 
@@ -1296,6 +1764,15 @@ public class ElytraRoute extends Module {
             restoreRotationSnapshot();
             takeoffFailures++;
             if (takeoffFailures >= TAKEOFF_MAX_FAILURES) {
+                // No room to take off here: walk on with Baritone and try again further along.
+                if (baritoneFallback.get() && minerRuns < 3) {
+                    warning("Takeoff failed here. Walking on with Baritone to find more room.");
+                    takeoffFailures = 0;
+                    minerStarted = false;
+                    state = State.MINER;
+                    stateTicks = 0;
+                    return;
+                }
                 error("Glide takeoff failed after %d attempts.", TAKEOFF_MAX_FAILURES);
                 toggle();
                 return;
@@ -1342,8 +1819,29 @@ public class ElytraRoute extends Module {
 
         if (handleFlightInterrupts()) return;
 
-        float yaw = computeBearingYaw();
+        float yaw = computeFlightYaw(elytraFly);
+        if (navSteer != null && navSteer.mode() == ElytraNavigator.Mode.FAILED) {
+            navSteer = null;
+            stopMining();
+            if (baritoneFallback.get() && minerRuns < 3) {
+                warning("No way through the air was found. Landing to continue on foot with Baritone.");
+                beginLanding(LandingReason.MINER);
+            } else {
+                warning("No way around the obstacle was found. Landing.");
+                beginLanding(LandingReason.BLOCKED);
+            }
+            return;
+        }
+
         steerRouteYaw(yaw);
+
+        miningHover = tickFlightMining();
+        if (debugRoute.get() && debugTicks++ % 20 == 0) printRouteDebug();
+        if (miningHover) {
+            holdForMining();
+            return;
+        }
+
         mc.options.keyUp.setDown(true);
         if (!isBounceElytraFly(elytraFly)) applyFlightAltitudeControl(false);
     }
@@ -1356,6 +1854,11 @@ public class ElytraRoute extends Module {
 
         if (needsFoodRestock()) {
             startRestockInterrupt(RestockKind.FOOD, ResumeState.ROUTE_FLIGHT);
+            return true;
+        }
+
+        if (needsRepair()) {
+            beginRepair(true);
             return true;
         }
 
@@ -1403,6 +1906,17 @@ public class ElytraRoute extends Module {
             case ARRIVAL -> state = State.ARRIVED_WAIT;
             case OUT_OF_ELYTRAS -> state = State.OUT_OF_ELYTRAS_WAIT;
             case RESTOCK -> state = State.RESTOCK_MOVE_TO_PAD;
+            case REPAIR -> state = State.REPAIR;
+            case MINER -> {
+                if (minerStarted || baritoneSettingsSaved) stopBaritoneFallback();
+                minerStarted = false;
+                state = State.MINER;
+            }
+            case BLOCKED -> {
+                error("Elytra Route stopped: the way to the destination is blocked.");
+                toggle();
+                return;
+            }
         }
 
         stateTicks = 0;
@@ -2058,11 +2572,17 @@ public class ElytraRoute extends Module {
             return;
         }
 
-        if (!isHomeSaveDue()) return;
+        // Wait out a possible override dialog so the route does not switch off with it still open.
+        if (finalHomeSaveSent) {
+            if (isHomeOverrideBusy()) return;
+            info("Arrived at destination and saved home.");
+            toggle();
+            return;
+        }
 
-        if (!sendHomeSave()) return;
-        info("Arrived at destination and saved home.");
-        toggle();
+        // With two homes this can take one extra cooldown: the older home is deleted first, then the new one set.
+        if (!isHomeSaveDue()) return;
+        if (sendHomeSave()) finalHomeSaveSent = true;
     }
 
     private void tickOutOfElytrasWait() {
@@ -2074,9 +2594,13 @@ public class ElytraRoute extends Module {
             return;
         }
 
-        if (periodicHomeSave.get() && !isHomeSaveDue()) return;
-
-        if (periodicHomeSave.get() && !sendHomeSave()) return;
+        if (periodicHomeSave.get()) {
+            if (!finalHomeSaveSent) {
+                if (!isHomeSaveDue() || !sendHomeSave()) return;
+                finalHomeSaveSent = true;
+            }
+            if (isHomeOverrideBusy()) return;
+        }
 
         String reason = "[ElytraRoute] Out of flight-ready elytras.";
         warning("Out of elytras. Disconnecting.");
@@ -2215,6 +2739,12 @@ public class ElytraRoute extends Module {
             return;
         }
 
+        if (navSteer != null) {
+            mc.options.keyJump.setDown(navSteer.vertical() > 0);
+            mc.options.keyShift.setDown(navSteer.vertical() < 0);
+            return;
+        }
+
         double playerY = mc.player.getY();
         boolean tooLow = playerY < flyYLevel.get() - 1;
         boolean tooHigh = playerY > flyYLevel.get() + 1;
@@ -2245,6 +2775,11 @@ public class ElytraRoute extends Module {
 
         if (needsFoodRestock()) {
             startRestockInterrupt(RestockKind.FOOD, ResumeState.ROUTE_FLIGHT);
+            return true;
+        }
+
+        if (needsRepair()) {
+            beginRepair(false);
             return true;
         }
 
@@ -2358,15 +2893,68 @@ public class ElytraRoute extends Module {
         deferredRestockFailureMessage = null;
     }
 
+    private boolean usesTwoHomes() {
+        return !homeName2.get().isBlank();
+    }
+
+    /** Sends the next home command; returns true only when a home was actually set. */
     private boolean sendHomeSave() {
         if (!periodicHomeSave.get() || homeName.get().isBlank() || mc.player == null || mc.gui.screen() != null || shouldPauseForEating()) return false;
-        ChatUtils.sendPlayerMsg("/sethome " + homeName.get());
-        homeSaveNextAtMs = System.currentTimeMillis() + (homeSaveIntervalMinutes.get() * 60_000L);
-        return true;
+        long now = System.currentTimeMillis();
+
+        if (!usesTwoHomes()) {
+            ChatUtils.sendPlayerMsg("/sethome " + homeName.get());
+            homeSaveNextAtMs = now + (homeSaveIntervalMinutes.get() * 60_000L);
+            homeOverrideUntilMs = now + HOME_OVERRIDE_WINDOW_MS;
+            homeOverrideName = homeName.get();
+            return true;
+        }
+
+        // Cycle: delete A, set A, delete B, set B. Overwriting asks in a GUI and every home command shares one cooldown,
+        // so the older home is deleted one cooldown before it is set again; the newest home is never touched.
+        int step = homeCycleStep.get() & 3;
+        String name = step < 2 ? homeName.get() : homeName2.get();
+        boolean set = (step & 1) == 1;
+        ChatUtils.sendPlayerMsg((set ? "/sethome " : "/delhome ") + name);
+        lastHomeCommandMs = now;
+        if (set) {
+            lastHomeSetMs = now;
+            homeOverrideUntilMs = now + HOME_OVERRIDE_WINDOW_MS;
+            homeOverrideName = name;
+        }
+        homeCycleStep.set((step + 1) & 3);
+        info(set ? "Saved home %s." : "Deleted older home %s for the next save.", name);
+        return set;
+    }
+
+    /** Presses "Override" on the server's "Override home" dialog that follows our own /sethome. */
+    private void tickHomeOverride() {
+        if (System.currentTimeMillis() > homeOverrideUntilMs) return;
+        if (!(mc.gui.screen() instanceof DialogScreen<?> dialog)) return;
+        if (!dialog.getTitle().getString().toLowerCase(Locale.ROOT).contains("override home")) return;
+
+        for (GuiEventListener element : dialog.children()) {
+            if (element instanceof AbstractButton button && button.getMessage().getString().equalsIgnoreCase("Override")) {
+                button.onPress(new KeyEvent(GLFW.GLFW_KEY_ENTER, 0, 0));
+                homeOverrideUntilMs = 0L;
+                info("Overwrote home %s.", homeOverrideName);
+                return;
+            }
+        }
+    }
+
+    private boolean isHomeOverrideBusy() {
+        return System.currentTimeMillis() <= homeOverrideUntilMs;
     }
 
     private boolean isHomeSaveDue() {
-        return periodicHomeSave.get() && System.currentTimeMillis() >= homeSaveNextAtMs;
+        if (!periodicHomeSave.get()) return false;
+        long now = System.currentTimeMillis();
+        if (!usesTwoHomes()) return now >= homeSaveNextAtMs;
+
+        if (now < lastHomeCommandMs + homeCommandCooldown.get() * 60_000L + HOME_COOLDOWN_MARGIN_MS) return false;
+        boolean setStep = (homeCycleStep.get() & 1) == 1;
+        return !setStep || now >= lastHomeSetMs + homeSaveIntervalMinutes.get() * 60_000L;
     }
 
     private boolean isInsideArrivalRadius() {
@@ -2377,6 +2965,36 @@ public class ElytraRoute extends Module {
         double dx = destinationX.get() - mc.player.getX();
         double dz = destinationZ.get() - mc.player.getZ();
         return normalizeYaw((float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f);
+    }
+
+    private float computeFlightYaw(ElytraFly elytraFly) {
+        navSteer = null;
+        if (!smartPathing.get() || isBounceElytraFly(elytraFly)) return computeBearingYaw();
+
+        navSteer = updateNavigator();
+        double dx = navSteer.x() - mc.player.getX();
+        double dz = navSteer.z() - mc.player.getZ();
+        if (Math.hypot(dx, dz) < 0.25) return normalizeYaw(mc.player.getYRot());
+        return normalizeYaw((float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f);
+    }
+
+    private ElytraNavigator.Steer updateNavigator() {
+        worldTerrain.newTick();
+        miningActive = mineObstacles.get() && !isBounceElytraFly(Modules.get().get(ElytraFly.class)) && updateMineTool();
+        navConfig.preferredY = flyYLevel.get();
+        navConfig.minY = mc.level.getMinY();
+        navConfig.maxY = mc.level.getMaxY();
+        navConfig.range = pathRange.get();
+        navConfig.lookahead = pathLookahead.get();
+        navConfig.nodesPerTick = pathBudget.get();
+        navConfig.stuckTicks = stuckTicks.get();
+
+        AABB box = mc.player.getBoundingBox();
+        Vec3 velocity = mc.player.getDeltaMovement();
+        return navigator.update(
+            (box.minX + box.maxX) * 0.5, (box.minY + box.maxY) * 0.5, (box.minZ + box.maxZ) * 0.5,
+            velocity.x, velocity.z, destinationX.get(), destinationZ.get(), arrivalRadius.get()
+        );
     }
 
     private float normalizeYaw(float yaw) {
@@ -3353,5 +3971,1266 @@ public class ElytraRoute extends Module {
             area,
             entity -> entity != null && entity.isAlive() && isShulkerBox(entity.getItem())
         );
+    }
+
+    /** Solid / hazardous check for the route planner; cells in unloaded chunks count as free. */
+    private final class WorldTerrain implements ElytraPathPlanner.Terrain {
+        private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        private final Map<Long, Boolean> loadedChunks = new HashMap<>();
+
+        void newTick() {
+            loadedChunks.clear();
+        }
+
+        @Override
+        public boolean loaded(int x, int z) {
+            if (mc.level == null) return false;
+            int cx = x >> 4;
+            int cz = z >> 4;
+            long key = ((long) cx << 32) ^ (cz & 0xFFFFFFFFL);
+            Boolean cached = loadedChunks.get(key);
+            if (cached != null) return cached;
+
+            boolean loaded = mc.level.getChunkSource().getChunk(cx, cz, ChunkStatus.FULL, false) != null;
+            loadedChunks.put(key, loaded);
+            return loaded;
+        }
+
+        @Override
+        public boolean blocked(int x, int y, int z) {
+            if (mc.level == null) return true;
+            if (y < mc.level.getMinY() || y > mc.level.getMaxY()) return true;
+            if (!loaded(x, z)) return false;
+
+            BlockState state = mc.level.getBlockState(pos.set(x, y, z));
+            if (state.isAir()) return false;
+            if (!state.getFluidState().isEmpty()) return true;
+            if (state.is(Blocks.COBWEB) || state.is(Blocks.FIRE) || state.is(Blocks.SOUL_FIRE)) return true;
+            return !state.getCollisionShape(mc.level, pos).isEmpty();
+        }
+
+        @Override
+        public float mineCost(int x, int y, int z) {
+            if (!miningActive || mc.level == null) return -1f;
+            if (y <= mc.level.getMinY() || y >= mc.level.getMaxY() || !loaded(x, z)) return -1f;
+            if (mineFailed.contains(packCell(x, y, z))) return -1f;
+
+            BlockState state = mc.level.getBlockState(pos.set(x, y, z));
+            if (state.isAir() || !state.getFluidState().isEmpty()) return -1f;
+            if (state.is(Blocks.COBWEB) || state.is(Blocks.FIRE) || state.is(Blocks.SOUL_FIRE) || state.is(Blocks.MAGMA_BLOCK)) return -1f;
+            if (state.getCollisionShape(mc.level, pos).isEmpty()) return -1f;
+
+            float hardness = state.getDestroySpeed(mc.level, pos);
+            if (hardness < 0f) return -1f;
+            if (mineAvoidContainers.get() && state.hasBlockEntity()) return -1f;
+            if (!BlockUtils.canBreak(pos, state)) return -1f;
+
+            float ticks = estimateBreakTicks(state, hardness);
+            if (ticks > maxBlockTicks.get()) return -1f;
+            if (liquidNextTo(x, y, z)) return -1f;
+            return ticks * digCost.get().floatValue();
+        }
+
+        private boolean liquidNextTo(int x, int y, int z) {
+            return fluidAt(x + 1, y, z) || fluidAt(x - 1, y, z) || fluidAt(x, y + 1, z)
+                || fluidAt(x, y - 1, z) || fluidAt(x, y, z + 1) || fluidAt(x, y, z - 1);
+        }
+
+        private boolean fluidAt(int x, int y, int z) {
+            return !mc.level.getBlockState(pos.set(x, y, z)).getFluidState().isEmpty();
+        }
+    }
+
+    // ---- In-flight mining: breaks blocks the route flies into without leaving the flight ----
+
+    private static long packCell(int x, int y, int z) {
+        return ((long) (x & 0x3FFFFFF) << 38) | ((long) (z & 0x3FFFFFF) << 12) | (y & 0xFFFL);
+    }
+
+    private static boolean isPickaxe(ItemStack stack) {
+        if (stack.isEmpty()) return false;
+        Item item = stack.getItem();
+        return item == Items.WOODEN_PICKAXE || item == Items.STONE_PICKAXE || item == Items.IRON_PICKAXE
+            || item == Items.GOLDEN_PICKAXE || item == Items.DIAMOND_PICKAXE || item == Items.NETHERITE_PICKAXE;
+    }
+
+    private float estimateBreakTicks(BlockState state, float hardness) {
+        float speed = mineTool.isEmpty() ? 1f : mineTool.getDestroySpeed(state);
+        boolean slow = state.requiresCorrectToolForDrops() && speed <= 1f;
+        // Vanilla mines 5x slower while not on the ground.
+        float airborne = mc.player != null && !mc.player.onGround() ? 5f : 1f;
+        return Math.max(1f, hardness * (slow ? 100f : 30f) * airborne / Math.max(1f, speed));
+    }
+
+    private boolean updateMineTool() {
+        if (mc.player == null) return false;
+
+        int age = mc.player.tickCount;
+        if (mineToolSlot != -1 && age - mineToolCheckTick < 20) {
+            ItemStack current = mc.player.getInventory().getItem(mineToolSlot);
+            if (isPickaxe(current) && elytraRemaining(current) >= mineMinDurability.get()) return true;
+        }
+
+        mineToolCheckTick = age;
+        int best = -1;
+        float bestSpeed = 0f;
+        for (int i = 0; i < PLAYER_INVENTORY_SLOTS; i++) {
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            if (!isPickaxe(stack) || elytraRemaining(stack) < mineMinDurability.get()) continue;
+
+            float speed = stack.getDestroySpeed(Blocks.OBSIDIAN.defaultBlockState());
+            if (speed > bestSpeed) {
+                bestSpeed = speed;
+                best = i;
+            }
+        }
+
+        mineToolSlot = best;
+        mineTool = best == -1 ? ItemStack.EMPTY : mc.player.getInventory().getItem(best);
+        return best != -1;
+    }
+
+    private void selectMineTool() {
+        if (mineToolSlot == -1) return;
+
+        if (mineToolSlot >= 9) {
+            int hotbar = mc.player.getInventory().getSelectedSlot();
+            InvUtils.move().from(mineToolSlot).toHotbar(hotbar);
+            mineToolSlot = hotbar;
+            mineTool = mc.player.getInventory().getItem(hotbar);
+        }
+
+        InvUtils.swap(mineToolSlot, true);
+        miningSwapped = true;
+    }
+
+    private void stopMining() {
+        if (miningSwapped) {
+            InvUtils.swapBack();
+            miningSwapped = false;
+        }
+        miningHover = false;
+        hoverClimb = 0;
+        mineTarget = null;
+        mineTargetTicks = 0;
+    }
+
+    /** Returns true while the player should hold still for a block that is being broken right in front of it. */
+    private boolean tickFlightMining() {
+        // Only dig once the navigator found no way through the air; otherwise blocks in the way are flown around.
+        if (!miningActive || navSteer == null || mc.player == null || !navigator.digging()) {
+            stopMining();
+            return false;
+        }
+
+        AABB box = mc.player.getBoundingBox();
+        double cx = (box.minX + box.maxX) * 0.5;
+        double cy = (box.minY + box.maxY) * 0.5;
+        double cz = (box.minZ + box.maxZ) * 0.5;
+        double dx = navSteer.x() - cx;
+        double dy = navSteer.y() - cy;
+        double dz = navSteer.z() - cz;
+        double len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 0.5) {
+            stopMining();
+            return false;
+        }
+        dx /= len;
+        dy /= len;
+        dz /= len;
+
+        double hx = (box.maxX - box.minX) * 0.5 + 0.05;
+        double hy = (box.maxY - box.minY) * 0.5 + 0.05;
+        double hz = (box.maxZ - box.minZ) * 0.5 + 0.05;
+
+        BlockPos found = null;
+        scan:
+        for (double t = 0.5; t <= MINE_LOOKAHEAD; t += 0.5) {
+            double sx = cx + dx * t, sy = cy + dy * t, sz = cz + dz * t;
+            for (int ix = Mth.floor(sx - hx); ix <= Mth.floor(sx + hx); ix++) {
+                for (int iy = Mth.floor(sy - hy); iy <= Mth.floor(sy + hy); iy++) {
+                    for (int iz = Mth.floor(sz - hz); iz <= Mth.floor(sz + hz); iz++) {
+                        if (!worldTerrain.blocked(ix, iy, iz)) continue;
+                        if (worldTerrain.mineCost(ix, iy, iz) >= 0f) found = new BlockPos(ix, iy, iz);
+                        break scan;
+                    }
+                }
+            }
+        }
+
+        int want = 0;
+        if (found == null) {
+            want = wantedVertical(cy);
+            if (want != 0) found = scanVertical(cx, cy, cz, want, hx, hy, hz);
+        }
+
+        if (found == null) {
+            hoverClimb = 0;
+            stopMining();
+            return false;
+        }
+
+        boolean climbing = want != 0;
+        navigator.hold(6);
+
+        double dist = mc.player.getEyePosition().distanceTo(Vec3.atCenterOf(found));
+        if (dist > MINE_REACH) {
+            mineTarget = null;
+            return false;
+        }
+
+        if (!found.equals(mineTarget)) {
+            mineTarget = found;
+            mineTargetTicks = 0;
+        }
+
+        if (++mineTargetTicks > MINE_TARGET_TIMEOUT) {
+            mineFailed.add(packCell(found.getX(), found.getY(), found.getZ()));
+            warning("A block could not be broken. Routing around it.");
+            navigator.reset();
+            stopMining();
+            return false;
+        }
+
+        selectMineTool();
+        if (mineRotate.get()) Rotations.rotate(Rotations.getYaw(found), Rotations.getPitch(found));
+        BlockUtils.breakBlock(found, true);
+
+        if (climbing) {
+            if (!miningHover) hoverY = mc.player.getY();
+            hoverClimb = want;
+            return true;
+        }
+
+        hoverClimb = 0;
+        Vec3 velocity = mc.player.getDeltaMovement();
+        double brake = Math.min(MINE_REACH - 0.2, brakeDistance.get() + Math.hypot(velocity.x, velocity.z));
+        boolean hover = dist <= brake;
+        if (hover && !miningHover) hoverY = mc.player.getY();
+        return hover;
+    }
+
+    private void printRouteDebug() {
+        AABB box = mc.player.getBoundingBox();
+        double cy = (box.minY + box.maxY) * 0.5;
+        String mode = navSteer == null ? "none" : navSteer.mode().name();
+        int vertical = navSteer == null ? 0 : navSteer.vertical();
+        int want = navSteer == null ? 0 : wantedVertical(cy);
+        String target = mineTarget == null ? "-" : mineTarget.toShortString();
+        info("nav=%s vert=%d want=%d mining=%s hover=%s climb=%d target=%s y=%.1f/%d",
+            mode, vertical, want, miningActive, miningHover, hoverClimb, target, cy, flyYLevel.get());
+    }
+
+    /** Which way the route wants to change altitude: the navigator's own vertical move, or the fly-y-level when flying straight. */
+    private int wantedVertical(double centerY) {
+        if (navSteer.vertical() != 0) return navSteer.vertical();
+        if (navSteer.mode() != ElytraNavigator.Mode.DIRECT) return 0;
+        if (centerY < flyYLevel.get() - 0.7) return 1;
+        if (centerY > flyYLevel.get() + 1.3) return -1;
+        return 0;
+    }
+
+    /** First breakable block straight above or below the player; stops at anything that cannot be broken. */
+    private BlockPos scanVertical(double cx, double cy, double cz, int dir, double hx, double hy, double hz) {
+        for (double t = 0.5; t <= 3.0; t += 0.5) {
+            double sy = cy + dir * t;
+            for (int ix = Mth.floor(cx - hx); ix <= Mth.floor(cx + hx); ix++) {
+                for (int iy = Mth.floor(sy - hy); iy <= Mth.floor(sy + hy); iy++) {
+                    for (int iz = Mth.floor(cz - hz); iz <= Mth.floor(cz + hz); iz++) {
+                        if (!worldTerrain.blocked(ix, iy, iz)) continue;
+                        return worldTerrain.mineCost(ix, iy, iz) >= 0f ? new BlockPos(ix, iy, iz) : null;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean hitboxBlockedAt(double offsetY) {
+        AABB box = mc.player.getBoundingBox().move(0.0, offsetY, 0.0);
+        for (int ix = Mth.floor(box.minX); ix <= Mth.floor(box.maxX); ix++) {
+            for (int iy = Mth.floor(box.minY); iy <= Mth.floor(box.maxY); iy++) {
+                for (int iz = Mth.floor(box.minZ); iz <= Mth.floor(box.maxZ); iz++) {
+                    if (worldTerrain.blocked(ix, iy, iz)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void holdForMining() {
+        mc.options.keyUp.setDown(false);
+        dampenLandingHorizontalVelocity();
+
+        double y = mc.player.getY();
+        if (hoverClimb != 0) {
+            boolean free = !hitboxBlockedAt(hoverClimb * 0.45);
+            mc.options.keyJump.setDown(hoverClimb > 0 && free);
+            mc.options.keyShift.setDown(hoverClimb < 0 && free);
+            hoverY = y;
+            return;
+        }
+
+        mc.options.keyJump.setDown(y < hoverY - 0.3);
+        mc.options.keyShift.setDown(y > hoverY + 0.5);
+    }
+
+    // ---- Baritone fallback: walk (and dig) on the ground like #goto when the air route is closed ----
+
+    private void tickMinerFallback() {
+        if (!minerStarted) {
+            releaseMovement();
+            restoreRotationSnapshot();
+            pauseBounceElytraFlyForGroundControl();
+            if (!startBaritoneFallback()) {
+                error("Elytra Route stopped: Baritone could not be started.");
+                toggle();
+                return;
+            }
+            minerStarted = true;
+            takeoffClearTicks = 0;
+            stateTicks = 0;
+            return;
+        }
+
+        IBaritone baritone = primaryBaritone();
+        boolean walking = !fallbackStopped && baritone != null && baritone.getCustomGoalProcess().isActive();
+        double dist = Math.sqrt(mc.player.blockPosition().distSqr(fallbackGoal));
+        if (dist < fallbackBestDist - 1.0) {
+            fallbackBestDist = dist;
+            fallbackProgressMs = System.currentTimeMillis();
+        }
+
+        if (walking) {
+            // Fly on as soon as the air ahead is open, not only once the goal is reached.
+            if (++stateTicks % 10 == 0 && canResumeFlight()) {
+                info("The way through the air is open again. Taking off.");
+                stopBaritoneFallback();
+            } else if (System.currentTimeMillis() - fallbackProgressMs > fallbackTimeout.get() * 1000L) {
+                warning("Baritone made no progress for %d seconds.", fallbackTimeout.get());
+                stopBaritoneFallback();
+            } else {
+                return;
+            }
+        } else if (!fallbackStopped) {
+            stopBaritoneFallback();
+        }
+
+        // Only failed runs count toward giving up; a reached goal is progress.
+        boolean reached = dist <= FALLBACK_GOAL_REACHED || canResumeFlight();
+        if (!clearTakeoffRoom()) return;
+        stopMining();
+
+        minerStarted = false;
+        minerRuns = reached ? 0 : minerRuns + 1;
+        navigator.reset();
+        navSteer = null;
+        stateTicks = 0;
+
+        if (isInsideArrivalRadius()) {
+            state = State.ARRIVED_WAIT;
+        } else if (minerRuns >= 3) {
+            error("Elytra Route stopped: Baritone could not find a way after several tries.");
+            toggle();
+        } else {
+            state = State.TAKEOFF_AWAIT_GROUND;
+        }
+    }
+
+    private IBaritone primaryBaritone() {
+        try {
+            return BaritoneAPI.getProvider().getPrimaryBaritone();
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** Sends Baritone toward the destination for up to fallback-distance blocks, like {@code #goto x z}. */
+    private boolean startBaritoneFallback() {
+        IBaritone baritone = primaryBaritone();
+        if (baritone == null) return false;
+
+        double dx = destinationX.get() + 0.5 - mc.player.getX();
+        double dz = destinationZ.get() + 0.5 - mc.player.getZ();
+        double len = Math.hypot(dx, dz);
+        double step = Math.min(fallbackDistance.get(), len);
+        int gx = len < 1.0 ? destinationX.get() : Mth.floor(mc.player.getX() + dx / len * step);
+        int gz = len < 1.0 ? destinationZ.get() : Mth.floor(mc.player.getZ() + dz / len * step);
+
+        if (!baritoneSettingsSaved) {
+            savedAllowBreak = BaritoneAPI.getSettings().allowBreak.value;
+            savedAllowPlace = BaritoneAPI.getSettings().allowPlace.value;
+            baritoneSettingsSaved = true;
+        }
+        BaritoneAPI.getSettings().allowBreak.value = fallbackBreak.get();
+        BaritoneAPI.getSettings().allowPlace.value = fallbackPlace.get();
+
+        fallbackGoal = new BlockPos(gx, mc.player.getBlockY(), gz);
+        fallbackBestDist = Math.sqrt(mc.player.blockPosition().distSqr(fallbackGoal));
+        fallbackProgressMs = System.currentTimeMillis();
+        fallbackStopped = false;
+        baritone.getCustomGoalProcess().setGoalAndPath(new GoalXZ(gx, gz));
+        return true;
+    }
+
+    private void stopBaritoneFallback() {
+        fallbackStopped = true;
+        IBaritone baritone = primaryBaritone();
+        if (baritone != null) {
+            try {
+                baritone.getPathingBehavior().cancelEverything();
+                baritone.getCustomGoalProcess().setGoal(null);
+                baritone.getInputOverrideHandler().clearAllKeys();
+            } catch (Throwable ignored) {
+            }
+        }
+        if (baritoneSettingsSaved) {
+            BaritoneAPI.getSettings().allowBreak.value = savedAllowBreak;
+            BaritoneAPI.getSettings().allowPlace.value = savedAllowPlace;
+            baritoneSettingsSaved = false;
+        }
+        releaseMovement();
+    }
+
+    /** Feet Y the fallback digs toward: one below fly-y-level, so a takeoff from there reaches it at once. */
+    private int minerTargetFeetY() {
+        int min = mc.level.getMinY() + 2;
+        int max = mc.level.getMaxY() - 4;
+        return Mth.clamp(flyYLevel.get() - 1, min, max);
+    }
+
+    /** True on the ground when the air toward the destination is open: at flight height, or in a space tall enough to climb in flight. */
+    private boolean canResumeFlight() {
+        if (!mc.player.onGround()) return false;
+        if (!hasTakeoffHeadroom()) return false;
+
+        double dx = destinationX.get() + 0.5 - mc.player.getX();
+        double dz = destinationZ.get() + 0.5 - mc.player.getZ();
+        double len = Math.hypot(dx, dz);
+        if (len < 1.0) return false;
+
+        worldTerrain.newTick();
+        double ahead = Math.min(RESUME_FLIGHT_CHECK_DISTANCE, len);
+        double ex = mc.player.getX() + dx / len * ahead, ez = mc.player.getZ() + dz / len * ahead;
+        double y = mc.player.getY() + 1.0;
+        if (!ElytraPathPlanner.lineClear(worldTerrain, mc.player.getX(), y, mc.player.getZ(), ex, y, ez, 0.35)) return false;
+        if (Math.abs(mc.player.getBlockY() - minerTargetFeetY()) <= 2) return true;
+
+        double top = y + RESUME_OPEN_HEIGHT;
+        return ElytraPathPlanner.lineClear(worldTerrain, mc.player.getX(), top, mc.player.getZ(), ex, top, ez, 0.35);
+    }
+
+    /** True when the cells a double-jump takeoff passes through, up to {@link #TAKEOFF_HEADROOM} above the feet, are open. */
+    private boolean hasTakeoffHeadroom() {
+        BlockPos feet = mc.player.blockPosition();
+        worldTerrain.newTick();
+        for (int dy = 2; dy <= TAKEOFF_HEADROOM; dy++) {
+            if (worldTerrain.blocked(feet.getX(), feet.getY() + dy, feet.getZ())) return false;
+        }
+        return true;
+    }
+
+    /** Breaks the blocks above the head that a jump-takeoff needs; true once clear, unbreakable or timed out. */
+    private boolean clearTakeoffRoom() {
+        if (++takeoffClearTicks > TAKEOFF_CLEAR_TIMEOUT) return true;
+
+        BlockPos feet = mc.player.blockPosition();
+        worldTerrain.newTick();
+        for (int dy = 2; dy <= TAKEOFF_HEADROOM; dy++) {
+            BlockPos pos = feet.above(dy);
+            if (!worldTerrain.blocked(pos.getX(), pos.getY(), pos.getZ())) continue;
+            if (worldTerrain.mineCost(pos.getX(), pos.getY(), pos.getZ()) < 0f || !updateMineTool()) return true;
+
+            selectMineTool();
+            BlockUtils.breakBlock(pos, true);
+            return false;
+        }
+        return true;
+    }
+
+    // ---- Elytra repair: mend nearly broken elytras with XP bottles, optionally fetched from an Ender Chest ----
+
+    private boolean needsRepair() {
+        if (!repairElytras.get() || repairSuppressed || mc.player == null) return false;
+
+        boolean anyElytra = false;
+        ItemStack worn = mc.player.getItemBySlot(EquipmentSlot.CHEST);
+        if (worn.is(Items.ELYTRA)) {
+            anyElytra = true;
+            if (elytraRemaining(worn) > repairBelow.get()) return false;
+        }
+
+        for (int i = 0; i < PLAYER_INVENTORY_SLOTS; i++) {
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            if (!stack.is(Items.ELYTRA)) continue;
+            anyElytra = true;
+            if (elytraRemaining(stack) > repairBelow.get()) return false;
+        }
+
+        return anyElytra && hasRepairSupplies();
+    }
+
+    private boolean hasRepairSupplies() {
+        if (countXpBottles() > 0) return true;
+        if (findInventoryXpShulker() != -1) return true;
+        if (!enderChestXp.get()) return false;
+        return InvUtils.find(Items.ENDER_CHEST).found() || (mc.player.onGround() && findNearbyEnderChest() != null);
+    }
+
+    private int elytraRemaining(ItemStack stack) {
+        return stack.getMaxDamage() - stack.getDamageValue();
+    }
+
+    private int allowedElytraDamage(ItemStack stack) {
+        return (int) Math.floor(stack.getMaxDamage() * (1.0 - repairTarget.get() / 100.0));
+    }
+
+    private boolean elytraNeedsMend(ItemStack stack) {
+        return stack != null && stack.is(Items.ELYTRA) && stack.getDamageValue() > allowedElytraDamage(stack);
+    }
+
+    private int countXpBottles() {
+        return InvUtils.find(Items.EXPERIENCE_BOTTLE).count();
+    }
+
+    private int totalMissingElytraDurability() {
+        int missing = 0;
+        ItemStack worn = mc.player.getItemBySlot(EquipmentSlot.CHEST);
+        if (elytraNeedsMend(worn)) missing += worn.getDamageValue() - allowedElytraDamage(worn);
+        for (int i = 0; i < PLAYER_INVENTORY_SLOTS; i++) {
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            if (elytraNeedsMend(stack)) missing += stack.getDamageValue() - allowedElytraDamage(stack);
+        }
+        return missing;
+    }
+
+    private void beginRepair(boolean fromFlight) {
+        resetRepairRuntime();
+        repairStep = RepairStep.PLAN;
+        if (fromFlight) {
+            beginLanding(LandingReason.REPAIR);
+        } else {
+            releaseMovement();
+            state = State.REPAIR;
+            stateTicks = 0;
+        }
+    }
+
+    private void resetRepairRuntime() {
+        repairStep = RepairStep.PLAN;
+        repairFailed = false;
+        repairChestPlaced = false;
+        repairChestPos = null;
+        repairShulkerPos = null;
+        repairShulkerKey = null;
+        repairTicks = 0;
+        repairShulkerCount = 0;
+        repairChestCount = 0;
+        repairBottleCount = 0;
+        repairLastDamage = -1;
+        repairThrowsWithoutProgress = 0;
+        repairActionIssued = false;
+    }
+
+    private void setRepairStep(RepairStep step) {
+        repairStep = step;
+        repairTicks = 0;
+        repairActionIssued = false;
+    }
+
+    private void abortRepair(String message) {
+        warning(message);
+        repairFailed = true;
+        repairSuppressed = true;
+        setRepairStep(RepairStep.CLEANUP);
+    }
+
+    private void tickRepair() {
+        if (mc.player == null || mc.level == null) return;
+        if (actionDelayTicks > 0) return;
+
+        switch (repairStep) {
+            case PLAN -> repairPlan();
+            case MOVE -> repairMove();
+            case CHEST_PLACE -> repairPlaceChest();
+            case CHEST_OPEN -> openRepairContainer(repairChestPos, "Ender Chest", RepairStep.CHEST_TAKE);
+            case CHEST_TAKE -> repairTakeFromChest();
+            case CHEST_CLOSE -> closeRepairScreen(repairShulkerKey != null ? RepairStep.SHULKER_PLACE : RepairStep.MEND);
+            case SHULKER_PLACE -> repairPlaceShulker();
+            case SHULKER_OPEN -> openRepairContainer(repairShulkerPos, "XP shulker", RepairStep.SHULKER_TAKE);
+            case SHULKER_TAKE -> repairTakeBottles();
+            case SHULKER_CLOSE -> closeRepairScreen(RepairStep.SHULKER_BREAK);
+            case SHULKER_BREAK -> repairBreakShulker();
+            case SHULKER_PICKUP -> repairPickupShulker();
+            case MEND -> repairMend();
+            case RETURN_OPEN -> openRepairContainer(repairChestPos, "Ender Chest", RepairStep.RETURN_PUT);
+            case RETURN_PUT -> repairReturnShulker();
+            case RETURN_CLOSE -> closeRepairScreen(repairChestPlaced ? RepairStep.CHEST_BREAK : RepairStep.DONE);
+            case CHEST_BREAK -> repairBreakChest();
+            case CHEST_PICKUP -> repairPickupChest();
+            case CLEANUP -> repairCleanup();
+            case DONE -> finishRepair();
+        }
+    }
+
+    private void repairPlan() {
+        releaseMovement();
+
+        if (countXpBottles() > 0) {
+            setRepairStep(RepairStep.MEND);
+            return;
+        }
+
+        int shulkerSlot = findInventoryXpShulker();
+        if (shulkerSlot != -1) {
+            repairShulkerKey = nonXpKey(mc.player.getInventory().getItem(shulkerSlot));
+            setRepairStep(RepairStep.SHULKER_PLACE);
+            return;
+        }
+
+        if (!enderChestXp.get()) {
+            abortRepair("No XP bottles to repair with.");
+            return;
+        }
+
+        BlockPos nearby = findNearbyEnderChest();
+        if (nearby != null) {
+            repairChestPos = nearby;
+            repairChestPlaced = false;
+            setRepairStep(RepairStep.CHEST_OPEN);
+            return;
+        }
+
+        if (!InvUtils.find(Items.ENDER_CHEST).found()) {
+            abortRepair("No XP bottles and no Ender Chest to fetch them from.");
+            return;
+        }
+
+        restockPad = null;
+        resetRestockPadSearch();
+        setRepairStep(RepairStep.MOVE);
+    }
+
+    private void repairMove() {
+        if (++repairTicks > 300) {
+            abortRepair("Could not find a spot to place the Ender Chest.");
+            return;
+        }
+
+        if (restockPad == null) {
+            restockPad = findNextRestockPad();
+            if (restockPad == null) return;
+        }
+
+        moveToward(restockPad.playerBase.getX() + 0.5, restockPad.playerBase.getZ() + 0.5, () -> {
+            releaseMovement();
+            setRepairStep(RepairStep.CHEST_PLACE);
+        });
+    }
+
+    private void repairPlaceChest() {
+        if (countEmptyLooseSlots() < 1) {
+            abortRepair("Inventory is full.");
+            return;
+        }
+
+        int slot = prepareRepairHotbarItem(Items.ENDER_CHEST);
+        if (slot == -1) {
+            if (++repairTicks > 20) abortRepair("Could not move the Ender Chest to the hotbar.");
+            return;
+        }
+
+        BlockPos pos = restockPad.containerBase.above();
+        repairChestCount = InvUtils.find(Items.ENDER_CHEST).count();
+        if (!BlockUtils.place(pos, InteractionHand.MAIN_HAND, slot, false, 0, true, true, true)) {
+            abortRepair("Failed to place the Ender Chest.");
+            return;
+        }
+
+        repairChestPos = pos.immutable();
+        repairChestPlaced = true;
+        actionDelayTicks = inventoryDelay.get();
+        setRepairStep(RepairStep.CHEST_OPEN);
+    }
+
+    /** Right-clicks the block until its screen opens; moves on to {@code next} once it has. */
+    private void openRepairContainer(BlockPos pos, String label, RepairStep next) {
+        if (pos == null) {
+            abortRepair("Lost track of the " + label + ".");
+            return;
+        }
+
+        if (mc.gui.screen() != null && mc.player.containerMenu != null
+            && mc.player.containerMenu.slots.size() > PLAYER_INVENTORY_SLOTS) {
+            actionDelayTicks = inventoryDelay.get();
+            setRepairStep(next);
+            return;
+        }
+
+        repairTicks++;
+        if (mc.level.getBlockState(pos).isAir()) {
+            if (repairTicks > 40) abortRepair("The " + label + " is gone.");
+            return;
+        }
+
+        if (repairTicks % 20 == 1) {
+            mc.gameMode.useItemOn(
+                mc.player,
+                InteractionHand.MAIN_HAND,
+                new net.minecraft.world.phys.BlockHitResult(Vec3.atCenterOf(pos), net.minecraft.core.Direction.UP, pos, false)
+            );
+        } else if (repairTicks > 80) {
+            abortRepair("The " + label + " did not open.");
+        }
+    }
+
+    private void closeRepairScreen(RepairStep next) {
+        if (mc.player.containerMenu != null && !mc.player.containerMenu.getCarried().isEmpty()) {
+            clearCursorAfterSwap();
+            actionDelayTicks = inventoryDelay.get();
+            return;
+        }
+
+        if (mc.gui.screen() != null) {
+            mc.gui.screen().onClose();
+            actionDelayTicks = inventoryDelay.get();
+            return;
+        }
+
+        setRepairStep(next);
+    }
+
+    private void repairTakeFromChest() {
+        if (mc.gui.screen() == null || mc.player.containerMenu == null) {
+            setRepairStep(RepairStep.CHEST_OPEN);
+            return;
+        }
+
+        if (repairActionIssued) {
+            boolean arrived = repairShulkerKey != null
+                ? countInventoryShulkerBoxes() > repairShulkerCount
+                : countXpBottles() > repairBottleCount;
+            if (arrived) {
+                setRepairStep(RepairStep.CHEST_CLOSE);
+            } else if (++repairTicks > 20) {
+                abortRepair("Could not take the XP supplies out of the Ender Chest.");
+            }
+            return;
+        }
+
+        if (countEmptyLooseSlots() < 2) {
+            abortRepair("Not enough free inventory slots to take the XP supplies.");
+            return;
+        }
+
+        int loose = findContainerSlot(stack -> stack.is(Items.EXPERIENCE_BOTTLE));
+        if (loose != -1) {
+            repairShulkerKey = null;
+            repairBottleCount = countXpBottles();
+            InvUtils.shiftClick().slotId(loose);
+        } else {
+            int shulker = findContainerSlot(stack -> isShulkerBox(stack) && countXpBottlesInShulker(stack) > 0);
+            if (shulker == -1) {
+                abortRepair("No XP bottles or XP shulker were found in your Ender Chest.");
+                return;
+            }
+
+            repairShulkerKey = nonXpKey(mc.player.containerMenu.slots.get(shulker).getItem());
+            repairShulkerCount = countInventoryShulkerBoxes();
+            InvUtils.shiftClick().slotId(shulker);
+        }
+
+        repairActionIssued = true;
+        repairTicks = 0;
+        actionDelayTicks = inventoryDelay.get();
+    }
+
+    private void repairPlaceShulker() {
+        int slot = findShulkerByKey(repairShulkerKey, true);
+        if (slot == -1) {
+            abortRepair("The XP shulker went missing from your inventory.");
+            return;
+        }
+
+        if (!SlotUtils.isHotbar(slot)) {
+            if (++repairTicks > 20) {
+                abortRepair("Could not move the XP shulker to the hotbar.");
+                return;
+            }
+
+            InvUtils.move().from(slot).toHotbar(findRepairHotbarSlot());
+            if (!clearCursorStackToEmptySlot()) {
+                abortRepair("Unable to clear the cursor after moving the XP shulker.");
+                return;
+            }
+            actionDelayTicks = Math.max(1, inventoryDelay.get());
+            return;
+        }
+
+        BlockPos pos = findShulkerPlacePos();
+        if (pos == null) {
+            abortRepair("No free spot next to you to set the XP shulker down.");
+            return;
+        }
+
+        repairShulkerCount = countInventoryShulkerBoxes();
+        if (!BlockUtils.place(pos, InteractionHand.MAIN_HAND, slot, false, 0, true, true, true)) {
+            abortRepair("Failed to place the XP shulker.");
+            return;
+        }
+
+        repairShulkerPos = pos.immutable();
+        actionDelayTicks = inventoryDelay.get();
+        setRepairStep(RepairStep.SHULKER_OPEN);
+    }
+
+    private void repairTakeBottles() {
+        if (mc.gui.screen() == null || mc.player.containerMenu == null) {
+            setRepairStep(RepairStep.SHULKER_OPEN);
+            return;
+        }
+
+        int wanted = Math.max(8, (int) Math.ceil(totalMissingElytraDurability() / 10.0) + 4);
+        int slot = findContainerSlot(stack -> stack.is(Items.EXPERIENCE_BOTTLE));
+        boolean room = countEmptyLooseSlots() >= 2;
+
+        if (slot == -1 || countXpBottles() >= wanted || !room) {
+            if (countXpBottles() <= 0) {
+                abortRepair(slot == -1 ? "The XP shulker is empty." : "Not enough free inventory slots to take XP bottles.");
+                return;
+            }
+
+            setRepairStep(RepairStep.SHULKER_CLOSE);
+            return;
+        }
+
+        InvUtils.shiftClick().slotId(slot);
+        actionDelayTicks = inventoryDelay.get();
+    }
+
+    private void repairBreakShulker() {
+        if (mc.gui.screen() != null) {
+            mc.gui.screen().onClose();
+            return;
+        }
+
+        if (repairShulkerPos != null && mc.level.getBlockState(repairShulkerPos).getBlock() instanceof ShulkerBoxBlock) {
+            if (++repairTicks > 400) {
+                warning("The XP shulker could not be broken.");
+                setRepairStep(RepairStep.DONE);
+                return;
+            }
+
+            BlockUtils.breakBlock(repairShulkerPos, true);
+            return;
+        }
+
+        setRepairStep(RepairStep.SHULKER_PICKUP);
+    }
+
+    private void repairPickupShulker() {
+        if (countInventoryShulkerBoxes() >= repairShulkerCount) {
+            releaseMovement();
+            repairShulkerPos = null;
+            setRepairStep(repairFailed ? RepairStep.CLEANUP : RepairStep.MEND);
+            return;
+        }
+
+        if (++repairTicks > SHULKER_PICKUP_TIMEOUT * 2) {
+            releaseMovement();
+            warning("The XP shulker was not picked up in time; it is lying on the ground nearby.");
+            repairShulkerPos = null;
+            repairShulkerKey = null;
+            setRepairStep(repairFailed ? RepairStep.CLEANUP : RepairStep.MEND);
+            return;
+        }
+
+        if (countEmptyLooseSlots() <= 0 && repairTicks % SHULKER_PICKUP_REACQUIRE_INTERVAL == 0) {
+            dropReplaceableLooseElytraForPickup();
+        }
+
+        ItemEntity nearest = collectShulkerDrops().stream()
+            .min(Comparator.comparingDouble(entity -> mc.player.distanceToSqr(entity.getX(), entity.getY(), entity.getZ())))
+            .orElse(null);
+        if (nearest != null) moveToward(nearest.getX(), nearest.getZ(), this::releaseMovement);
+        else releaseMovement();
+    }
+
+    private void repairMend() {
+        releaseMovement();
+
+        if (mc.gui.screen() != null) {
+            mc.gui.screen().onClose();
+            return;
+        }
+
+        ItemStack worn = mc.player.getItemBySlot(EquipmentSlot.CHEST);
+        if (elytraNeedsMend(worn)) {
+            mendWornElytra(worn);
+            return;
+        }
+
+        int loose = -1;
+        for (int i = 0; i < PLAYER_INVENTORY_SLOTS; i++) {
+            if (elytraNeedsMend(mc.player.getInventory().getItem(i))) {
+                loose = i;
+                break;
+            }
+        }
+
+        if (loose != -1) {
+            swapInventoryElytraWithChestSlot(loose);
+            repairLastDamage = -1;
+            repairThrowsWithoutProgress = 0;
+            actionDelayTicks = Math.max(1, inventoryDelay.get());
+            return;
+        }
+
+        finishMend();
+    }
+
+    private void mendWornElytra(ItemStack worn) {
+        int missing = worn.getDamageValue() - allowedElytraDamage(worn);
+        int pending = pendingRepairDurability();
+        if (missing <= pending) return;
+
+        if (repairLastDamage == -1 || worn.getDamageValue() < repairLastDamage) {
+            repairLastDamage = worn.getDamageValue();
+            repairThrowsWithoutProgress = 0;
+        } else if (repairThrowsWithoutProgress >= 6 && pending == 0) {
+            warning("The XP is not repairing the elytra (no Mending, or another Mending item absorbed it). Stopping repair.");
+            repairSuppressed = true;
+            finishMend();
+            return;
+        }
+
+        FindItemResult bottle = InvUtils.find(stack -> stack.is(Items.EXPERIENCE_BOTTLE), 0, PLAYER_INVENTORY_SLOTS - 1);
+        if (!bottle.found()) {
+            warning("Out of XP bottles.");
+            finishMend();
+            return;
+        }
+
+        int slot = bottle.slot();
+        repairThrowsWithoutProgress++;
+        actionDelayTicks = repairThrowDelay.get();
+        Rotations.rotate(mc.player.getYRot(), 90, () -> {
+            InventoryManager.swapTo(slot, false, true);
+            mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+            InventoryManager.swapBack(false);
+        });
+    }
+
+    /** Durability that nearby orbs and in-flight bottles will still repair (Mending: 2 per XP, bottle about 7 XP). */
+    private int pendingRepairDurability() {
+        int pending = 0;
+        for (Entity entity : mc.level.getEntities(mc.player, mc.player.getBoundingBox().inflate(8))) {
+            if (entity instanceof ExperienceOrb orb) pending += orb.getValue() * 2;
+            else if (entity instanceof ThrownExperienceBottle) pending += 14;
+        }
+        return pending;
+    }
+
+    private void swapInventoryElytraWithChestSlot(int inventorySlot) {
+        THMUtils.fakeInventoryOpen(true);
+        try {
+            int syncId = mc.player.containerMenu.containerId;
+            int spareId = SlotUtils.indexToId(inventorySlot);
+            int chestId = SlotUtils.indexToId(CHEST_SLOT_INDEX);
+
+            mc.gameMode.handleContainerInput(syncId, spareId, 0, ContainerInput.PICKUP, mc.player);
+            mc.gameMode.handleContainerInput(syncId, chestId, 0, ContainerInput.PICKUP, mc.player);
+            mc.gameMode.handleContainerInput(syncId, spareId, 0, ContainerInput.PICKUP, mc.player);
+
+            if (!mc.player.containerMenu.getCarried().isEmpty()) clearCursorAfterSwap();
+        } finally {
+            THMUtils.fakeInventoryOpen(false);
+        }
+    }
+
+    /** Leaves the most durable elytra on, then heads to the shulker/chest clean-up. */
+    private void finishMend() {
+        ItemStack worn = mc.player.getItemBySlot(EquipmentSlot.CHEST);
+        int bestSlot = -1;
+        int bestRemaining = worn.is(Items.ELYTRA) ? elytraRemaining(worn) : -1;
+        for (int i = 0; i < PLAYER_INVENTORY_SLOTS; i++) {
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            if (!stack.is(Items.ELYTRA) || elytraRemaining(stack) <= bestRemaining) continue;
+            bestRemaining = elytraRemaining(stack);
+            bestSlot = i;
+        }
+
+        if (bestSlot != -1) swapInventoryElytraWithChestSlot(bestSlot);
+        actionDelayTicks = Math.max(1, inventoryDelay.get());
+
+        boolean returnIt = returnShulker.get() && repairShulkerKey != null && repairChestPos != null && !repairFailed;
+        if (returnIt) setRepairStep(RepairStep.RETURN_OPEN);
+        else setRepairStep(repairChestPlaced ? RepairStep.CHEST_BREAK : RepairStep.DONE);
+    }
+
+    private void repairReturnShulker() {
+        if (mc.gui.screen() == null || mc.player.containerMenu == null) {
+            setRepairStep(RepairStep.RETURN_OPEN);
+            return;
+        }
+
+        int slot = findShulkerByKey(repairShulkerKey, false);
+        if (slot == -1) {
+            setRepairStep(RepairStep.RETURN_CLOSE);
+            return;
+        }
+
+        if (++repairTicks > 15) {
+            warning("The Ender Chest has no room for the XP shulker; it stays in your inventory.");
+            setRepairStep(RepairStep.RETURN_CLOSE);
+            return;
+        }
+
+        InvUtils.shiftClick().slot(slot);
+        actionDelayTicks = inventoryDelay.get();
+    }
+
+    private void repairBreakChest() {
+        if (mc.gui.screen() != null) {
+            mc.gui.screen().onClose();
+            return;
+        }
+
+        if (repairChestPos == null || !repairChestPlaced || !mc.level.getBlockState(repairChestPos).is(Blocks.ENDER_CHEST)) {
+            setRepairStep(repairChestPlaced ? RepairStep.CHEST_PICKUP : RepairStep.DONE);
+            return;
+        }
+
+        int tool = findSilkTouchPickaxeSlot();
+        if (tool == -1) {
+            warning("No Silk Touch pickaxe found. Leaving the Ender Chest where it is.");
+            setRepairStep(RepairStep.DONE);
+            return;
+        }
+
+        if (!SlotUtils.isHotbar(tool)) {
+            if (++repairTicks > 20) {
+                warning("Could not move the pickaxe to the hotbar. Leaving the Ender Chest where it is.");
+                setRepairStep(RepairStep.DONE);
+                return;
+            }
+
+            InvUtils.move().from(tool).toHotbar(findRepairHotbarSlot());
+            if (!clearCursorStackToEmptySlot()) {
+                warning("Unable to clear the cursor. Leaving the Ender Chest where it is.");
+                setRepairStep(RepairStep.DONE);
+                return;
+            }
+            actionDelayTicks = Math.max(1, inventoryDelay.get());
+            return;
+        }
+
+        if (++repairTicks > 400) {
+            warning("The Ender Chest could not be broken. Leaving it where it is.");
+            setRepairStep(RepairStep.DONE);
+            return;
+        }
+
+        InvUtils.swap(tool, true);
+        BlockUtils.breakBlock(repairChestPos, true);
+    }
+
+    private void repairPickupChest() {
+        InvUtils.swapBack();
+
+        if (InvUtils.find(Items.ENDER_CHEST).count() >= repairChestCount) {
+            releaseMovement();
+            setRepairStep(RepairStep.DONE);
+            return;
+        }
+
+        if (++repairTicks > SHULKER_PICKUP_TIMEOUT * 2) {
+            releaseMovement();
+            warning("The Ender Chest was not picked up in time; it is lying on the ground nearby.");
+            setRepairStep(RepairStep.DONE);
+            return;
+        }
+
+        AABB area = mc.player.getBoundingBox().inflate(SHULKER_PICKUP_SEARCH_RADIUS, 2.0, SHULKER_PICKUP_SEARCH_RADIUS);
+        ItemEntity nearest = mc.level.getEntitiesOfClass(ItemEntity.class, area, entity -> entity.isAlive() && entity.getItem().is(Items.ENDER_CHEST))
+            .stream()
+            .min(Comparator.comparingDouble(entity -> mc.player.distanceToSqr(entity.getX(), entity.getY(), entity.getZ())))
+            .orElse(null);
+        if (nearest != null) moveToward(nearest.getX(), nearest.getZ(), this::releaseMovement);
+        else releaseMovement();
+    }
+
+    private void repairCleanup() {
+        if (mc.player.containerMenu != null && !mc.player.containerMenu.getCarried().isEmpty()) {
+            clearCursorAfterSwap();
+            actionDelayTicks = inventoryDelay.get();
+            return;
+        }
+
+        if (mc.gui.screen() != null) {
+            mc.gui.screen().onClose();
+            actionDelayTicks = inventoryDelay.get();
+            return;
+        }
+
+        if (repairShulkerPos != null && mc.level.getBlockState(repairShulkerPos).getBlock() instanceof ShulkerBoxBlock) {
+            setRepairStep(RepairStep.SHULKER_BREAK);
+            return;
+        }
+
+        if (repairChestPlaced && repairChestPos != null && mc.level.getBlockState(repairChestPos).is(Blocks.ENDER_CHEST)) {
+            setRepairStep(RepairStep.CHEST_BREAK);
+            return;
+        }
+
+        setRepairStep(RepairStep.DONE);
+    }
+
+    private void finishRepair() {
+        InvUtils.swapBack();
+        releaseMovement();
+        if (mc.gui.screen() != null) mc.gui.screen().onClose();
+
+        if (needsRepair()) repairSuppressed = true;
+
+        restockPad = null;
+        resetRestockPadSearch();
+        resetRepairRuntime();
+
+        if (isInsideArrivalRadius()) state = State.ARRIVED_WAIT;
+        else state = State.TAKEOFF_AWAIT_GROUND;
+        stateTicks = 0;
+    }
+
+    private int prepareRepairHotbarItem(Item item) {
+        FindItemResult hotbar = InvUtils.findInHotbar(item);
+        if (hotbar.found()) return hotbar.slot();
+
+        FindItemResult inventory = InvUtils.find(item);
+        if (!inventory.found()) return -1;
+
+        InvUtils.move().from(inventory.slot()).toHotbar(findRepairHotbarSlot());
+        if (!clearCursorStackToEmptySlot()) {
+            abortRepair("Unable to clear the cursor after moving an item.");
+            return -1;
+        }
+
+        actionDelayTicks = Math.max(1, inventoryDelay.get());
+        return -1;
+    }
+
+    private int findRepairHotbarSlot() {
+        for (int i = 0; i < 9; i++) {
+            if (mc.player.getInventory().getItem(i).isEmpty()) return i;
+        }
+
+        for (int i = 0; i < 9; i++) {
+            if (!isProtectedRestockHotbarStack(mc.player.getInventory().getItem(i))) return i;
+        }
+
+        return 8;
+    }
+
+    private int findContainerSlot(Predicate<ItemStack> predicate) {
+        int containerSlots = getContainerSlotCount();
+        for (int i = 0; i < containerSlots; i++) {
+            ItemStack stack = mc.player.containerMenu.slots.get(i).getItem();
+            if (!stack.isEmpty() && predicate.test(stack)) return i;
+        }
+        return -1;
+    }
+
+    private BlockPos findNearbyEnderChest() {
+        BlockPos origin = mc.player.blockPosition();
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (int dx = -4; dx <= 4; dx++) {
+            for (int dy = -3; dy <= 3; dy++) {
+                for (int dz = -4; dz <= 4; dz++) {
+                    BlockPos pos = origin.offset(dx, dy, dz);
+                    if (!mc.level.getBlockState(pos).is(Blocks.ENDER_CHEST)) continue;
+
+                    double dist = mc.player.distanceToSqr(Vec3.atCenterOf(pos));
+                    if (dist < bestDist && dist <= 20.0) {
+                        bestDist = dist;
+                        best = pos.immutable();
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    private BlockPos findShulkerPlacePos() {
+        BlockPos below = mc.player.blockPosition().below();
+        for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+            BlockPos base = below.relative(dir);
+            BlockPos pos = base.above();
+            if (pos.equals(repairChestPos)) continue;
+            if (!isValidPadBase(base)) continue;
+            if (!mc.level.getBlockState(pos.above()).isAir()) continue;
+            return pos;
+        }
+        return null;
+    }
+
+    private int findSilkTouchPickaxeSlot() {
+        for (int i = 0; i < PLAYER_INVENTORY_SLOTS; i++) {
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            if (stack.isEmpty() || !Utils.hasEnchantment(stack, Enchantments.SILK_TOUCH)) continue;
+            if (stack.getDestroySpeed(Blocks.ENDER_CHEST.defaultBlockState()) > 1.0f) return i;
+        }
+        return -1;
+    }
+
+    private int countXpBottlesInShulker(ItemStack shulker) {
+        if (!isShulkerBox(shulker)) return 0;
+        ItemContainerContents container = shulker.get(DataComponents.CONTAINER);
+        if (container == null) return 0;
+
+        int count = 0;
+        for (ItemStack stack : container.nonEmptyItemCopyStream().toList()) {
+            if (stack.is(Items.EXPERIENCE_BOTTLE)) count += stack.getCount();
+        }
+        return count;
+    }
+
+    private int findInventoryXpShulker() {
+        int best = -1;
+        int bestCount = 0;
+        for (int i = 0; i < PLAYER_INVENTORY_SLOTS; i++) {
+            int count = countXpBottlesInShulker(mc.player.getInventory().getItem(i));
+            if (count > bestCount) {
+                bestCount = count;
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    /** Identifies a shulker by colour and everything except its XP bottles, so it can be found again after looting. */
+    private String nonXpKey(ItemStack shulker) {
+        List<String> entries = new ArrayList<>();
+        ItemContainerContents container = shulker.get(DataComponents.CONTAINER);
+        if (container != null) {
+            for (ItemStack stack : container.nonEmptyItemCopyStream().toList()) {
+                if (stack.is(Items.EXPERIENCE_BOTTLE)) continue;
+                entries.add(BuiltInRegistries.ITEM.getKey(stack.getItem()) + "x" + stack.getCount());
+            }
+        }
+
+        Collections.sort(entries);
+        return BuiltInRegistries.ITEM.getKey(shulker.getItem()) + "|" + String.join(",", entries);
+    }
+
+    private int findShulkerByKey(String key, boolean requireBottles) {
+        if (key == null) return -1;
+        for (int i = 0; i < PLAYER_INVENTORY_SLOTS; i++) {
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            if (!isShulkerBox(stack) || !key.equals(nonXpKey(stack))) continue;
+            if (requireBottles && countXpBottlesInShulker(stack) <= 0) continue;
+            return i;
+        }
+        return -1;
     }
 }

@@ -859,12 +859,13 @@ public class HighwayBuilderTHM extends Module {
         .name("kitbot-update-interval-minutes")
         .description("Minutes between automatic KitBot1 updates.")
         .defaultValue(30)
-        .min(1)
-        .sliderRange(1, 120)
+        .range(30, 60)
+        .sliderRange(30, 60)
         .visible(kitbotPeriodicUpdate::get)
         .onChanged(value -> {
-            if (isActive() && mc.level != null && !this.kitbotPeriodicUpdatePending) {
-                this.kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + value * 1200L;
+            // Restart the countdown so a changed interval takes effect right away.
+            if (isActive() && !this.kitbotPeriodicUpdatePending) {
+                this.kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + value * 60_000L;
             }
         })
         .build()
@@ -1883,7 +1884,9 @@ public class HighwayBuilderTHM extends Module {
     private long kitbotPeriodicUpdateStartTick;
     private boolean kitbotPeriodicUpdateTpAccepted;
     private boolean kitbotPeriodicUpdatePending;
-    private long kitbotPeriodicUpdateNextTick;
+    private long kitbotPeriodicUpdateNextAtMs;
+    private long kitbotLastActiveAtMs;
+    private static final long KITBOT_PERIODIC_UPDATE_FRESH_AFTER_MS = 10 * 60_000L;
     private boolean kitbotOrderInFlight;
     private boolean kitbotOrderFrontendSucceeded;
     private boolean kitbotEnclosureActive;
@@ -2689,7 +2692,14 @@ public class HighwayBuilderTHM extends Module {
         nextAdvertisementAtTick = 0L;
         kitbotPeriodicUpdateActive = false;
         kitbotPeriodicUpdatePending = false;
-        kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + kitbotUpdateIntervalMinutes.get() * 1200L;
+        // Keep the countdown across relogs (backup-server kicks re-run onActivate); only a long break starts it fresh.
+        long nowMs = System.currentTimeMillis();
+        if (kitbotPeriodicUpdateNextAtMs == 0L || nowMs - kitbotLastActiveAtMs > KITBOT_PERIODIC_UPDATE_FRESH_AFTER_MS) {
+            kitbotPeriodicUpdateNextAtMs = nowMs + kitbotPeriodicUpdateIntervalMs();
+        }
+        if (kitbotPeriodicUpdate.get()) {
+            info("Next KitBot1 $update in %d min.", Math.max(0L, (kitbotPeriodicUpdateNextAtMs - nowMs) / 60_000L));
+        }
         forwardSchedulerDebugFileErrorLogged = false;
         resetAdaptivePlacement();
         resetGhostBlockCheck();
@@ -3432,27 +3442,31 @@ public class HighwayBuilderTHM extends Module {
             return;
         }
 
-        if (mc.level.getGameTime() < kitbotPeriodicUpdateNextTick) return;
+        if (System.currentTimeMillis() < kitbotPeriodicUpdateNextAtMs) return;
 
         if (isRestockState(state)) {
             kitbotPeriodicUpdatePending = true;
-            kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + kitbotUpdateIntervalMinutes.get() * 1200L;
+            kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
             return;
         }
 
         sendKitbotPeriodicUpdate();
     }
 
+    private long kitbotPeriodicUpdateIntervalMs() {
+        return kitbotUpdateIntervalMinutes.get() * 60_000L;
+    }
+
     private void sendKitbotPeriodicUpdate() {
         if (!isOnOfficialHighway() || dir == null || mc.level == null) {
             kitbotPeriodicUpdatePending = false;
-            kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + kitbotUpdateIntervalMinutes.get() * 1200L;
+            kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
             return;
         }
         String kitbotDir = directionToKitbotCommand(dir);
         if (kitbotDir == null) {
             kitbotPeriodicUpdatePending = false;
-            kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + kitbotUpdateIntervalMinutes.get() * 1200L;
+            kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
             return;
         }
         ChatUtils.sendPlayerMsg("/msg KitBot1 $update " + kitbotDir);
@@ -3461,7 +3475,7 @@ public class HighwayBuilderTHM extends Module {
         kitbotPeriodicUpdateStartTick = mc.level.getGameTime();
         kitbotPeriodicUpdateTpAccepted = false;
         kitbotPeriodicUpdatePending = false;
-        kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + kitbotUpdateIntervalMinutes.get() * 1200L;
+        kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
     }
 
     private void buildKitbotUpdateEnclosure() {
@@ -4797,6 +4811,7 @@ public class HighwayBuilderTHM extends Module {
     private void onTick(TickEvent.Pre event) {
         tickPacketChoke();
         if (mc.player == null || mc.level == null) return;
+        kitbotLastActiveAtMs = System.currentTimeMillis();
         safetyPlacedThisTick = false;
 
         // ponytail: self-heal against whatever race leaves this owned outside MineEnderChests, instead of chasing it.
@@ -5961,7 +5976,7 @@ public class HighwayBuilderTHM extends Module {
         }
 
         if (state == State.Forward && isRestockState(previousState) && kitbotPeriodicUpdatePending && kitbotPeriodicUpdate.get()) {
-            kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + 600; // 30s after returning to Forward
+            kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + 30_000L; // 30s after returning to Forward
         }
 
         if (shouldLogRestockStateTransition(previousState, state, lastState)) {

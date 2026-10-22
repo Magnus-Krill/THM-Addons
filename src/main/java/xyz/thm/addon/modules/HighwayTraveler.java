@@ -27,13 +27,18 @@ import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.EndPortalBlock;
 import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.NetherPortalBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import meteordevelopment.meteorclient.systems.modules.movement.elytrafly.ElytraFlightModes;
+import meteordevelopment.meteorclient.systems.modules.movement.elytrafly.ElytraFly;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.settings.DescribedOption;
+import xyz.thm.addon.utils.ElytraNavigator;
+import xyz.thm.addon.utils.ElytraPathPlanner;
 import xyz.thm.addon.utils.THMUtils;
 
 import java.util.*;
@@ -47,7 +52,8 @@ public class HighwayTraveler extends Module {
 
     public enum TravelMethod implements DescribedOption {
         WALK("Walk"),
-        WASP("Wasp");
+        WASP("Wasp"),
+        FLY("Fly");
 
         public final String label;
         TravelMethod(String l) { label = l; }
@@ -60,6 +66,7 @@ public class HighwayTraveler extends Module {
             return switch (this) {
                 case WALK -> "Walk along the highway.";
                 case WASP -> "Travel using Wasp flight.";
+                case FLY -> "Fly with Elytra Fly and Elytra Route's obstacle pathing.";
             };
         }
     }
@@ -93,6 +100,27 @@ public class HighwayTraveler extends Module {
                 case POS_X_NEG_Z -> "Travel northeast along positive X and negative Z.";
                 case NEG_X_POS_Z -> "Travel southwest along negative X and positive Z.";
                 case NEG_X_NEG_Z -> "Travel northwest along negative X and Z.";
+            };
+        }
+    }
+
+    public enum StopAtEnd implements DescribedOption {
+        OFF("Off"),
+        PAVE("Pave"),
+        DUG("Dug");
+
+        public final String label;
+        StopAtEnd(String l) { label = l; }
+
+        @Override
+        public String toString() { return label; }
+
+        @Override
+        public String description() {
+            return switch (this) {
+                case OFF -> "Keep traveling.";
+                case PAVE -> "Stop where the obsidian floor ends.";
+                case DUG -> "Stop where the dug tunnel ends.";
             };
         }
     }
@@ -140,6 +168,14 @@ public class HighwayTraveler extends Module {
             .min(0.0)
             .sliderMax(0.5)
             .visible(() -> methodSetting.get() == TravelMethod.WASP)
+            .build()
+    );
+
+    private final Setting<StopAtEnd> stopAtEnd = sgGeneral.add(
+        new EnumSetting.Builder<StopAtEnd>()
+            .name("stop-at-end")
+            .description("Stops at the end of the paved or dug highway.")
+            .defaultValue(StopAtEnd.OFF)
             .build()
     );
 
@@ -325,6 +361,21 @@ public class HighwayTraveler extends Module {
     private int     bounceRestartTicks  = 0;
     private double  bouncePrevFov       = 0;
     private int     stashedElytraSlot   = -1;
+    private int     baseFeetY           = Integer.MIN_VALUE;
+    private boolean handoffToBuilder    = true;
+
+    private static final int END_MAX_SCAN = 12;
+    private static final int END_LANDING_TICKS = 40;
+
+    // Fly mode: Elytra Route's navigator dodges obstacles, ElytraFly does the flying.
+    private static final double FLY_LANE_LOOKAHEAD = 12.0;
+    private static final int FLY_GOAL_DISTANCE = 100_000;
+    private static final int FLY_FLOOR_SEARCH = 8;
+    private static final int FLY_MAX_DESCEND_TICKS = 200;
+    private final ElytraNavigator.Config navConfig = new ElytraNavigator.Config();
+    private final ElytraNavigator navigator = new ElytraNavigator(new FlyTerrain(), navConfig);
+    private double laneX0, laneZ0;
+    private int flyDescendTicks;
 
     public HighwayTraveler() {
         super(THMAddon.MAIN, "highway-traveler",
@@ -347,18 +398,71 @@ public class HighwayTraveler extends Module {
         bounceRubberbanded = false;
         bounceRestartTicks = bounceRestartDelay.get();
         stashedElytraSlot  = -1;
+        baseFeetY          = Integer.MIN_VALUE;
+        handoffToBuilder   = true;
         bouncePrevFov      = mc.options.fovEffectScale().get();
         prevPos     = new Vec3(mc.player.getX(), mc.player.getY(), mc.player.getZ());
+        flyDescendTicks = 0;
 
-        if (autoBounce.get()) bounceRecast(mc.player);
+        if (methodSetting.get() == TravelMethod.FLY) {
+            if (!isElytraFlyReady()) {
+                toggle();
+                return;
+            }
+            baseFeetY = findFloorFeetY(mc.player);
+            if (baseFeetY == Integer.MIN_VALUE) {
+                error("Fly mode: no highway floor found below you.");
+                toggle();
+                return;
+            }
+            laneX0 = mc.player.getBlockX() + 0.5;
+            laneZ0 = mc.player.getBlockZ() + 0.5;
+            navigator.reset();
+        }
+
+        if (bounceEnabled()) bounceRecast(mc.player);
 
         info("Heading " + activeDir.label + " (yaw " + (int) hwYaw + ")");
+    }
+
+    private boolean bounceEnabled() {
+        return autoBounce.get() && methodSetting.get() != TravelMethod.FLY;
+    }
+
+    private boolean isElytraFlyReady() {
+        ElytraFly elytraFly = Modules.get().get(ElytraFly.class);
+        if (elytraFly == null || !elytraFly.isActive()) {
+            error("Fly mode needs Elytra Fly enabled.");
+            return false;
+        }
+        ElytraFlightModes mode = elytraFly.flightMode.get();
+        if (mode != ElytraFlightModes.Vanilla && mode != ElytraFlightModes.Packet) {
+            error("Fly mode needs Elytra Fly in Vanilla or Packet mode.");
+            return false;
+        }
+        if (elytraFly.autoPilot.get()) {
+            error("Fly mode: disable Elytra Fly auto-pilot.");
+            return false;
+        }
+        return true;
+    }
+
+    /** Walking height of the highway: the player's own block on the ground, else the first solid block below. */
+    private int findFloorFeetY(LocalPlayer p) {
+        if (p.onGround()) return p.getBlockY();
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos(p.getBlockX(), p.getBlockY(), p.getBlockZ());
+        for (int i = 0; i < FLY_FLOOR_SEARCH; i++) {
+            pos.move(0, -1, 0);
+            if (solid(pos)) return pos.getY() + 1;
+        }
+        return Integer.MIN_VALUE;
     }
 
     @Override
     public void onDeactivate() {
         releaseAll();
         mc.options.keyJump.setDown(false);
+        mc.options.keyShift.setDown(false);
         bounceRubberbanded = false;
         handoffTicks = -1;
         // If the module gets toggled off mid unequip-recast, don't leave the elytra sitting
@@ -385,12 +489,25 @@ public class HighwayTraveler extends Module {
             return;
         }
 
+        if (stopAtEnd.get() != StopAtEnd.OFF && travelState != TravelState.BACKUP) {
+            BlockPos end = findHighwayEnd(p);
+            if (end != null) {
+                reachEnd(p, end);
+                return;
+            }
+        }
+
         if (autoRepairSwap.get() && ++repairCheckTicks >= repairCheckInterval.get()) {
             repairCheckTicks = 0;
             if (highwayAheadBroken()) {
                 beginHandoffWait(p);
                 return;
             }
+        }
+
+        if (methodSetting.get() == TravelMethod.FLY) {
+            tickFly(p);
+            return;
         }
 
         if (travelState != TravelState.PATH_FOLLOW) {
@@ -418,7 +535,7 @@ public class HighwayTraveler extends Module {
         }
 
         // Bounce owns pitch (needs to dive to build speed) while it's active; otherwise keep it level.
-        if (!autoBounce.get()) p.setXRot(0);
+        if (!bounceEnabled()) p.setXRot(0);
     }
 
     /**
@@ -429,7 +546,7 @@ public class HighwayTraveler extends Module {
      */
     @EventHandler
     private void onBouncePostTick(TickEvent.Post event) {
-        if (!autoBounce.get() || mc.player == null || handoffTicks >= 0) return;
+        if (!bounceEnabled() || mc.player == null || handoffTicks >= 0) return;
         LocalPlayer p = mc.player;
 
         if (mc.options.keyJump.isDown() && !p.isFallFlying() && !bounceManualTakeoff.get()) {
@@ -463,13 +580,13 @@ public class HighwayTraveler extends Module {
 
     @EventHandler
     private void onBouncePreTick(TickEvent.Pre event) {
-        if (!autoBounce.get() || mc.player == null || handoffTicks >= 0) return;
+        if (!bounceEnabled() || mc.player == null || handoffTicks >= 0) return;
         if (bounceConditionsMet(mc.player) && sprintSetting.get()) mc.player.setSprinting(true);
     }
 
     @EventHandler
     private void onBouncePacketReceive(PacketEvent.Receive event) {
-        if (!autoBounce.get() || mc.player == null || handoffTicks >= 0) return;
+        if (!bounceEnabled() || mc.player == null || handoffTicks >= 0) return;
         if (event.packet instanceof ClientboundPlayerPositionPacket) {
             bounceRubberbanded = true;
             mc.player.stopFallFlying();
@@ -483,7 +600,7 @@ public class HighwayTraveler extends Module {
 
     @EventHandler
     private void onBouncePacketSend(PacketEvent.Send event) {
-        if (!autoBounce.get() || mc.player == null || handoffTicks >= 0 || sprintSetting.get()) return;
+        if (!bounceEnabled() || mc.player == null || handoffTicks >= 0 || sprintSetting.get()) return;
         if (event.packet instanceof ServerboundPlayerCommandPacket cmd && cmd.getAction() == ServerboundPlayerCommandPacket.Action.START_FALL_FLYING) {
             mc.player.setSprinting(true);
         }
@@ -705,10 +822,18 @@ public class HighwayTraveler extends Module {
         mc.options.keyJump.setDown(false);
         p.setSprinting(false);
 
+        // ElytraFly hovers in place once forward is released, so sneak down until landed.
+        if (methodSetting.get() == TravelMethod.FLY && p.isFallFlying() && flyDescendTicks++ < FLY_MAX_DESCEND_TICKS) {
+            mc.options.keyShift.setDown(true);
+            return;
+        }
+        mc.options.keyShift.setDown(false);
+
         if (--handoffTicks > 0) return;
         handoffTicks = -1;
 
         if (isActive()) toggle();
+        if (!handoffToBuilder) return;
 
         // Builder fully deactivates itself for the repair->travel handoff (so it doesn't keep
         // holding player input/movement while "paused" - see HighwayBuilderTHM's
@@ -716,6 +841,140 @@ public class HighwayTraveler extends Module {
         // resumes its stats session from the cached snapshot rather than starting fresh.
         HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
         if (builder != null && !builder.isActive()) builder.toggle();
+    }
+
+    /**
+     * First block ahead where the chosen highway part ends, or null. Pave: the floor under the walking height stops
+     * being obsidian for two blocks in a row. Dug: feet and head height are walled off across the whole lane, so a
+     * lone block in the way is still routed around. Looks further ahead the faster the player moves.
+     */
+    private BlockPos findHighwayEnd(LocalPlayer p) {
+        // Taken once on first ground contact: bounce bobs, and detours may step onto a railing.
+        if (baseFeetY == Integer.MIN_VALUE && p.onGround()) baseFeetY = p.getBlockY();
+        if (baseFeetY == Integer.MIN_VALUE) return null;
+
+        Vec3 vel = p.getDeltaMovement();
+        int scan = Math.min(END_MAX_SCAN, 2 + (int) Math.ceil(Math.hypot(vel.x, vel.z) * 4));
+        int x = p.getBlockX(), z = p.getBlockZ();
+
+        for (int step = 1; step <= scan; step++) {
+            int cx = x + fwdX * step, cz = z + fwdZ * step;
+            if (!mc.level.hasChunk(cx >> 4, cz >> 4)) return null;
+
+            if (stopAtEnd.get() == StopAtEnd.PAVE) {
+                int nx = cx + fwdX, nz = cz + fwdZ;
+                if (!isPaveFloor(cx, cz) && mc.level.hasChunk(nx >> 4, nz >> 4) && !isPaveFloor(nx, nz)) {
+                    return new BlockPos(cx, baseFeetY, cz);
+                }
+            } else if (isDugWall(cx, cz)) {
+                return new BlockPos(cx, baseFeetY, cz);
+            }
+        }
+        return null;
+    }
+
+    private boolean isPaveFloor(int x, int z) {
+        BlockState floor = mc.level.getBlockState(new BlockPos(x, baseFeetY - 1, z));
+        return floor.is(Blocks.OBSIDIAN) || floor.is(Blocks.CRYING_OBSIDIAN);
+    }
+
+    private boolean isDugWall(int x, int z) {
+        // Sideways along the lane: the perpendicular of the travel step.
+        int sideX = -fwdZ, sideZ = fwdX;
+        for (int lane = -1; lane <= 1; lane++) {
+            BlockPos feet = new BlockPos(x + sideX * lane, baseFeetY, z + sideZ * lane);
+            if (!solid(feet) || !solid(feet.above())) return false;
+        }
+        return true;
+    }
+
+    private void reachEnd(LocalPlayer p, BlockPos end) {
+        String part = stopAtEnd.get() == StopAtEnd.PAVE ? "paved" : "dug";
+        info("Reached the end of the %s highway at %d %d %d.", part, end.getX(), end.getY(), end.getZ());
+        handoffToBuilder = false;
+        beginHandoffWait(p);
+        // Only wait to land when actually in the air; on foot stop right away.
+        handoffTicks = p.onGround() && !p.isFallFlying() ? 0 : END_LANDING_TICKS;
+    }
+
+    private void tickFly(LocalPlayer p) {
+        p.setXRot(0);
+
+        if (!p.isFallFlying()) {
+            releaseAll();
+            mc.options.keyShift.setDown(false);
+            mc.options.keyJump.setDown(false);
+            if (!LivingEntity.canGlideUsing(p.getItemBySlot(EquipmentSlot.CHEST), EquipmentSlot.CHEST)) {
+                error("Fly mode needs a usable elytra in your chest slot.");
+                toggle();
+                return;
+            }
+            if (p.onGround()) {
+                p.jumpFromGround();
+            } else if (p.getDeltaMovement().y < 0) {
+                mc.getConnection().send(new ServerboundPlayerCommandPacket(p, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
+                p.startFallFlying();
+            }
+            return;
+        }
+
+        navConfig.preferredY = baseFeetY + 1;
+        navConfig.minY = mc.level.getMinY();
+        navConfig.maxY = mc.level.getMaxY();
+        navConfig.range = 64;
+        navConfig.lookahead = 16.0;
+
+        var box = p.getBoundingBox();
+        double cx = (box.minX + box.maxX) * 0.5, cy = (box.minY + box.maxY) * 0.5, cz = (box.minZ + box.maxZ) * 0.5;
+        Vec3 vel = p.getDeltaMovement();
+        double len = Math.hypot(fwdX, fwdZ);
+        double dirX = fwdX / len, dirZ = fwdZ / len;
+        int goalX = (int) Math.round(laneX0 + dirX * FLY_GOAL_DISTANCE);
+        int goalZ = (int) Math.round(laneZ0 + dirZ * FLY_GOAL_DISTANCE);
+
+        ElytraNavigator.Steer steer = navigator.update(cx, cy, cz, vel.x, vel.z, goalX, goalZ, 2.0);
+        if (steer.mode() == ElytraNavigator.Mode.FAILED) {
+            warning("Fly mode: no way around the obstacle. Landing.");
+            handoffToBuilder = false;
+            beginHandoffWait(p);
+            handoffTicks = END_LANDING_TICKS;
+            return;
+        }
+
+        double tx = steer.x(), tz = steer.z();
+        if (steer.mode() == ElytraNavigator.Mode.DIRECT) {
+            // Straight flight aims back onto the highway lane, so detours don't leave the player beside it.
+            double along = (cx - laneX0) * dirX + (cz - laneZ0) * dirZ + FLY_LANE_LOOKAHEAD;
+            tx = laneX0 + dirX * along;
+            tz = laneZ0 + dirZ * along;
+        }
+
+        p.setYRot((float) Math.toDegrees(Math.atan2(-(tx - cx), tz - cz)));
+        pressFwd();
+        mc.options.keyJump.setDown(steer.vertical() > 0);
+        mc.options.keyShift.setDown(steer.vertical() < 0);
+    }
+
+    /** Navigator view of the world: solid, liquid or fire cells are walls; unloaded columns are unknown. */
+    private final class FlyTerrain implements ElytraPathPlanner.Terrain {
+        private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+
+        @Override
+        public boolean blocked(int x, int y, int z) {
+            if (mc.level == null) return true;
+            if (y < mc.level.getMinY() || y > mc.level.getMaxY()) return true;
+            if (!loaded(x, z)) return false;
+            BlockState state = mc.level.getBlockState(pos.set(x, y, z));
+            if (state.isAir()) return false;
+            if (!state.getFluidState().isEmpty()) return true;
+            if (state.is(Blocks.FIRE) || state.is(Blocks.SOUL_FIRE) || state.is(Blocks.COBWEB)) return true;
+            return !state.getCollisionShape(mc.level, pos).isEmpty();
+        }
+
+        @Override
+        public boolean loaded(int x, int z) {
+            return mc.level != null && mc.level.hasChunk(x >> 4, z >> 4);
+        }
     }
 
     private ObstacleKind detectObstacle(LocalPlayer p) {

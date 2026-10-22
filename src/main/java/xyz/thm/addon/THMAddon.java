@@ -182,6 +182,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         Modules.get().add(new DiscordRPC());
         Modules.get().add(new TunnelMinerModule());
         Modules.get().add(new ElytraRoute());
+        Modules.get().add(new StashFinderTHM());
         Modules.get().add(new SignRender());
         Modules.get().add(new AfkLogout());
         Modules.get().add(new FriendsSyncModule());
