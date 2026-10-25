@@ -28,6 +28,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `Better-echest-farmer` — Better echest farmer that uses instant rebreak exploit.
 - `sign-render` — Renders sign text through walls with advanced clustering.
 - `nuker` — Nuker with many additions.
+- `block-marker` — Renders selected block types nearby; left- or right-click a match to hide it.
 
 ## Inventory and Utility
 - `offhand-manager` — Automatically manages your offhand (optimized for highway work).
