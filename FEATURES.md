@@ -31,6 +31,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `block-marker` — Renders selected block types nearby; left- or right-click a match to hide it.
 
 ## Inventory and Utility
+- `offhand` — Meteor Offhand with main-hand item whitelist and blocklist modes for swaps.
 - `offhand-manager` — Automatically manages your offhand (optimized for highway work).
 - `hotbar-manager` — Automatically move items to your hotbar.
 - `module-manager` — Tracks module toggle ownership and restores managed modules after reconnect.

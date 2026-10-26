@@ -9,6 +9,8 @@ package xyz.thm.addon.mixin;
 import com.mojang.blaze3d.platform.NativeImage;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import net.minecraft.client.Screenshot;
+import net.minecraft.client.Minecraft;
+import org.lwjgl.glfw.GLFWNativeWin32;
 import net.minecraft.network.chat.Component;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -17,6 +19,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.system.THMSystem;
 import xyz.thm.addon.utils.THMUtils;
+import xyz.thm.addon.utils.WindowsClipboard;
+import org.lwjgl.system.Platform;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
@@ -33,13 +37,10 @@ import java.util.function.Consumer;
 @Mixin(Screenshot.class)
 public class ScreenshotClipboardMixin {
 
-    // Minecraft launches with -Djava.awt.headless=true; override before AWT is first touched.
-    // Safe because Minecraft uses LWJGL for rendering and never initializes AWT itself.
+    // Linux can use AWT if its headless state has not already been cached.
     static {
-        System.setProperty("java.awt.headless", "false");
+        if (Platform.get() == Platform.LINUX) System.setProperty("java.awt.headless", "false");
     }
-
-    private static final boolean IS_MAC = System.getProperty("os.name", "").toLowerCase().contains("mac");
 
     // InputStream representation so native apps (Discord, browsers) receive raw PNG bytes.
     private static final DataFlavor PNG_FLAVOR = new DataFlavor("image/png", "PNG Image");
@@ -52,17 +53,28 @@ public class ScreenshotClipboardMixin {
 
         THMUtils.async("screenshot-clipboard", () -> {
             try {
-                if (IS_MAC) {
+                if (Platform.get() == Platform.WINDOWS) {
+                    WindowsClipboard.copyImage(file, GLFWNativeWin32.glfwGetWin32Window(Minecraft.getInstance().getWindow().handle()));
+                } else if (Platform.get() == Platform.MACOSX) {
                     copyToClipboardMac(file);
                 } else {
                     try {
                         copyToClipboardAWT(file);
                     } catch (HeadlessException | AWTError e) {
-                        copyToClipboardNative(file);
+                        if (Platform.get() != Platform.LINUX) throw e;
+                        try {
+                            copyToClipboardNative(file);
+                        } catch (Exception fallback) {
+                            fallback.addSuppressed(e);
+                            throw fallback;
+                        }
                     }
                 }
                 ChatUtils.info("Successfully copied screenshot to clipboard");
-            } catch (Exception e) {
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                THMAddon.LOG.warn("[THM] Screenshot clipboard copy interrupted", e);
+            } catch (Exception | AWTError | UnsatisfiedLinkError e) {
                 THMAddon.LOG.warn("[THM] Failed to copy screenshot to clipboard", e);
             }
         });
@@ -79,11 +91,7 @@ public class ScreenshotClipboardMixin {
         }
     }
 
-    // Linux fallback: the static block above only wins if it runs before anything else touches
-    // AWT — when it loses, the Toolkit is already a HeadlessToolkit and every AWT clipboard call
-    // throws for the rest of the session. wl-copy/xclip are the desktop-native equivalent of the
-    // macOS osascript path. ponytail: no session detection, just try both and take the first that
-    // exits 0.
+    // Linux needs native tools when AWT's headless state was already cached.
     private static void copyToClipboardNative(File file) throws IOException, InterruptedException {
         IOException last = new IOException("no clipboard tool found (install wl-clipboard or xclip)");
 
@@ -106,8 +114,7 @@ public class ScreenshotClipboardMixin {
     private static void copyToClipboardAWT(File file) throws IOException {
         BufferedImage buffered = ImageIO.read(file);
         if (buffered == null) {
-            THMAddon.LOG.warn("[THM] Could not read screenshot file for clipboard");
-            return;
+            throw new IOException("Could not read screenshot file for clipboard");
         }
         Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new TransferableImage(buffered), null);
     }

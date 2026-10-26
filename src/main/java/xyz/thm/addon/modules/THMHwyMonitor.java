@@ -3917,7 +3917,7 @@ public class THMHwyMonitor extends Module {
             mc.getConnection().getConnection().disconnect(disconnectPresentation.text());
             if (builder != null) {
                 builder.scheduleRetiredStatsDisconnectScreenshot(
-                    disconnectPresentation.retiredSessionId(),
+                    disconnectPresentation,
                     "reconnect-safety-stop"
                 );
             }
@@ -3935,7 +3935,7 @@ public class THMHwyMonitor extends Module {
             ));
             if (builder != null) {
                 builder.scheduleRetiredStatsDisconnectScreenshot(
-                    disconnectPresentation.retiredSessionId(),
+                    disconnectPresentation,
                     "reconnect-safety-stop-no-live-connection"
                 );
             }

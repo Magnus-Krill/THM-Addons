@@ -14,10 +14,19 @@ import net.minecraft.world.entity.player.Player;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
+import xyz.thm.addon.utils.StatsScreenshotChatGuard;
 
 @Mixin(Minecraft.class)
 public abstract class MinecraftClientMixin {
+
+    @Inject(method = "renderFrame", at = @At(value = "INVOKE",
+        target = "Lnet/minecraft/client/renderer/GameRenderer;render(Lnet/minecraft/client/DeltaTracker;Z)V", shift = At.Shift.AFTER))
+    private void thm$captureRenderedStatistics(CallbackInfo ci) {
+        StatsScreenshotChatGuard.afterGuiRender();
+    }
 
     // Vanilla's doItemUse returns early while ClientPlayerEntity#isRiding() - true only while
     // steering a boat with a movement key held - so item use in a moving boat is a client-side

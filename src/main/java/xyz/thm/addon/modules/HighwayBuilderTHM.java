@@ -11,6 +11,9 @@
 
 package xyz.thm.addon.modules;
 
+import baritone.api.BaritoneAPI;
+import baritone.api.IBaritone;
+import baritone.api.pathing.goals.GoalBlock;
 import io.netty.channel.ChannelFutureListener;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -25,6 +28,7 @@ import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.gui.GuiTheme;
 import meteordevelopment.meteorclient.gui.widgets.WWidget;
+import meteordevelopment.meteorclient.gui.widgets.containers.WVerticalList;
 import meteordevelopment.meteorclient.gui.widgets.pressable.WButton;
 import meteordevelopment.meteorclient.mixin.ShulkerBoxMenuAccessor;
 import meteordevelopment.meteorclient.mixininterface.IVec3;
@@ -60,6 +64,8 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.client.CameraType;
 import net.minecraft.client.Options;
 import net.minecraft.client.Screenshot;
+import net.minecraft.client.gui.screens.ChatScreen;
+import net.minecraft.client.gui.screens.DisconnectedScreen;
 import net.minecraft.client.gui.screens.inventory.ContainerScreen;
 import net.minecraft.client.gui.screens.inventory.ShulkerBoxScreen;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
@@ -83,6 +89,7 @@ import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.ChatVisiblity;
 import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -94,6 +101,7 @@ import net.minecraft.world.item.*;
 import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.EmptyBlockGetter;
+import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.HangingSignBlockEntity;
@@ -138,6 +146,7 @@ import java.util.function.IntPredicate;
 import java.util.function.IntToDoubleFunction;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
 
 import static xyz.thm.addon.utils.APIUtils.*;
@@ -175,7 +184,6 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private static final long STATS_CHECKPOINT_INTERVAL_MS = 10 * 60 * 1000L;
-    private static final int STATS_SCREENSHOT_DELAY_MS = 250;
     private static final long STATS_MEMORY_RETRY_RECHECK_MS = 5_000L;
     private static final String THM_DEBUG_LOG_DIR_NAME = "thm";
     private static final String ALL_DEBUG_FILE_NAME = "thm-debug-all.log";
@@ -1688,7 +1696,7 @@ public class HighwayBuilderTHM extends Module {
 
     private final Setting<Boolean> autoScreenshotStatistics = sgStatistics.add(new BoolSetting.Builder()
         .name("auto-screenshot-statistics")
-        .description("Captures a proof screenshot shortly after Highway Builder prints its statistics.")
+        .description("Captures statistics after they are rendered.")
         .defaultValue(false)
         .visible(printStatistics::get)
         .build()
@@ -1986,10 +1994,13 @@ public class HighwayBuilderTHM extends Module {
     private final Set<String> consumedStatsArtifactKeys = new HashSet<>();
     private RetiredStatsReportSnapshot retiredStatsReportSnapshot;
     private boolean resumeStatsSessionOnNextActivate;
+    private ManualPause manualPause;
+    private ManualPauseReturn manualPauseReturn;
     private boolean monitorPauseDeactivateArmed;
     private long nextStatsCheckpointAtMs;
     private long nextStatsStorageRetryAtMs;
     private boolean statsSessionDirty;
+    private StatsContinuity statsContinuity;
     private boolean statsSessionTerminalOrFinalizing;
     private boolean memoryRetryMode;
     private final AtomicLong statsScreenshotSequence = new AtomicLong();
@@ -2196,7 +2207,8 @@ public class HighwayBuilderTHM extends Module {
         boolean apiSendCommitted,
         String finalizationReason,
         long reconnectCycleId,
-        ReconnectBaselinePayload reconnectBaselinePayload
+        ReconnectBaselinePayload reconnectBaselinePayload,
+        StatsContinuity continuity
     ) {}
 
     public record ReconnectResumeResult(
@@ -2252,7 +2264,8 @@ public class HighwayBuilderTHM extends Module {
         long generation,
         Vec3 startPos,
         int blocksBroken,
-        int blocksPlaced
+        int blocksPlaced,
+        boolean valid
     ) {}
 
     private record StatsDisplaySnapshot(
@@ -2320,6 +2333,285 @@ public class HighwayBuilderTHM extends Module {
     public HighwayBuilderTHM() {
         super(THMAddon.MAIN, "THM-HighwayBuilder", "Automatically builds highways according to THMs standards.");
         runInMainMenu = true;
+        MeteorClient.EVENT_BUS.subscribe(new StatsContinuityListener());
+    }
+
+    @Override
+    public void toggle() {
+        if (!isActive() && manualPause != null) {
+            if (manualPauseReturn != null) cancelPauseReturn();
+            else continuePausedBuilder();
+            return;
+        }
+        super.toggle();
+    }
+
+    public boolean isManuallyPaused() {
+        return manualPause != null;
+    }
+
+    public boolean isReturningFromPause() {
+        return manualPauseReturn != null;
+    }
+
+    public void pauseBuilder() {
+        if (!isActive() || mc.player == null || mc.level == null || dir == null) return;
+        if (!checkpointStatsForMonitorReconnectPause("manual-pause")) {
+            warning("Unable to save statistics; HighwayBuilder was not paused.");
+            return;
+        }
+
+        ManualPause saved = new ManualPause(mc.player.position(), dir, mc.player.getXRot(),
+            Utils.getWorldName(), mc.level.dimension().identifier().toString(), isOnMainHighway());
+        resumeStatsSessionOnNextActivate = true;
+        // Travel handoffs already release controls without finalizing statistics.
+        travelHandoffDeactivateArmed = true;
+        super.toggle();
+        manualPause = saved;
+        info("Paused. Continue builder returns to this position before resuming.");
+    }
+
+    public void continuePausedBuilder() {
+        if (manualPause == null || manualPauseReturn != null) return;
+        checkStatsContinuity();
+        if (statsSessionTerminalOrFinalizing) {
+            warning("Finish stopping the paused session before starting again.");
+            return;
+        }
+        if (!isInPausedWorld()) {
+            warning("Return to the paused server/world and dimension before continuing.");
+            return;
+        }
+        if (!isExecutionAllowedOnCurrentServer(getCommittedServerState())) {
+            warning("Wait until the main server is ready before continuing.");
+            return;
+        }
+
+        IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
+        if (baritone == null) {
+            warning("Baritone is unavailable; HighwayBuilder remains paused.");
+            return;
+        }
+        manualPauseReturn = new ManualPauseReturn(baritone);
+        try {
+            manualPauseReturn.start();
+            MeteorClient.EVENT_BUS.subscribe(manualPauseReturn);
+        } catch (RuntimeException e) {
+            cancelPauseReturn();
+            warning("Baritone could not start; HighwayBuilder remains paused.");
+            return;
+        }
+        info("Returning to the paused position with Baritone.");
+    }
+
+    public void stopPausedBuilder() {
+        if (manualPause == null) return;
+        checkStatsContinuity();
+        if (!cancelPauseReturn()) return;
+        StatsArtifactSnapshot finalization = peekAuthoritativeStatsArtifact();
+        if (!isPendingPrintStatsSession(finalization)) {
+            finalization = persistFinalizationRecord(createFinalizationRecord("manual-stop"), "manual-stop");
+        }
+        if (finalization == null || !completeFinalizationRecord(finalization, "manual-stop", true)) {
+            warning("Unable to finish saving statistics; the paused session was retained. Stop builder to retry.");
+            return;
+        }
+        manualPause = null;
+        resumeStatsSessionOnNextActivate = false;
+    }
+
+    public boolean cancelPauseReturn() {
+        if (manualPauseReturn == null) return true;
+        ManualPauseReturn task = manualPauseReturn;
+        manualPauseReturn = null;
+        MeteorClient.EVENT_BUS.unsubscribe(task);
+        boolean stopped = true;
+        try {
+            task.stopBaritone();
+        } catch (RuntimeException e) {
+            stopped = false;
+            warning("Baritone could not stop cleanly (%s).", e.getClass().getSimpleName());
+        } finally {
+            if (task.timerWasActive) task.timer.enable();
+            if (task.speedWasActive) task.speed.enable();
+        }
+        return stopped;
+    }
+
+    private boolean isInPausedWorld() {
+        return manualPause != null && mc.player != null && mc.level != null
+            && manualPause.world().equals(Utils.getWorldName())
+            && manualPause.dimension().equals(mc.level.dimension().identifier().toString());
+    }
+
+    record ManualPause(Vec3 position, HorizontalDirection direction, float pitch, String world, String dimension, boolean mainHighway) {
+        boolean arrived(Vec3 current) {
+            double dx = current.x - position.x;
+            double dz = current.z - position.z;
+            return dx * dx + dz * dz <= 0.85 * 0.85 && Math.abs(current.y - position.y) <= 0.5;
+        }
+    }
+
+    private enum PauseReturnPhase { Stop, Walk, Look, Resume }
+
+    private final class ManualPauseReturn {
+        private final IBaritone baritone;
+        private final Timer timer = Modules.get().get(Timer.class);
+        private final Speed speed = Modules.get().get(Speed.class);
+        private final boolean timerWasActive = timer != null && timer.isActive();
+        private final boolean speedWasActive = speed != null && speed.isActive();
+        private final Object connection = mc.getConnection();
+        private PauseReturnPhase phase = PauseReturnPhase.Stop;
+        private int delay = 2;
+        private int timeout;
+
+        private ManualPauseReturn(IBaritone baritone) {
+            this.baritone = baritone;
+            timeout = Math.max(20 * 20, (int) Math.ceil(mc.player.position().distanceTo(manualPause.position()) / 3.0) * 20);
+        }
+
+        private void start() {
+            if (timerWasActive) timer.disable();
+            if (speedWasActive) speed.disable();
+            stopBaritone();
+        }
+
+        private void stopBaritone() {
+            baritone.getPathingBehavior().cancelEverything();
+            baritone.getCustomGoalProcess().setGoal(null);
+            baritone.getInputOverrideHandler().clearAllKeys();
+        }
+
+        @EventHandler
+        private void onTick(TickEvent.Pre event) {
+            try {
+                tickReturn();
+            } catch (RuntimeException e) {
+                fail("Baritone return failed (" + e.getClass().getSimpleName() + ")");
+            }
+        }
+
+        private void tickReturn() {
+            if (!isInPausedWorld() || mc.getConnection() != connection
+                || !isExecutionAllowedOnCurrentServer(getCommittedServerState())) {
+                fail("The connection or dimension changed");
+                return;
+            }
+            if (delay > 0) {
+                delay--;
+                return;
+            }
+            switch (phase) {
+                case Stop -> {
+                    if (baritone.getPathingBehavior().isPathing() || baritone.getPathingBehavior().hasPath()) {
+                        fail("Baritone did not stop");
+                        return;
+                    }
+                    BlockPos goal = BlockPos.containing(manualPause.position());
+                    baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(goal));
+                    phase = PauseReturnPhase.Walk;
+                    delay = 10;
+                }
+                case Walk -> {
+                    if (--timeout <= 0) {
+                        fail("Baritone return timed out");
+                        return;
+                    }
+                    if (baritone.getPathingBehavior().isPathing() || baritone.getCustomGoalProcess().isActive()) return;
+                    if (!manualPause.arrived(mc.player.position())) {
+                        fail("Baritone stopped before the paused position");
+                        return;
+                    }
+                    phase = PauseReturnPhase.Look;
+                    delay = 10;
+                }
+                case Look -> {
+                    applyActivationWorkingYaw(manualPause.direction());
+                    mc.player.setXRot(manualPause.pitch());
+                    baritone.getLookBehavior().updateTarget(new baritone.api.utils.Rotation(manualPause.direction().yaw, manualPause.pitch()), false);
+                    phase = PauseReturnPhase.Resume;
+                    delay = 40;
+                }
+                case Resume -> {
+                    if (!manualPause.arrived(mc.player.position())) {
+                        fail("Moved away from the paused position");
+                        return;
+                    }
+                    ManualPause saved = manualPause;
+                    if (!cancelPauseReturn()) return;
+                    applyActivationWorkingYaw(saved.direction());
+                    mc.player.setXRot(saved.pitch());
+                    manualPause = null;
+                    enable();
+                }
+            }
+        }
+
+        @EventHandler
+        private void onGameLeft(GameLeftEvent event) {
+            fail("Disconnected during the return");
+        }
+
+        private void fail(String reason) {
+            cancelPauseReturn();
+            warning("%s; HighwayBuilder remains paused. Continue builder to retry.", reason);
+        }
+    }
+
+    record StatsContinuity(Vec3 position, String world, String dimension, boolean valid) {
+        StatsContinuity {
+            valid &= Double.isFinite(position.x) && Double.isFinite(position.y) && Double.isFinite(position.z)
+                && !world.isBlank() && !dimension.isBlank();
+        }
+
+        StatsContinuity observe(Vec3 current, String currentWorld, String currentDimension, GameType gameMode) {
+            if (gameMode == null || gameMode == GameType.ADVENTURE) return this;
+            boolean continuous = world.equals(currentWorld) && dimension.equals(currentDimension)
+                && position.distanceToSqr(current) <= 64.0 * 64.0;
+            return new StatsContinuity(current, currentWorld, currentDimension, valid && continuous);
+        }
+
+        void write(StringBuilder out) {
+            out.append("meta|continuityX|").append(position.x).append('\n');
+            out.append("meta|continuityY|").append(position.y).append('\n');
+            out.append("meta|continuityZ|").append(position.z).append('\n');
+            out.append("meta|continuityWorld|").append(Base64.getEncoder().encodeToString(world.getBytes(StandardCharsets.UTF_8))).append('\n');
+            out.append("meta|continuityDimension|").append(dimension).append('\n');
+            out.append("meta|continuityValid|").append(valid).append('\n');
+        }
+
+        static StatsContinuity read(Map<String, String> meta) {
+            if (!meta.containsKey("continuityWorld")) return null;
+            return new StatsContinuity(new Vec3(
+                Double.parseDouble(meta.getOrDefault("continuityX", "NaN")),
+                Double.parseDouble(meta.getOrDefault("continuityY", "NaN")),
+                Double.parseDouble(meta.getOrDefault("continuityZ", "NaN"))),
+                new String(Base64.getDecoder().decode(meta.get("continuityWorld")), StandardCharsets.UTF_8),
+                meta.getOrDefault("continuityDimension", ""),
+                Boolean.parseBoolean(meta.getOrDefault("continuityValid", "false")));
+        }
+    }
+
+    private void checkStatsContinuity() {
+        if (!hasActiveInMemoryStatsSession() || statsContinuity == null || statsSessionTerminalOrFinalizing
+            || mc.player == null || mc.level == null || mc.getConnection() == null
+            || !isExecutionAllowedOnCurrentServer(getCommittedServerState())) return;
+        boolean wasValid = statsContinuity.valid();
+        statsContinuity = statsContinuity.observe(mc.player.position(), Utils.getWorldName(), mc.level.dimension().identifier().toString(), PlayerUtils.getGameMode());
+        if (wasValid && !statsContinuity.valid()) {
+            warning("Statistics invalidated after a teleport or world change; distance will not be submitted.");
+            statsSessionDirty = true;
+            nextStatsCheckpointAtMs = 0L;
+        }
+    }
+
+    private final class StatsContinuityListener {
+        @EventHandler
+        private void onTick(TickEvent.Pre event) {
+            if (isActive()) return;
+            checkStatsContinuity();
+            if (!statsSessionTerminalOrFinalizing) maybeCheckpointStatsSession();
+        }
     }
 
     private String resolveWebhookUrl(String configuredWebhook) {
@@ -2761,6 +3053,7 @@ public class HighwayBuilderTHM extends Module {
     }
     @Override
     public void onDeactivate() {
+        checkStatsContinuity();
         flushChokedPackets();
         packetChoke.clear();
         chokeEnabledLastTick = false;
@@ -4811,6 +5104,7 @@ public class HighwayBuilderTHM extends Module {
             restoreEChestBreakSpeedIfOwned("safety-net-not-mining");
         }
 
+        checkStatsContinuity();
         maybeCheckpointStatsSession();
 
         if (kitbotUpdateOnFinishActive) {
@@ -7211,12 +7505,24 @@ public class HighwayBuilderTHM extends Module {
 
     @Override
     public WWidget getWidget(GuiTheme theme) {
+        WVerticalList controls = theme.verticalList();
+        WButton pause = controls.add(theme.button("Pause / Continue builder")).expandX().widget();
+        pause.tooltip = "Pause building, return to the saved position, or cancel a return.";
+        pause.action = () -> {
+            if (isActive()) pauseBuilder();
+            else if (isReturningFromPause()) cancelPauseReturn();
+            else continuePausedBuilder();
+        };
+        WButton stop = controls.add(theme.button("Stop paused builder")).expandX().widget();
+        stop.tooltip = "Finish the saved session without returning.";
+        stop.action = this::stopPausedBuilder;
         WButton tabbed = theme.button("Tabbed control screen");
         tabbed.action = () -> {
             THMSystem.get().tabbedHighwayGui.set(true);
             mc.gui.setScreen(theme.moduleScreen(this));
         };
-        return tabbed;
+        controls.add(tabbed).expandX();
+        return controls;
     }
 
     private EChestBreakMode effectiveEChestBreakMode() {
@@ -9828,6 +10134,7 @@ public class HighwayBuilderTHM extends Module {
 
     private void clearActiveInMemoryStatsSession() {
         start = null;
+        statsContinuity = null;
         blocksBroken = 0;
         blocksPlaced = 0;
         displayInfo = false;
@@ -9948,7 +10255,8 @@ public class HighwayBuilderTHM extends Module {
             snapshot.apiSendCommitted(),
             snapshot.finalizationReason(),
             0L,
-            null
+            null,
+            snapshot.continuity()
         );
     }
 
@@ -9988,6 +10296,7 @@ public class HighwayBuilderTHM extends Module {
         statsSessionTerminalOrFinalizing = false;
         retiredStatsReportSnapshot = null;
         start = mc.player.position();
+        statsContinuity = new StatsContinuity(start, Utils.getWorldName(), mc.level.dimension().identifier().toString(), true);
         blocksBroken = 0;
         blocksPlaced = 0;
         displayInfo = true;
@@ -10003,6 +10312,11 @@ public class HighwayBuilderTHM extends Module {
 
         statsSessionTerminalOrFinalizing = false;
         retiredStatsReportSnapshot = null;
+        StatsContinuity current = new StatsContinuity(mc.player.position(), Utils.getWorldName(), mc.level.dimension().identifier().toString(), false);
+        statsContinuity = snapshot.continuity() == null ? current
+            : snapshot.continuity().observe(current.position(), current.world(), current.dimension(),
+                mc.getConnection() == null ? null : PlayerUtils.getGameMode());
+        if (!statsContinuity.valid()) warning("Saved statistics are invalid and will not be submitted.");
         start = new Vec3(snapshot.startX(), snapshot.startY(), snapshot.startZ());
         blocksBroken = snapshot.blocksBroken();
         blocksPlaced = snapshot.blocksPlaced();
@@ -10012,8 +10326,8 @@ public class HighwayBuilderTHM extends Module {
         lastPrintedStatsSessionId = snapshot.printedToChat() ? snapshot.sessionId() : null;
         statsSessionDirty = false;
         clearPendingForwardBreakCredits();
-        nextStatsCheckpointAtMs = snapshot.lastCheckpointAt() <= 0
-            ? System.currentTimeMillis() + STATS_CHECKPOINT_INTERVAL_MS
+        nextStatsCheckpointAtMs = !statsContinuity.valid() ? 0L
+            : snapshot.lastCheckpointAt() <= 0 ? System.currentTimeMillis() + STATS_CHECKPOINT_INTERVAL_MS
             : snapshot.lastCheckpointAt() + STATS_CHECKPOINT_INTERVAL_MS;
 
         statsCacheDebug("restored reason={} kind={} session={} generation={} state={} broken={} placed={} start=({}, {}, {})",
@@ -10090,7 +10404,8 @@ public class HighwayBuilderTHM extends Module {
             false,
             "",
             reconnectCycleId,
-            reconnectPayload
+            reconnectPayload,
+            statsContinuity
         );
     }
 
@@ -10137,7 +10452,8 @@ public class HighwayBuilderTHM extends Module {
             apiSendCommitted,
             finalizationReason,
             snapshot.reconnectCycleId(),
-            snapshot.reconnectBaselinePayload()
+            snapshot.reconnectBaselinePayload(),
+            snapshot.continuity()
         );
     }
 
@@ -10372,6 +10688,7 @@ public class HighwayBuilderTHM extends Module {
         out.append("meta|apiSendCommitted|").append(snapshot.apiSendCommitted()).append('\n');
         out.append("meta|finalizationReason|").append(snapshot.finalizationReason() == null ? "" : snapshot.finalizationReason()).append('\n');
         out.append("meta|reconnectCycleId|").append(snapshot.reconnectCycleId()).append('\n');
+        if (snapshot.continuity() != null) snapshot.continuity().write(out);
         ReconnectBaselinePayload reconnectPayload = snapshot.reconnectBaselinePayload();
         out.append("meta|reconnectBaselinePresent|").append(reconnectPayload != null).append('\n');
         if (reconnectPayload != null) {
@@ -10450,7 +10767,8 @@ public class HighwayBuilderTHM extends Module {
             Boolean.parseBoolean(meta.getOrDefault("apiSendCommitted", "false")),
             meta.getOrDefault("finalizationReason", ""),
             reconnectCycleId,
-            reconnectPayload
+            reconnectPayload,
+            StatsContinuity.read(meta)
         );
     }
 
@@ -10515,7 +10833,8 @@ public class HighwayBuilderTHM extends Module {
             snapshot.generation(),
             new Vec3(snapshot.startX(), snapshot.startY(), snapshot.startZ()),
             snapshot.blocksBroken(),
-            snapshot.blocksPlaced()
+            snapshot.blocksPlaced(),
+            snapshot.continuity() != null && snapshot.continuity().valid()
         );
     }
 
@@ -10541,7 +10860,8 @@ public class HighwayBuilderTHM extends Module {
             false,
             reason == null ? "" : reason,
             reconnectBaselineLease != null && reconnectBaselineLease.state() == ReconnectBaselineLeaseState.CAPTURED ? reconnectBaselineLease.generation() : 0L,
-            reconnectBaselineLease != null && reconnectBaselineLease.state() == ReconnectBaselineLeaseState.CAPTURED ? reconnectBaselineLease.payload() : null
+            reconnectBaselineLease != null && reconnectBaselineLease.state() == ReconnectBaselineLeaseState.CAPTURED ? reconnectBaselineLease.payload() : null,
+            statsContinuity
         );
     }
 
@@ -10645,6 +10965,10 @@ public class HighwayBuilderTHM extends Module {
         if (snapshot == null || report == null || mc == null || mc.player == null) return snapshot;
 
         StatsArtifactSnapshot working = snapshot;
+        if (snapshot.continuity() == null || !snapshot.continuity().valid()) {
+            statsCacheDebug("external statistics skipped reason=invalid-continuity session={}", shortSessionId(snapshot.sessionId()));
+            return snapshot;
+        }
 
         if (sendStatisticsWebhhok.get() && !working.webhookSendCommitted()) {
             String webhookUrl = resolveWebhookUrl(encryptedWebhook.get());
@@ -10652,7 +10976,7 @@ public class HighwayBuilderTHM extends Module {
                 // Silent on purpose — see enforceCreativeStatisticsGuard().
                 logExternalStatsDecision(working, report, reason, "webhook", "skipped-creative", 0.0);
             } else if (webhookUrl != null) {
-                double distance = PlayerUtils.distanceTo(report.startPos());
+                double distance = statsDistance(report.startPos());
                 if (distance > 1) {
                     StatsArtifactSnapshot committed = updateFinalizationRecord(
                         working,
@@ -10694,7 +11018,7 @@ public class HighwayBuilderTHM extends Module {
         }
 
         if (sendStatisticsapi.get() && !working.apiSendCommitted()) {
-            double distance = PlayerUtils.distanceTo(report.startPos());
+            double distance = statsDistance(report.startPos());
             if (distance > 1) {
                 String playerName = mc.player.getName().tryCollapseToString();
                 ThmMembers.Member selfMember = ThmMembers.getMemberByMcName(playerName);
@@ -10732,7 +11056,7 @@ public class HighwayBuilderTHM extends Module {
                                 report.blocksPlaced(),
                                 dir,
                                 generateTimestamp(),
-                                isOnMainHighway()
+                                manualPause != null ? manualPause.mainHighway() : isOnMainHighway()
                             );
                             sendStatistics(statsMessageapi);
                             working = committed;
@@ -10764,72 +11088,48 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private void scheduleStatsProofScreenshot(String sessionId, String reason, long captureToken) {
-        scheduleStatsScreenshot(sessionId, reason, StatsScreenshotSurface.CHAT, captureToken);
+        scheduleStatsScreenshot(sessionId, reason, StatsScreenshotSurface.CHAT, captureToken,
+            () -> mc.level != null && !mc.gameRenderer.gameRenderState().guiRenderState.isHudHidden
+                && mc.options.chatVisibility().get() != ChatVisiblity.HIDDEN
+                && (mc.gui.screen() == null || mc.gui.screen() instanceof ChatScreen));
     }
 
-    public void scheduleRetiredStatsDisconnectScreenshot(String sessionId, String reason) {
+    public void scheduleRetiredStatsDisconnectScreenshot(StatsDisconnectPresentation presentation, String reason) {
         if (!autoScreenshotStatistics.get()) return;
+        String sessionId = presentation.retiredSessionId();
         if (sessionId == null || sessionId.isBlank()) return;
-        scheduleStatsScreenshot(sessionId, reason, StatsScreenshotSurface.DISCONNECT, 0L);
+        String expected = presentation.text().getString();
+        scheduleStatsScreenshot(sessionId, reason, StatsScreenshotSurface.DISCONNECT, 0L,
+            () -> mc.gui.screen() instanceof DisconnectedScreen screen
+                && screen.getNarrationMessage().getString().contains(expected));
     }
 
-    private void scheduleStatsScreenshot(String sessionId, String reason, StatsScreenshotSurface surface, long captureToken) {
+    private void scheduleStatsScreenshot(String sessionId, String reason, StatsScreenshotSurface surface, long captureToken, BooleanSupplier ready) {
         long sequence = statsScreenshotSequence.incrementAndGet();
+        Runnable abort = () -> {
+            finishStatsScreenshotCapture(captureToken);
+            flushPendingWebhookStats(null);
+            statsCacheDebug("screenshot cancelled before visible frame reason={} session={} surface={} sequence={}",
+                reason, shortSessionId(sessionId), surface.fileNamePart, sequence);
+        };
         try {
-            THMUtils.async("stats-screenshot-" + surface.fileNamePart + "-" + sequence, () -> {
-                try {
-                    Thread.sleep(STATS_SCREENSHOT_DELAY_MS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    finishStatsScreenshotCapture(captureToken);
-                    flushPendingWebhookStats(null);
-                    statsCacheDebug("screenshot scheduling interrupted reason={} session={} surface={} sequence={}",
-                        reason,
-                        shortSessionId(sessionId),
-                        surface.fileNamePart,
-                        sequence
-                    );
-                    return;
-                }
-
-                try {
-                    mc.execute(() -> {
+            mc.execute(() -> {
+                if (surface == StatsScreenshotSurface.CHAT) mc.gui.hud.getChat().resetChatScroll();
+                StatsScreenshotChatGuard.getInstance().captureAfterRender(captureToken,
+                    surface == StatsScreenshotSurface.DISCONNECT,
+                    () -> mc.gui.overlay() == null && ready.getAsBoolean(),
+                    () -> {
                         try {
                             takeStatsProofScreenshot(sessionId, reason, surface, sequence, captureToken);
                         } catch (RuntimeException | Error e) {
-                            finishStatsScreenshotCapture(captureToken);
-                            flushPendingWebhookStats(null);
-                            statsCacheDebug("screenshot capture failed reason={} session={} surface={} sequence={} error={}",
-                                reason,
-                                shortSessionId(sessionId),
-                                surface.fileNamePart,
-                                sequence,
-                                e.getClass().getSimpleName()
-                            );
+                            abort.run();
+                            THMAddon.LOG.warn("Failed to capture HighwayBuilder statistics for session {}.", shortSessionId(sessionId), e);
                         }
-                    });
-                } catch (RuntimeException | Error e) {
-                    finishStatsScreenshotCapture(captureToken);
-                    flushPendingWebhookStats(null);
-                    statsCacheDebug("screenshot client scheduling failed reason={} session={} surface={} sequence={} error={}",
-                        reason,
-                        shortSessionId(sessionId),
-                        surface.fileNamePart,
-                        sequence,
-                        e.getClass().getSimpleName()
-                    );
-                }
+                    }, abort);
             });
         } catch (RuntimeException | Error e) {
-            finishStatsScreenshotCapture(captureToken);
-            flushPendingWebhookStats(null);
-            statsCacheDebug("screenshot thread start failed reason={} session={} surface={} sequence={} error={}",
-                reason,
-                shortSessionId(sessionId),
-                surface.fileNamePart,
-                sequence,
-                e.getClass().getSimpleName()
-            );
+            abort.run();
+            THMAddon.LOG.warn("Failed to schedule HighwayBuilder statistics screenshot for session {}.", shortSessionId(sessionId), e);
         }
     }
 
@@ -11007,8 +11307,17 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private StatsDisplaySnapshot createStatsDisplaySnapshot(Vec3 startPos, int broken, int placed) {
-        double distance = mc.player != null && startPos != null ? PlayerUtils.distanceTo(startPos) : 0.0;
-        return new StatsDisplaySnapshot(distance, broken, placed);
+        return new StatsDisplaySnapshot(statsDistance(startPos), broken, placed);
+    }
+
+    private double statsDistance(Vec3 startPos) {
+        StatsContinuity continuity = statsContinuity != null ? statsContinuity
+            : statsCacheSnapshot != null ? statsCacheSnapshot.continuity() : null;
+        if (continuity != null && !continuity.valid()) return 0.0;
+        if (continuity == null && retiredStatsReportSnapshot != null && !retiredStatsReportSnapshot.valid()) return 0.0;
+        Vec3 end = manualPause != null ? manualPause.position() : continuity != null ? continuity.position()
+            : mc.player != null ? mc.player.position() : null;
+        return startPos != null && end != null ? end.distanceTo(startPos) : 0.0;
     }
 
     private MutableComponent createStatsText(Vec3 statsStart, int statsBroken, int statsPlaced) {
@@ -11090,7 +11399,8 @@ public class HighwayBuilderTHM extends Module {
             report.blocksBroken(),
             report.blocksPlaced()
         );
-        info("Distance: (highlight)%.0f", display.distance());
+        if (report.valid()) info("Distance: (highlight)%.0f", display.distance());
+        else warning("Statistics invalidated: distance and external submissions discarded.");
         info("Blocks broken: (highlight)%d", display.blocksBroken());
         info("Blocks placed: (highlight)%d", display.blocksPlaced());
         lastPrintedStatsSessionId = report.sessionId();
@@ -12664,7 +12974,7 @@ public class HighwayBuilderTHM extends Module {
         StatsDisconnectPresentation presentation = appendRetiredStatsToDisconnectPresentation(text);
 
         mc.getConnection().getConnection().disconnect(presentation.text());
-        scheduleRetiredStatsDisconnectScreenshot(presentation.retiredSessionId(), "disconnect-screen-stats");
+        scheduleRetiredStatsDisconnectScreenshot(presentation, "disconnect-screen-stats");
     }
 
     public MutableComponent getStatsText() {
@@ -16212,6 +16522,7 @@ public class HighwayBuilderTHM extends Module {
             private Predicate<ItemStack> sourceItemPredicate;
             private String sourceLabel;
             private int sourceReadyRetries;
+            private int invalidBlockClearDeadline;
             private boolean usingPlacedEnderChestSource;
             private boolean extractedFoodShulkerFromEnderChest;
             private boolean foodShulkerReturnPending;
@@ -16656,6 +16967,20 @@ public class HighwayBuilderTHM extends Module {
                 }
 
                 BlockPos blockPos = pos.getBlockPos();
+                if (b.invalidRestockRecoveryPending) {
+                    BlockState obstruction = b.mc.level.getBlockState(blockPos);
+                    if (obstruction.canBeReplaced()) {
+                        b.setState(MineShulkerBlockade, this);
+                    } else if (obstruction.getBlock() instanceof ShulkerBoxBlock || obstruction.is(Blocks.ENDER_CHEST)) {
+                        b.invalidRestockRecoveryPending = false;
+                        breakContainer = false;
+                    } else if (b.mc.player.tickCount >= invalidBlockClearDeadline || !b.safeCanBreak(blockPos, obstruction)) {
+                        b.error("Cannot clear %s at %s for the restock retry.", obstruction.getBlock(), b.formatBlockPos(blockPos));
+                    } else {
+                        handleContainerBlock(b, blockPos);
+                    }
+                    return;
+                }
                 if (foodShulkerReturnPending && handleFoodShulkerReturn(b, blockPos)) return;
                 if (enderChestShulkerReturnPending && handleEnderChestShulkerReturn(b, blockPos)) return;
 
@@ -16732,7 +17057,7 @@ public class HighwayBuilderTHM extends Module {
                     minimumSlots
                 );
 
-                switch (blockState.getBlock()) {
+                switch (blockState.canBeReplaced() ? Blocks.AIR : blockState.getBlock()) {
                     // if we have placed a shulker box there should be items inside we want
                     case ShulkerBoxBlock ignored -> {
                         if (b.mc.gui.screen() instanceof ShulkerBoxScreen screen) {
@@ -16843,18 +17168,16 @@ public class HighwayBuilderTHM extends Module {
                         delayTimer = b.inventoryDelay.get();
                     }
 
-                    // the only valid blocks should be air, a shulker box, or an ender chest
-                    // if there is another type of block, attempt one full recovery:
-                    // break invalid block -> mine blockade -> retry full restock
                     default -> {
                         if (b.invalidRestockRecoveryRetries < INVALID_RESTOCK_RECOVERY_MAX_RETRIES) {
                             b.invalidRestockRecoveryRetries++;
                             b.invalidRestockRecoveryPending = true;
-                            b.warning("Invalid block at container restocking position. Recovery attempt (" + b.invalidRestockRecoveryRetries + "/" + INVALID_RESTOCK_RECOVERY_MAX_RETRIES + ").");
+                            invalidBlockClearDeadline = b.mc.player.tickCount + RESTOCK_WATCHDOG_SETUP_TIMEOUT_TICKS;
+                            b.warning("Clearing %s at %s before retrying container restock (%d/%d).",
+                                blockState.getBlock(), b.formatBlockPos(blockPos), b.invalidRestockRecoveryRetries, INVALID_RESTOCK_RECOVERY_MAX_RETRIES);
 
                             breakContainer = true;
                             handleContainerBlock(b, blockPos);
-                            b.setState(MineShulkerBlockade, this);
                         } else {
                             b.notifyDesktop(b.notifyRestockIssues, "THM Highway Builder", "Invalid block at restock position after recovery retry.");
                             b.error("Invalid block at container restocking position after recovery retry.");

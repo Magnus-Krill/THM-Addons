@@ -53,6 +53,34 @@ Single EChest restocks use the same standing height as the enclosure and clear s
 
 ## Quick Cheat Sheet
 
+### Pause And Continue
+
+Press **Pause builder** in the HighwayBuilder control screen to save the current statistics,
+position and working direction. The builder turns off and releases movement controls so you can
+move freely. **Continue builder** uses Baritone to return to the saved position, restores the
+working direction and pitch, then resumes the same statistics session. The module keybind also
+continues a paused builder. **Cancel return** stops Baritone and keeps the builder paused.
+**Stop builder** finishes the paused statistics session without returning; distance ends at
+the pause position. Speed and Timer are temporarily disabled during the return and restored afterwards.
+
+Continue requires the same server/world and dimension. Failed paths, timeouts and disconnects
+leave the builder paused for another attempt. Statistics use the existing disk checkpoint;
+the return position lasts until the client closes. The classic settings screen also has a
+**Pause / Continue builder** button.
+
+Statistics become invalid after a movement jump over 64 blocks or a world/dimension change,
+including while paused. Returning afterwards does not restore validity. The last position and
+validity are saved with the stats checkpoint and checked on resume. Invalid sessions keep local
+block counts but report no distance and send no statistics to the API or webhook. Older saved
+sessions without a continuity checkpoint also remain ineligible for submission.
+Adventure-mode backup/lobby visits leave the last main-server position unchanged, including on
+cache restore. Distance uses that saved position while away. On returning to Survival, the
+64-block check resumes against the saved main-server position.
+
+Container restocking accepts replaceable blocks at the shulker/EChest position. If a solid block
+obstructs it, recovery keeps mining that block before tearing down the enclosure and retrying
+the restock. Unbreakable blocks or a 30-second clearing timeout stop with the block and position.
+
 ### Basic Highway Shape
 
 | Setting | Default / Range | What to change it for |
@@ -332,11 +360,15 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | Setting | Default / Range / Options | Visible when | Behavior |
 | --- | --- | --- | --- |
 | `print-statistics` | `true` | Always | Prints HighwayBuilder statistics in chat when the module disables. |
-| `auto-screenshot-statistics` | `false` | `print-statistics` is on | Captures a proof screenshot shortly after statistics print. |
+| `auto-screenshot-statistics` | `false` | `print-statistics` is on | Captures chat or disconnect statistics after rendering. |
 | `Send-Status` | `true` | Always | Sends a status update every 5 minutes with digging/paving, axis, name, and API token. |
 | `sends-statistics(Webhook)` | `false` | `print-statistics` is on | Sends HighwayBuilder statistics to a webhook when the module disables. |
 | `webhook` | `MyWebhookInHere` | `print-statistics` and `sends-statistics(Webhook)` are on | Webhook URL used for statistics delivery. |
 | `sends-statistics(API)` | `false` | `print-statistics` is on | Sends statistics to the API when the module disables. |
+
+Proof screenshots wait for two completed visible frames. Disconnect captures wait up to 30 seconds
+for the matching reason and statistics screen, with loading overlays cleared. Chat captures wait
+up to five seconds for visible chat. A timeout releases the chat buffer and cancels the capture.
 
 Every THM debug category also writes to `logs/thm/<start-time>/thm-debug-all.log`, with its source filename on each line. The start-time folder uses local `yyyy-MM-dd_HH.mm.ss` and is created when the first log line is written. Existing logs stay in `logs/thm/`. Logs rotate at 100 MB.
 

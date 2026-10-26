@@ -140,6 +140,16 @@ addon-specific settings screen — don't confuse the two when adding a new modul
 
 **Highway restock inventory:** Offhand refills preserve managed hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
 
+**Meteor Offhand:** `OffhandMixin` adds `held-item-filter`: Off, Only when holding, or Only when not holding. `held-items` supplies the whitelist/blocklist. Filtering includes Offhand's totem swaps and releases its lock when blocked. `ModuleMixin` migrates the old toggle.
+
+**Highway pause:** Manual pause checkpoints stats and fully deactivates the builder. An independent return listener uses Baritone before reactivation; failures retain the pause. Return positions last for the client session and require the original world and dimension.
+
+**Highway statistics:** Persist movement continuity and sticky invalidation in every stats artifact. Jumps over 64 blocks and world/dimension changes invalidate distance and external submissions, including while paused. Adventure-mode backup/lobby visits preserve the last main-server checkpoint, including on cache restore; distance uses that checkpoint until main-server checks resume.
+
+**Stats screenshots:** Capture after `Minecraft.renderFrame` draws the GUI. Disconnect proof must match the expected reason/stats and complete two visible frames; keep disconnect captures alive across `GameLeftEvent`.
+
+**Screenshot clipboard:** Windows writes CF_DIB directly through Minecraft’s bundled JNA, using the game window as owner and retrying clipboard locks. Keep Linux clipboard tools Linux-only and preserve AWT errors if their fallback also fails.
+
 **Highway status:** Append `:pave` for HighwayBuilding or `:dig` for HighwayDigging to the six-field status payload. None omits the suffix. Send on startup, profile changes and every five minutes; Kitbot reuses fresh confirmations for same-direction PoW. Keep the PoW payload unchanged.
 
 **Better Baritone Build:** `BetterBaritoneBuild` indexes opened chests, barrels, and placed shulkers per world/dimension.

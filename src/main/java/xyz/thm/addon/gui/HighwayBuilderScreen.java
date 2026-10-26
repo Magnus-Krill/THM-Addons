@@ -57,7 +57,7 @@ public class HighwayBuilderScreen extends WindowScreen {
     private final HighwayBuilderTHM module;
     private final Map<String, Settings> tabs = new LinkedHashMap<>();
     private WLabel statusLabel, statsLabel, rateLabel;
-    private WButton toggleButton;
+    private WButton toggleButton, pauseButton;
     private WVerticalList content;
     private String search = "";
     private int shownAdaptiveWrites;
@@ -142,10 +142,18 @@ public class HighwayBuilderScreen extends WindowScreen {
         WHorizontalList controls = add(theme.horizontalList()).expandX().widget();
         toggleButton = controls.add(theme.button(module.isActive() ? "Stop builder" : "Start builder")).expandX().widget();
         toggleButton.action = () -> {
-            module.toggle();
-            toggleButton.set(module.isActive() ? "Stop builder" : "Start builder");
+            if (module.isManuallyPaused()) module.stopPausedBuilder();
+            else module.toggle();
             updateStatus();
         };
+        pauseButton = controls.add(theme.button("Pause builder")).expandX().widget();
+        pauseButton.action = () -> {
+            if (module.isReturningFromPause()) module.cancelPauseReturn();
+            else if (module.isManuallyPaused()) module.continuePausedBuilder();
+            else module.pauseBuilder();
+            updateStatus();
+        };
+        updateStatus();
 
         WHorizontalList profiles = add(theme.horizontalList()).expandX().widget();
         profiles.add(theme.label("Profile:"));
@@ -282,7 +290,20 @@ public class HighwayBuilderScreen extends WindowScreen {
     private void updateStatus() {
         if (statusLabel == null) return;
 
-        statusLabel.set(module.isActive()
+        if (toggleButton != null) {
+            toggleButton.set(module.isActive() || module.isManuallyPaused() ? "Stop builder" : "Start builder");
+            toggleButton.tooltip = module.isManuallyPaused() ? "Finish the saved session without returning." : null;
+        }
+        if (pauseButton != null) {
+            pauseButton.set(module.isReturningFromPause() ? "Cancel return"
+                : module.isManuallyPaused() ? "Continue builder" : "Pause builder");
+            pauseButton.tooltip = module.isReturningFromPause() ? "Stop returning and keep the builder paused."
+                : module.isManuallyPaused() ? "Return to the saved position and resume building."
+                : "Save statistics and the return position, then release movement controls.";
+        }
+        statusLabel.set(module.isManuallyPaused()
+            ? module.isReturningFromPause() ? "Returning to paused position" : "Paused"
+            : module.isActive()
             ? String.format(Locale.ROOT, "%s  -  heading %s", module.currentStateName(), module.dir == null ? "?" : module.dir.toString())
             : "Off");
         statsLabel.set(String.format(Locale.ROOT, "placed %d   broken %d   %.1f blocks/s",
