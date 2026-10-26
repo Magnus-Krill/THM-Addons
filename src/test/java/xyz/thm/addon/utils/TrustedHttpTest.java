@@ -14,6 +14,8 @@ import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.net.InetAddress;
 import java.net.Proxy;
 import java.net.ProxySelector;
@@ -63,10 +65,41 @@ class TrustedHttpTest {
             assertFalse(TrustedHttp.postJson(url, "{}", TrustedHttp.Kind.API, capturedToken));
             assertFalse(TrustedHttp.postJson(url, "{}", TrustedHttp.Kind.API, "invalid"));
             assertFalse(TrustedHttp.postBytes(url, new byte[]{1}, "application/octet-stream", TrustedHttp.Kind.API, 100));
-            assertNull(TrustedHttp.exchangeDirect(null, "GET", null, TrustedHttp.Kind.API, null, null, 100, capturedToken));
+            assertNull(TrustedHttp.exchangeDirect(null, "GET", null, TrustedHttp.Kind.API, null, null, 100, capturedToken, null, false));
+            assertNull(TrustedHttp.getConditional(url, capturedToken, "\"catalog\"", 100));
         } finally {
             ProxySelector.setDefault(previous);
         }
+    }
+
+    @Test
+    void notModifiedHasNoBodyEvenWithRepresentationLength() throws IOException {
+        var response = response("HTTP/1.1 304 Not Modified\r\nETag: W/\"kits-v1\"\r\nContent-Length: 99999\r\n\r\n");
+        assertEquals(304, response.status());
+        assertEquals("W/\"kits-v1\"", response.etag());
+        assertEquals(0, response.body().length);
+    }
+
+    @Test
+    void conditionalResponsesKeepStatusEtagAndBoundedBodies() throws IOException {
+        var ok = response("HTTP/1.1 200 OK\r\nETag: \"v2\"\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n");
+        assertEquals(200, ok.status());
+        assertEquals("\"v2\"", ok.etag());
+        assertEquals("{}", new String(ok.body(), StandardCharsets.UTF_8));
+        assertEquals(401, response("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n").status());
+        assertThrows(IllegalStateException.class, () -> response("HTTP/1.1 200 OK\r\nContent-Length: 101\r\n\r\n"));
+    }
+
+    @Test
+    void etagsCannotInjectHeaders() {
+        assertTrue(TrustedHttp.isSafeEtag(null));
+        assertTrue(TrustedHttp.isSafeEtag("W/\"catalog-v1\""));
+        assertFalse(TrustedHttp.isSafeEtag("\"etag\"\r\nAuthorization: malicious"));
+        assertFalse(TrustedHttp.isSafeEtag("x".repeat(513)));
+    }
+
+    private static TrustedHttp.Response response(String raw) throws IOException {
+        return TrustedHttp.readResponse(new ByteArrayInputStream(raw.getBytes(StandardCharsets.UTF_8)), 100);
     }
 
     @ParameterizedTest

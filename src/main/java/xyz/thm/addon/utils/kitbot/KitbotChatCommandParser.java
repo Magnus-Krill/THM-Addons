@@ -57,7 +57,7 @@ public final class KitbotChatCommandParser {
         CommandType type,
         KitbotFrontend.Mode mode,
         KitbotFrontend.Direction direction,
-        KitbotFrontend.KitName kit,
+        KitbotKitCatalog.Kit kit,
         String playerName,
         int amount
     ) {
@@ -81,6 +81,10 @@ public final class KitbotChatCommandParser {
     }
 
     public static ParseResult parse(String rawText, Collection<String> onlinePlayers) {
+        return parse(rawText, onlinePlayers, KitbotKitCatalog.getKits());
+    }
+
+    static ParseResult parse(String rawText, Collection<String> onlinePlayers, List<KitbotKitCatalog.Kit> kits) {
         if (rawText == null) return new ParseResult(ParseStatus.UNRECOGNIZED, null, null);
 
         String trimmed = rawText.trim();
@@ -95,8 +99,8 @@ public final class KitbotChatCommandParser {
         return switch (command) {
             case "goto" -> parseDirectional(CommandType.Goto, KitbotFrontend.Mode.Goto, tokens, GOTO_USAGE);
             case "update" -> parseDirectional(CommandType.Update, KitbotFrontend.Mode.Update, tokens, UPDATE_USAGE);
-            case "kit" -> parseKit(tokens);
-            case "send" -> parseSend(tokens, onlinePlayers == null ? List.of() : onlinePlayers);
+            case "kit" -> parseKit(tokens, kits);
+            case "send" -> parseSend(tokens, onlinePlayers == null ? List.of() : onlinePlayers, kits);
             case "token" -> parseNoArg(CommandType.Token, KitbotFrontend.Mode.Token, tokens, "Usage: $token.");
             case "claim" -> parseNoArg(CommandType.Claim, KitbotFrontend.Mode.Claim, tokens, "Usage: $claim.");
             default -> new ParseResult(ParseStatus.UNRECOGNIZED, null, null);
@@ -104,6 +108,10 @@ public final class KitbotChatCommandParser {
     }
 
     public static Suggestions buildSuggestions(String fullText, int cursor, Collection<String> onlinePlayers) {
+        return buildSuggestions(fullText, cursor, onlinePlayers, KitbotKitCatalog.getKits());
+    }
+
+    static Suggestions buildSuggestions(String fullText, int cursor, Collection<String> onlinePlayers, List<KitbotKitCatalog.Kit> kits) {
         if (fullText == null || fullText.isEmpty() || fullText.charAt(0) != '$') {
             return Suggestions.empty().join();
         }
@@ -112,7 +120,7 @@ public final class KitbotChatCommandParser {
         SuggestionState state = SuggestionState.from(fullText, safeCursor);
         if (!state.validPrefix()) return Suggestions.empty().join();
 
-        List<String> suggestions = suggest(state, onlinePlayers == null ? List.of() : onlinePlayers);
+        List<String> suggestions = suggest(state, onlinePlayers == null ? List.of() : onlinePlayers, kits);
         if (suggestions.isEmpty()) return Suggestions.empty().join();
 
         SuggestionsBuilder builder = new SuggestionsBuilder(fullText, state.currentTokenStart());
@@ -133,11 +141,11 @@ public final class KitbotChatCommandParser {
         return new ParseResult(ParseStatus.VALID, new CommandRequest(type, mode, direction, null, null, 1), null);
     }
 
-    private static ParseResult parseKit(String[] tokens) {
+    private static ParseResult parseKit(String[] tokens, List<KitbotKitCatalog.Kit> kits) {
         if (tokens.length < 2 || tokens.length > 3) return new ParseResult(ParseStatus.INVALID, null, KIT_USAGE);
 
-        KitbotFrontend.KitName kit = KitbotFrontend.KitName.fromString(tokens[1]);
-        if (kit == null) return new ParseResult(ParseStatus.INVALID, null, invalidKitMessage());
+        KitbotKitCatalog.Kit kit = KitbotKitCatalog.find(kits, tokens[1]);
+        if (kit == null) return new ParseResult(ParseStatus.INVALID, null, invalidKitMessage(kits));
 
         int amount = parseAmount(tokens, 2);
         if (amount == -1) return new ParseResult(ParseStatus.INVALID, null, invalidAmountMessage());
@@ -145,15 +153,15 @@ public final class KitbotChatCommandParser {
         return new ParseResult(ParseStatus.VALID, new CommandRequest(CommandType.Kit, KitbotFrontend.Mode.Kit, null, kit, null, amount), null);
     }
 
-    private static ParseResult parseSend(String[] tokens, Collection<String> onlinePlayers) {
+    private static ParseResult parseSend(String[] tokens, Collection<String> onlinePlayers, List<KitbotKitCatalog.Kit> kits) {
         if (tokens.length < 3 || tokens.length > 4) return new ParseResult(ParseStatus.INVALID, null, SEND_USAGE);
 
         if (!containsExact(onlinePlayers, tokens[1])) {
             return new ParseResult(ParseStatus.INVALID, null, "Player must match an online name exactly.");
         }
 
-        KitbotFrontend.KitName kit = KitbotFrontend.KitName.fromString(tokens[2]);
-        if (kit == null) return new ParseResult(ParseStatus.INVALID, null, invalidKitMessage());
+        KitbotKitCatalog.Kit kit = KitbotKitCatalog.find(kits, tokens[2]);
+        if (kit == null) return new ParseResult(ParseStatus.INVALID, null, invalidKitMessage(kits));
 
         int amount = parseAmount(tokens, 3);
         if (amount == -1) return new ParseResult(ParseStatus.INVALID, null, invalidAmountMessage());
@@ -176,8 +184,9 @@ public final class KitbotChatCommandParser {
         }
     }
 
-    private static String invalidKitMessage() {
-        return "Unknown kit. Valid kits: " + String.join(", ", kitLabels()) + '.';
+    private static String invalidKitMessage(List<KitbotKitCatalog.Kit> kits) {
+        if (kits.isEmpty()) return "Kit catalog unavailable. Check your API token and try again shortly.";
+        return "Unknown kit. Valid kits: " + String.join(", ", kitLabels(kits)) + '.';
     }
 
     private static String invalidAmountMessage() {
@@ -200,15 +209,11 @@ public final class KitbotChatCommandParser {
         return map;
     }
 
-    private static List<String> kitLabels() {
-        List<String> labels = new ArrayList<>();
-        for (KitbotFrontend.KitName kitName : KitbotFrontend.KitName.values()) {
-            labels.add(kitName.label);
-        }
-        return labels;
+    private static List<String> kitLabels(List<KitbotKitCatalog.Kit> kits) {
+        return kits.stream().map(KitbotKitCatalog.Kit::name).toList();
     }
 
-    private static List<String> suggest(SuggestionState state, Collection<String> onlinePlayers) {
+    private static List<String> suggest(SuggestionState state, Collection<String> onlinePlayers, List<KitbotKitCatalog.Kit> kits) {
         List<String> complete = state.completeTokens();
         String current = state.currentToken();
 
@@ -217,8 +222,8 @@ public final class KitbotChatCommandParser {
         String command = complete.getFirst().toLowerCase(Locale.ROOT);
         return switch (command) {
             case "goto", "update" -> suggestDirectional(state, command);
-            case "kit" -> suggestKit(state);
-            case "send" -> suggestSend(state, onlinePlayers);
+            case "kit" -> suggestKit(state, kits);
+            case "send" -> suggestSend(state, onlinePlayers, kits);
             case "token", "claim" -> Collections.emptyList();
             default -> Collections.emptyList();
         };
@@ -233,14 +238,14 @@ public final class KitbotChatCommandParser {
         return Collections.emptyList();
     }
 
-    private static List<String> suggestKit(SuggestionState state) {
+    private static List<String> suggestKit(SuggestionState state, List<KitbotKitCatalog.Kit> kits) {
         List<String> complete = state.completeTokens();
         String current = state.currentToken();
 
-        if (complete.size() == 1) return matchIgnoreCasePrefix(kitLabels(), current);
+        if (complete.size() == 1) return matchIgnoreCasePrefix(kitLabels(kits), current);
 
         if (complete.size() == 2) {
-            KitbotFrontend.KitName kit = KitbotFrontend.KitName.fromString(complete.get(1));
+            KitbotKitCatalog.Kit kit = KitbotKitCatalog.find(kits, complete.get(1));
             if (kit == null) return Collections.emptyList();
             return matchIgnoreCasePrefix(AMOUNTS, current);
         }
@@ -248,7 +253,7 @@ public final class KitbotChatCommandParser {
         return Collections.emptyList();
     }
 
-    private static List<String> suggestSend(SuggestionState state, Collection<String> onlinePlayers) {
+    private static List<String> suggestSend(SuggestionState state, Collection<String> onlinePlayers, List<KitbotKitCatalog.Kit> kits) {
         List<String> complete = state.completeTokens();
         String current = state.currentToken();
 
@@ -256,12 +261,12 @@ public final class KitbotChatCommandParser {
 
         if (complete.size() == 2) {
             if (!containsExact(onlinePlayers, complete.get(1))) return Collections.emptyList();
-            return matchIgnoreCasePrefix(kitLabels(), current);
+            return matchIgnoreCasePrefix(kitLabels(kits), current);
         }
 
         if (complete.size() == 3) {
             if (!containsExact(onlinePlayers, complete.get(1))) return Collections.emptyList();
-            if (KitbotFrontend.KitName.fromString(complete.get(2)) == null) return Collections.emptyList();
+            if (KitbotKitCatalog.find(kits, complete.get(2)) == null) return Collections.emptyList();
             return matchIgnoreCasePrefix(AMOUNTS, current);
         }
 

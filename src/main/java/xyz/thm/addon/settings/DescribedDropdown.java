@@ -7,7 +7,9 @@
 package xyz.thm.addon.settings;
 
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 public interface DescribedDropdown {
     void thm$setDescriptions(Function<Object, String> descriptions);
+    void thm$setValuesSupplier(Supplier<String[]> supplier);
 }

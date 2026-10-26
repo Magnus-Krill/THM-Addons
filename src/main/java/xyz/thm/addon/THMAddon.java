@@ -35,6 +35,7 @@ import xyz.thm.addon.system.THMTab;
 import xyz.thm.addon.utils.*;
 import xyz.thm.addon.utils.kitbot.KitbotAvailabilityTracker;
 import xyz.thm.addon.utils.kitbot.KitbotChatRouter;
+import xyz.thm.addon.utils.kitbot.KitbotKitCatalog;
 import xyz.thm.addon.utils.server.OnlinePlayers;
 import xyz.thm.addon.utils.server.ServerReconnectService;
 import xyz.thm.addon.utils.server.ServerStatusHandler;
@@ -140,6 +141,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         OnlinePlayers.initialize();
         KitbotAvailabilityTracker.getInstance();
         KitbotChatRouter.getInstance();
+        KitbotKitCatalog.getKits();
         StatsScreenshotChatGuard.getInstance();
         ThmMembers.initialize();
         CapeManager.initialize();

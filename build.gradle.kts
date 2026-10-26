@@ -4,6 +4,7 @@
  * By using this code you agree to the license terms and to keep your repo public.
  */
 
+import java.net.URI
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.Properties
@@ -94,6 +95,7 @@ val generateApiEndpoints = tasks.register("generateApiEndpoints") {
             "capeList" to req("api.cape"),
             "capePost" to req("api.capePost"),
             "capeIndex" to req("api.capeIndex"),
+            "kits" to props.getProperty("api.kits", URI(req("api.memberHud")).resolve("/kits").toString()),
             "updater" to props.getProperty("api.updater", "").trim(),
         )
         for ((name, url) in urls) {
@@ -149,6 +151,7 @@ val generateApiEndpoints = tasks.register("generateApiEndpoints") {
             |    private static final String CAPE_LIST = "${encrypted["capeList"]}";
             |    private static final String CAPE_POST = "${encrypted["capePost"]}";
             |    private static final String CAPE_INDEX = "${encrypted["capeIndex"]}";
+            |    private static final String KITS = "${encrypted["kits"]}";
             |    private static final String UPDATER = "${encrypted["updater"]}";
             |    private static final String UPDATER_PUBLIC_KEY = "$updaterKey";
             |
@@ -161,6 +164,7 @@ val generateApiEndpoints = tasks.register("generateApiEndpoints") {
             |    static String capeListUrl() { return decrypt(CAPE_LIST); }
             |    static String capePostUrl() { return decrypt(CAPE_POST); }
             |    static String capeIndexUrl() { return decrypt(CAPE_INDEX); }
+            |    static String kitsUrl() { return decrypt(KITS); }
             |    static String updaterUrl() { return decrypt(UPDATER); }
             |    static String updaterPublicKey() { return UPDATER_PUBLIC_KEY; }
             |

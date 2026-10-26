@@ -10,6 +10,7 @@ import meteordevelopment.meteorclient.gui.widgets.input.WDropdown;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.utils.entity.SortPriority;
 import meteordevelopment.meteorclient.utils.world.Dimension;
+import xyz.thm.addon.utils.kitbot.KitbotKitCatalog;
 
 import java.util.function.Function;
 
@@ -54,6 +55,10 @@ public final class DropdownDescriptions {
             };
             case "thm-cape" -> value.equals("None") ? "Hide your THM cape." : "Use this THM cape.";
             case "shader" -> value.equals("None") ? "Use the vanilla panorama." : "Use this menu background shader.";
+            case "kit", "send-kit" -> {
+                KitbotKitCatalog.Kit kit = KitbotKitCatalog.find(value.toString());
+                yield kit == null ? "Kit catalog unavailable." : kit.description();
+            }
             default -> null;
         };
     }

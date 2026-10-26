@@ -58,12 +58,7 @@ public final class TrustedHttp {
         IMAGE,         // cape/texture download - HTTPS only, no token ever attached
     }
 
-    /** Server answered with a non-2xx status - the connection itself worked. */
-    private static final class HttpStatusException extends IOException {
-        HttpStatusException(int code) {
-            super("HTTP " + code);
-        }
-    }
+    public record Response(int status, byte[] body, String etag) {}
 
     /** Failed before anything was sent (DNS, TCP, TLS handshake) - safe to retry another way. */
     private static final class ConnectFailed extends IOException {
@@ -81,6 +76,16 @@ public final class TrustedHttp {
 
     public static byte[] getBytes(String url, Kind kind, int maxBytes) {
         return send("GET", url, kind, null, null, maxBytes, null);
+    }
+
+    /** Conditional API requests are bound to the token that owns their cached response. */
+    public static Response getConditional(String url, String token, String etag, int maxBytes) {
+        if (!isValidApiToken(token) || !token.equals(apiToken()) || !isSafeEtag(etag)) return null;
+        return sendResponse("GET", url, Kind.API, null, null, maxBytes, token, etag, true);
+    }
+
+    public static boolean isSafeEtag(String etag) {
+        return etag == null || (etag.length() <= 512 && etag.chars().allMatch(c -> c >= 32 && c <= 126));
     }
 
     public static boolean postJson(String url, String json, Kind kind, String bearerToken) {
@@ -104,17 +109,26 @@ public final class TrustedHttp {
     }
 
     private static byte[] send(String method, String url, Kind kind, String contentType, byte[] body, int maxResponseBytes, String bearerToken) {
-        if (kind == Kind.API && (bearerToken = validatedApiToken(bearerToken)) == null) return null;
+        Response response = sendResponse(method, url, kind, contentType, body, maxResponseBytes, bearerToken, null, false);
+        if (response == null) return null;
+        if (response.status() >= 200 && response.status() < 300) return response.body();
+        LOG.warn("{} {} returned HTTP {}", kind, method, response.status());
+        return null;
+    }
+
+    private static Response sendResponse(String method, String url, Kind kind, String contentType, byte[] body, int maxResponseBytes, String bearerToken, String etag, boolean conditional) {
+        if (kind == Kind.API) {
+            String currentToken = validatedApiToken(bearerToken);
+            if (currentToken == null || (conditional && !currentToken.equals(bearerToken))) return null;
+            bearerToken = currentToken;
+        }
         URI uri = parseUri(url, kind);
         if (uri == null) return null;
         boolean canFallback = kind != Kind.USER_WEBHOOK;
 
         if (!(canFallback && viaDoh)) {
             try {
-                return exchange(method, uri, kind, contentType, body, maxResponseBytes, bearerToken);
-            } catch (HttpStatusException e) {
-                LOG.warn("{} {} returned {}", kind, method, e.getMessage());
-                return null;
+                return exchange(method, uri, kind, contentType, body, maxResponseBytes, bearerToken, etag);
             } catch (ConnectFailed e) {
                 LOG.warn("{} {} failed: {}", kind, method, describe(e.getCause(), url));
                 if (!canFallback) return null;
@@ -126,12 +140,9 @@ public final class TrustedHttp {
         }
 
         try {
-            byte[] result = exchangeViaDoh(method, uri, kind, contentType, body, maxResponseBytes, bearerToken);
-            dohWorked();
+            Response result = exchangeViaDoh(method, uri, kind, contentType, body, maxResponseBytes, bearerToken, etag, conditional);
+            if (result != null) dohWorked();
             return result;
-        } catch (HttpStatusException e) {
-            dohWorked();
-            LOG.warn("{} {} returned {} (via 1.1.1.1)", kind, method, e.getMessage());
         } catch (Exception e) {
             viaDoh = false;
             LOG.warn("{} {} failed via 1.1.1.1: {}", kind, method, describe(e, url));
@@ -277,14 +288,15 @@ public final class TrustedHttp {
         return uri.getPort() != -1 ? uri.getPort() : ("https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80);
     }
 
-    private static byte[] exchange(
+    private static Response exchange(
         String method,
         URI start,
         Kind kind,
         String contentType,
         byte[] requestBody,
         int maxResponseBytes,
-        String bearerToken
+        String bearerToken,
+        String etag
     ) throws Exception {
         URI current = start;
         for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -300,6 +312,7 @@ public final class TrustedHttp {
                 cn.setRequestMethod(method);
                 cn.setUseCaches(false);
                 if (contentType != null) cn.setRequestProperty("Content-Type", contentType);
+                if (etag != null) cn.setRequestProperty("If-None-Match", etag);
                 if (kind == Kind.API) {
                     cn.setRequestProperty("Authorization", "Bearer " + bearerToken);
                 }
@@ -336,6 +349,9 @@ public final class TrustedHttp {
                     continue;
                 }
 
+                String responseEtag = cn.getHeaderField("ETag");
+                if (!isSafeEtag(responseEtag)) responseEtag = null;
+                if (code == 304) return new Response(code, new byte[0], responseEtag);
                 InputStream raw = code >= 400 ? cn.getErrorStream() : cn.getInputStream();
                 byte[] body = new byte[0];
                 if (raw != null) {
@@ -343,8 +359,7 @@ public final class TrustedHttp {
                         body = readLimited(stream, maxResponseBytes);
                     }
                 }
-                if (code < 200 || code >= 300) throw new HttpStatusException(code);
-                return body;
+                return new Response(code, body, responseEtag);
             } finally {
                 cn.disconnect();
             }
@@ -353,17 +368,21 @@ public final class TrustedHttp {
         return null;
     }
 
-    private static byte[] exchangeViaDoh(String method, URI uri, Kind kind, String contentType, byte[] body, int maxResponseBytes, String bearerToken) throws Exception {
+    private static Response exchangeViaDoh(String method, URI uri, Kind kind, String contentType, byte[] body, int maxResponseBytes, String bearerToken, String etag, boolean conditional) throws Exception {
         InetAddress ip = resolveViaDoh(uri.getHost()).stream()
             .filter(TrustedHttp::isPublicAddress)
             .findFirst()
             .orElseThrow(() -> new UnknownHostException("1.1.1.1 returned no public address"));
-        return exchangeDirect(ip, method, uri, kind, contentType, body, maxResponseBytes, bearerToken);
+        return exchangeDirect(ip, method, uri, kind, contentType, body, maxResponseBytes, bearerToken, etag, conditional);
     }
 
     // ponytail: HTTP/1.1 over a raw TLS socket, no redirects - add them if the API ever redirects.
-    static byte[] exchangeDirect(InetAddress ip, String method, URI uri, Kind kind, String contentType, byte[] body, int maxResponseBytes, String bearerToken) throws Exception {
-        if (kind == Kind.API && (bearerToken = validatedApiToken(bearerToken)) == null) return null;
+    static Response exchangeDirect(InetAddress ip, String method, URI uri, Kind kind, String contentType, byte[] body, int maxResponseBytes, String bearerToken, String etag, boolean conditional) throws Exception {
+        if (kind == Kind.API) {
+            String currentToken = validatedApiToken(bearerToken);
+            if (currentToken == null || (conditional && !currentToken.equals(bearerToken))) return null;
+            bearerToken = currentToken;
+        }
         String host = uri.getHost();
         int port = uri.getPort() == -1 ? 443 : uri.getPort();
         try (Socket tcp = new Socket(Proxy.NO_PROXY)) {
@@ -385,6 +404,7 @@ public final class TrustedHttp {
             if (kind == Kind.API) {
                 head.append("Authorization: Bearer ").append(bearerToken).append("\r\n");
             }
+            if (etag != null) head.append("If-None-Match: ").append(etag).append("\r\n");
             if (body != null) {
                 head.append("Content-Type: ").append(contentType).append("\r\n")
                     .append("Content-Length: ").append(body.length).append("\r\n");
@@ -396,27 +416,32 @@ public final class TrustedHttp {
             if (body != null) out.write(body);
             out.flush();
 
-            InputStream in = new BufferedInputStream(ssl.getInputStream());
-            String[] status = readLine(in).split(" ", 3);
-            if (status.length < 2) throw new IOException("malformed HTTP status line");
-            int code = Integer.parseInt(status[1]);
-            long contentLength = -1;
-            boolean chunked = false;
-            int lines = 0;
-            for (String line; !(line = readLine(in)).isEmpty(); ) {
-                if (++lines > MAX_HEADER_LINES) throw new IOException("too many response headers");
-                int colon = line.indexOf(':');
-                if (colon < 0) continue;
-                String name = line.substring(0, colon).trim().toLowerCase(Locale.ROOT);
-                String value = line.substring(colon + 1).trim();
-                if (name.equals("transfer-encoding")) chunked = value.toLowerCase(Locale.ROOT).contains("chunked");
-                else if (name.equals("content-length")) contentLength = Long.parseLong(value);
-            }
-            if (code < 200 || code >= 300) throw new HttpStatusException(code);
-            if (chunked) return readChunked(in, maxResponseBytes);
-            if (contentLength > maxResponseBytes) throw new IllegalStateException("response exceeded " + maxResponseBytes + " bytes");
-            return contentLength >= 0 ? readExactly(in, (int) contentLength) : readLimited(in, maxResponseBytes);
+            return readResponse(new BufferedInputStream(ssl.getInputStream()), maxResponseBytes);
         }
+    }
+
+    static Response readResponse(InputStream in, int maxResponseBytes) throws IOException {
+        String[] status = readLine(in).split(" ", 3);
+        if (status.length < 2) throw new IOException("malformed HTTP status line");
+        int code = Integer.parseInt(status[1]);
+        long contentLength = -1;
+        boolean chunked = false;
+        String responseEtag = null;
+        int lines = 0;
+        for (String line; !(line = readLine(in)).isEmpty(); ) {
+            if (++lines > MAX_HEADER_LINES) throw new IOException("too many response headers");
+            int colon = line.indexOf(':');
+            if (colon < 0) continue;
+            String name = line.substring(0, colon).trim().toLowerCase(Locale.ROOT);
+            String value = line.substring(colon + 1).trim();
+            if (name.equals("transfer-encoding")) chunked = value.toLowerCase(Locale.ROOT).contains("chunked");
+            else if (name.equals("content-length")) contentLength = Long.parseLong(value);
+            else if (name.equals("etag") && isSafeEtag(value)) responseEtag = value;
+        }
+        if (code == 304) return new Response(code, new byte[0], responseEtag);
+        if (chunked) return new Response(code, readChunked(in, maxResponseBytes), responseEtag);
+        if (contentLength > maxResponseBytes) throw new IllegalStateException("response exceeded " + maxResponseBytes + " bytes");
+        return new Response(code, contentLength >= 0 ? readExactly(in, (int) contentLength) : readLimited(in, maxResponseBytes), responseEtag);
     }
 
     /** A records for {@code host} from Cloudflare DNS-over-HTTPS, bypassing the system resolver and proxy. */

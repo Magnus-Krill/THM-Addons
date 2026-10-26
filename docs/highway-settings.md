@@ -20,6 +20,12 @@ Applying a different profile saves the complete current HighwayBuilder configura
 
 For users upgrading from an earlier version, the existing HighwayBuilder configuration becomes the `None` profile baseline. Selecting or applying `None` does not force preset values over those settings.
 
+With status logging enabled, HighwayBuilder reports `pave` for `HighwayBuilding` and `dig` for
+`HighwayDigging` on startup, profile changes and the usual five-minute status interval. Kitbot
+uses a recent confirmation for the status board and API proof-of-work classification on the same
+direction. `None` sends the original status format without a mode field, so Kitbot estimates from
+block counts. Proof-of-work validation still applies.
+
 The first time `HighwayBuilding` or `HighwayDigging` is applied, it starts from the current settings and applies these public seed values:
 
 | Profile | Initial public seed values |

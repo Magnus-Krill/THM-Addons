@@ -1806,6 +1806,7 @@ public class HighwayBuilderTHM extends Module {
     private String lastTickDebugMessage;
     private long lastTickDebugAtMs;
     private int placeTimer, breakTimer, count, syncId, statusLogTimer;
+    private THMSystem.Mode statusLogMode;
     private int forwardMineCount, forwardPlaceCount;
     private int forwardLatchedPlaceSlot = -1;
     private int forwardLatchedMineSlot = -1;
@@ -2355,13 +2356,19 @@ public class HighwayBuilderTHM extends Module {
         String playerName = mc.player.getName().tryCollapseToString();
         String axis = dir.toString();
 
-        String statusMessage = String.format("%s:%s:%s:%d:%d:%s",
+        String mode = switch (THMSystem.get().getMode()) {
+            case HighwayBuilding -> ":pave";
+            case HighwayDigging -> ":dig";
+            case None -> "";
+        };
+        String statusMessage = String.format("%s:%s:%s:%d:%d:%s%s",
             THMSystem.get().getApiToken(),
             playerName,
             axis,
             blocksBroken,
             blocksPlaced,
-            generateTimestamp()
+            generateTimestamp(),
+            mode
         );
 
         sendStatus(statusMessage);
@@ -4865,9 +4872,11 @@ public class HighwayBuilderTHM extends Module {
 
         if (statuslog.get()) {
             statusLogTimer++;
-            if (statusLogTimer >= 6000) { // 5 minutes
+            THMSystem.Mode mode = THMSystem.get().getMode();
+            if (statusLogTimer >= 6000 || mode != statusLogMode) { // 5 minutes or a profile change
                 sendStatusLog();
                 statusLogTimer = 0;
+                statusLogMode = mode;
             }
         }
 

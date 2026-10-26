@@ -19,6 +19,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import xyz.thm.addon.settings.DropdownDescriptions;
+import xyz.thm.addon.settings.DescribedDropdown;
+import xyz.thm.addon.utils.kitbot.KitbotKitCatalog;
 
 @Mixin(value = DefaultSettingsWidgetFactory.class, remap = false)
 public abstract class DefaultSettingsWidgetFactoryMixin {
@@ -27,6 +29,9 @@ public abstract class DefaultSettingsWidgetFactoryMixin {
         for (int i = table.cells.size() - 1; i >= 0; i--) {
             if (table.cells.get(i).widget() instanceof WDropdown<?> dropdown) {
                 DropdownDescriptions.configure(dropdown, value -> DropdownDescriptions.providedString(setting.name, value));
+                if (setting.supplier == KitbotKitCatalog.NAMES) {
+                    ((DescribedDropdown) dropdown).thm$setValuesSupplier(setting.supplier);
+                }
                 return;
             }
         }

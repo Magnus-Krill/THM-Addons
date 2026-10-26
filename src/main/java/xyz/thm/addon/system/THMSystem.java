@@ -24,6 +24,7 @@ import xyz.thm.addon.utils.CapeManager;
 import xyz.thm.addon.utils.ThmMembers;
 import xyz.thm.addon.utils.TrustedHttp;
 import xyz.thm.addon.utils.kitbot.KitbotChatRouter;
+import xyz.thm.addon.utils.kitbot.KitbotKitCatalog;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -221,6 +222,7 @@ public class THMSystem extends System<THMSystem> {
         .name("api-token")
         .description("Your personal API token (UUID) - get one from the Discord bot's player panel.")
         .defaultValue("")
+        .onChanged(token -> KitbotKitCatalog.getKits())
         .build()
     );
 

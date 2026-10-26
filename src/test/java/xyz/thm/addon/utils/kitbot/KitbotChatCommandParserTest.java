@@ -23,10 +23,14 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class KitbotChatCommandParserTest {
+    private static final List<KitbotKitCatalog.Kit> KITS = KitbotKitCatalog.parse("""
+        {"success":true,"kits":[{"name":"pvp","price":0.5},{"name":"totems","price":2},
+        {"name":"echest","price":0.2},{"name":"future-kit","price":0}]}
+        """);
     private static final List<String> ONLINE = List.of("Leonn170709", "DaReapsta");
 
     private static ParseResult parse(String text) {
-        return KitbotChatCommandParser.parse(text, ONLINE);
+        return KitbotChatCommandParser.parse(text, ONLINE, KITS);
     }
 
     @ParameterizedTest
@@ -76,15 +80,15 @@ class KitbotChatCommandParserTest {
 
     @ParameterizedTest
     @CsvSource({
-        "$kit pvp, Pvp, 1",
-        "$kit PvP 16, Pvp, 16",
-        "$kit totems 3, Totems, 3",
-        "$kit Echest 1, Echest, 1",
+        "$kit pvp, pvp, 1",
+        "$kit PvP 16, pvp, 16",
+        "$kit totems 3, totems, 3",
+        "$kit Echest 1, echest, 1",
     })
-    void parsesKits(String text, KitbotFrontend.KitName kit, int amount) {
+    void parsesKits(String text, String kit, int amount) {
         ParseResult r = parse(text);
         assertTrue(r.isValid(), r.errorMessage());
-        assertEquals(kit, r.request().kit());
+        assertEquals(kit, r.request().kit().name());
         assertEquals(amount, r.request().amount());
     }
 
@@ -114,7 +118,26 @@ class KitbotChatCommandParserTest {
 
         assertFalse(parse("$send dareapsta pvp").isValid());
         assertFalse(parse("$send Nobody pvp").isValid());
-        assertFalse(KitbotChatCommandParser.parse("$send DaReapsta pvp", null).isValid());
+        assertFalse(KitbotChatCommandParser.parse("$send DaReapsta pvp", null, KITS).isValid());
+    }
+
+    @Test
+    void newCatalogKitsWorkInOrdersSendsAndSuggestions() {
+        ParseResult order = parse("$kit FUTURE-KIT 2");
+        assertTrue(order.isValid(), order.errorMessage());
+        assertEquals("future-kit", order.request().kit().name());
+        assertTrue(parse("$send DaReapsta future-kit").isValid());
+        assertEquals(List.of("future-kit"), texts(KitbotChatCommandParser.buildSuggestions("$kit fu", 7, ONLINE, KITS)));
+        assertEquals(List.of("future-kit"), texts(KitbotChatCommandParser.buildSuggestions("$send DaReapsta fu", 17, ONLINE, KITS)));
+        assertFalse(parse("$kit refill").isValid());
+    }
+
+    @Test
+    void missingCatalogDoesNotFallBackToOldKitNames() {
+        ParseResult result = KitbotChatCommandParser.parse("$kit pvp", ONLINE, List.of());
+        assertFalse(result.isValid());
+        assertTrue(result.errorMessage().contains("catalog unavailable"));
+        assertTrue(KitbotChatCommandParser.buildSuggestions("$kit ", 5, ONLINE, List.of()).isEmpty());
     }
 
     @ParameterizedTest
@@ -127,13 +150,13 @@ class KitbotChatCommandParserTest {
 
     @Test
     void suggestsCommandsByPrefix() {
-        assertEquals(List.of("goto"), texts(KitbotChatCommandParser.buildSuggestions("$go", 3, ONLINE)));
-        assertTrue(texts(KitbotChatCommandParser.buildSuggestions("$", 1, ONLINE)).containsAll(List.of("goto", "update", "kit", "send", "token", "claim")));
+        assertEquals(List.of("goto"), texts(KitbotChatCommandParser.buildSuggestions("$go", 3, ONLINE, KITS)));
+        assertTrue(texts(KitbotChatCommandParser.buildSuggestions("$", 1, ONLINE, KITS)).containsAll(List.of("goto", "update", "kit", "send", "token", "claim")));
     }
 
     @Test
     void suggestionsReplaceCurrentTokenOnly() {
-        Suggestions s = KitbotChatCommandParser.buildSuggestions("$goto du", 8, ONLINE);
+        Suggestions s = KitbotChatCommandParser.buildSuggestions("$goto du", 8, ONLINE, KITS);
         assertFalse(s.isEmpty());
         for (Suggestion suggestion : s.getList()) {
             assertEquals(6, suggestion.getRange().getStart());
@@ -143,16 +166,16 @@ class KitbotChatCommandParserTest {
 
     @Test
     void noSuggestionsOutsideCommands() {
-        assertTrue(KitbotChatCommandParser.buildSuggestions("hello", 5, ONLINE).isEmpty());
-        assertTrue(KitbotChatCommandParser.buildSuggestions("", 0, ONLINE).isEmpty());
-        assertTrue(KitbotChatCommandParser.buildSuggestions(null, 0, ONLINE).isEmpty());
-        assertTrue(KitbotChatCommandParser.buildSuggestions("$token ", 7, ONLINE).isEmpty());
+        assertTrue(KitbotChatCommandParser.buildSuggestions("hello", 5, ONLINE, KITS).isEmpty());
+        assertTrue(KitbotChatCommandParser.buildSuggestions("", 0, ONLINE, KITS).isEmpty());
+        assertTrue(KitbotChatCommandParser.buildSuggestions(null, 0, ONLINE, KITS).isEmpty());
+        assertTrue(KitbotChatCommandParser.buildSuggestions("$token ", 7, ONLINE, KITS).isEmpty());
     }
 
     @Test
     void cursorBeyondTextIsClamped() {
-        assertDoesNotThrow(() -> KitbotChatCommandParser.buildSuggestions("$kit", 999, ONLINE));
-        assertDoesNotThrow(() -> KitbotChatCommandParser.buildSuggestions("$kit", -5, ONLINE));
+        assertDoesNotThrow(() -> KitbotChatCommandParser.buildSuggestions("$kit", 999, ONLINE, KITS));
+        assertDoesNotThrow(() -> KitbotChatCommandParser.buildSuggestions("$kit", -5, ONLINE, KITS));
     }
 
     private static List<String> texts(Suggestions s) {

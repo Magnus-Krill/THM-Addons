@@ -140,6 +140,8 @@ addon-specific settings screen — don't confuse the two when adding a new modul
 
 **Highway restock inventory:** Offhand refills preserve managed hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
 
+**Highway status:** Append `:pave` for HighwayBuilding or `:dig` for HighwayDigging to the six-field status payload. None omits the suffix. Send on startup, profile changes and every five minutes; Kitbot reuses fresh confirmations for same-direction PoW. Keep the PoW payload unchanged.
+
 **Better Baritone Build:** `BetterBaritoneBuild` indexes opened chests, barrels, and placed shulkers per world/dimension.
 `BaritoneBuilderMixin` captures missing materials directly; a temporary process fetches them without cancelling the build.
 `BuildSchematic` applies local replacement/acceptance rules and optional log stripping without changing global Baritone settings.
@@ -185,6 +187,12 @@ Only Advanced starts collapsed; later layout changes remain saved.
 **Dropdown tooltips:** Enum choices implement `settings/DescribedOption` for per-option descriptions.
 Keep descriptions to one short sentence. Use `DropdownDescriptions.configure` for string menus.
 `DropdownTooltipMixin` gives open menus tooltip priority over covered settings.
+
+**Kitbot kits:** `KitbotKitCatalog` supplies chat parsing, suggestions, and frontend dropdowns from
+the authenticated `/kits` catalog. Cache JSON and ETags per token hash under `thm/kitbot-kits`;
+refresh on demand after six hours, retry failures after five minutes, and clear rejected tokens.
+Keep requests in `TrustedHttp` and the endpoint in the generated vault (`api.kits`). Kit menus
+update while open; existing saved kit strings remain readable. Restock keeps its fixed kit choices.
 
 **Main-menu diagnostics:** `[THM/Init]` logs addon registration stages; `[THM/Menu]` logs screen and shader hooks. Menu setup runs after outer `Screen.init`, resize, and widget rebuild, since other clients can cancel inner `TitleScreen.init`. Keep setup idempotent and render logging limited to first use or state changes.
 
