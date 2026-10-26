@@ -67,6 +67,7 @@ existing Bearer API token, with membership enforced by the server.
 `TrustedHttp` skips API traffic before DNS or connection setup unless the current token is a full UUID.
 `APIUtils` allows member and other API requests from any server while in a world with a valid token; do not restore the 6b6t address gate. Deferred member fetching must remain eligible until a request can actually start.
 Queued requests use the current configured token; the server still validates ownership and membership.
+`THMSystem` publishes credential changes through volatile snapshots for worker reads.
 
 Every outbound request — API calls and player-configured webhooks alike — goes through
 `TrustedHttp`, not raw `HttpURLConnection`: it rejects non-http(s) schemes, resolves the hostname

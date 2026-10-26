@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.LongPredicate;
 
 import static meteordevelopment.meteorclient.MeteorClient.mc;
 
@@ -50,7 +51,7 @@ public final class PacketPlaceTracker {
     private final ConcurrentLinkedQueue<Long> answered = new ConcurrentLinkedQueue<>();
     private volatile boolean listening;
 
-    private PacketPlaceTracker() {}
+    PacketPlaceTracker() {}
 
     public static void init() {
         MeteorClient.EVENT_BUS.subscribe(INSTANCE);
@@ -58,15 +59,22 @@ public final class PacketPlaceTracker {
 
     /** False while a packet for this block is still waiting for the server's answer. */
     public static boolean canSend(BlockPos pos) {
-        return !INSTANCE.sentAt.containsKey(pos.asLong());
+        return INSTANCE.canSend(pos.asLong());
     }
 
     public static void markSent(BlockPos pos, int resendTicks) {
         if (mc.level == null) return;
-        long key = pos.asLong();
-        INSTANCE.sentAt.put(key, mc.level.getGameTime());
-        INSTANCE.resendTicks.put(key, Math.max(1, resendTicks));
-        INSTANCE.listening = true;
+        INSTANCE.markSent(pos.asLong(), mc.level.getGameTime(), resendTicks);
+    }
+
+    boolean canSend(long key) {
+        return !sentAt.containsKey(key);
+    }
+
+    void markSent(long key, long now, int delay) {
+        sentAt.put(key, now);
+        resendTicks.put(key, Math.max(1, delay));
+        listening = true;
     }
 
     public static void forget(BlockPos pos) {
@@ -95,32 +103,41 @@ public final class PacketPlaceTracker {
             return;
         }
 
-        long now = mc.level.getGameTime();
+        List<BlockPos> ask = tick(mc.level.getGameTime(),
+            key -> {
+                BlockPos pos = BlockPos.of(key);
+                return mc.level.getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4) != null;
+            },
+            key -> mc.level.getBlockState(BlockPos.of(key)).canBeReplaced(), inertHand() != null);
+        if (!ask.isEmpty()) sendProbes(ask);
+    }
+
+    List<BlockPos> tick(long now, LongPredicate loaded, LongPredicate replaceable, boolean canProbe) {
         List<BlockPos> ask = null;
         var it = sentAt.long2LongEntrySet().fastIterator();
         while (it.hasNext()) {
             var entry = it.next();
             long key = entry.getLongKey();
-            BlockPos pos = BlockPos.of(key);
-            if (!mc.level.getBlockState(pos).canBeReplaced()) {
+            // Unloaded chunks cannot answer probes and must not retain movement history.
+            if (!loaded.test(key) || !replaceable.test(key)) {
                 it.remove();
                 resendTicks.remove(key);
                 continue;
             }
             if (now >= entry.getLongValue() && now - entry.getLongValue() < resendTicks.get(key)) continue;
 
-            if (inertHand() == null) {
+            if (!canProbe) {
                 // Nothing safe to ask with: let it be placed again rather than stall.
                 it.remove();
                 resendTicks.remove(key);
                 continue;
             }
             if (ask == null) ask = new ArrayList<>();
-            ask.add(pos);
+            ask.add(BlockPos.of(key));
             entry.setValue(now);
         }
-        if (ask != null) sendProbes(ask);
         listening = !sentAt.isEmpty();
+        return ask == null ? List.of() : ask;
     }
 
     @EventHandler
