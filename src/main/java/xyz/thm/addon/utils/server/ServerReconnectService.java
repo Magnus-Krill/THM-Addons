@@ -8,10 +8,10 @@ package xyz.thm.addon.utils.server;
 
 import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
+import baritone.api.pathing.goals.GoalBlock;
 import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.game.GameJoinedEvent;
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
-import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
 import meteordevelopment.meteorclient.pathing.BaritoneUtils;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.systems.modules.misc.AutoReconnect;
@@ -19,12 +19,18 @@ import meteordevelopment.meteorclient.systems.modules.movement.speed.Speed;
 import meteordevelopment.meteorclient.systems.modules.world.Timer;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.network.chat.Component;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.Vec3;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.system.THMSystem;
 import xyz.thm.addon.utils.server.ServerStatusHandler.ServerState;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -92,10 +98,10 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
  * <ul>
  *     <li>{@link ReconnectStage#CRACKED_LOGIN}: sends {@code /login <password>} once per stage entry.</li>
  *     <li>{@link ReconnectStage#CRACKED_LOBBY_PATH} and {@link ReconnectStage#MAIN_LOBBY_PATH}:
- *     snapshots Timer/Speed state, forces both OFF, waits pre-delay, issues {@code goto nether_portal},
- *     waits for Baritone success marker, then applies post-delay.</li>
+ *     snapshots Timer/Speed state, forces both OFF, then walks into the nearest loaded portal
+ *     from the lobby entry position. Only a server-state change advances the stage.</li>
  *     <li>Timer/Speed restore is deferred and gate-checked by stage target:
- *     cracked path restores at MAIN_LOBBY, main-lobby path restores at MAIN_SERVER.</li>
+ *     restoration waits until the next path stage no longer needs them disabled.</li>
  *     <li>Path timeout retries same path stage (no stage advance on timeout).</li>
  * </ul>
  *
@@ -178,10 +184,7 @@ public final class ServerReconnectService {
         void onReconnectFailure(long cycleId, FailureReason reason, String detail, String contextTag, long armedAtMs, long failedAtMs);
     }
 
-    private static final String BARITONE_PATH_COMPLETE_MARKER = "pathing complete";
-    private static final String PORTAL_COMMAND = "goto nether_portal";
     private static final long PATH_PRE_COMMAND_DELAY_MS = 1_500L;
-    private static final long PATH_POST_SUCCESS_DELAY_MS = 2_000L;
     private static final long PATH_STAGE_TIMEOUT_MS = 180_000L;
     private static final long CRACKED_LOGIN_MISSING_PASSWORD_GRACE_MS = 5_000L;
     private static final long AWAITING_RECONNECT_DIAGNOSTIC_INTERVAL_MS = 1_000L;
@@ -214,13 +217,11 @@ public final class ServerReconnectService {
     private boolean crackedLoginSentThisStage;
     private long crackedLoginMissingPasswordSinceMs;
 
-    private boolean crackedLobbyPathCompleted;
-    private boolean mainLobbyPathCompleted;
+    private Vec3 portalSearchOrigin;
 
     private ReconnectStage pathStageInFlight = ReconnectStage.DISARMED;
-    private boolean waitingForPathSuccess;
+    private boolean waitingForPortalArrival;
     private long pathPreCommandDelayUntilMs;
-    private long pathPostDelayUntilMs;
     private long pathDeadlineAtMs;
     private int pathAttemptCount;
     private boolean pathModuleSnapshotCaptured;
@@ -297,8 +298,6 @@ public final class ServerReconnectService {
             this.lastAwaitingDiagnosticAtMs = 0L;
             this.crackedLoginSentThisStage = false;
             this.crackedLoginMissingPasswordSinceMs = 0L;
-            this.crackedLobbyPathCompleted = false;
-            this.mainLobbyPathCompleted = false;
             this.deferredRestorePending = false;
             this.deferredRestoreCycleId = 0L;
             this.deferredRestoreTarget = PendingRestoreGate.NONE;
@@ -417,8 +416,6 @@ public final class ServerReconnectService {
                 stageEnteredAtMs = System.currentTimeMillis();
                 lastAwaitingDiagnosticAtMs = 0L;
                 resumeCallbackFired = false;
-                crackedLobbyPathCompleted = false;
-                mainLobbyPathCompleted = false;
                 crackedLoginSentThisStage = false;
                 crackedLoginMissingPasswordSinceMs = 0L;
                 resetPathRuntimeLocked();
@@ -444,30 +441,6 @@ public final class ServerReconnectService {
     }
 
     @EventHandler
-    private void onMessage(ReceiveMessageEvent event) {
-        String message = event.getMessage().getString();
-        if (message == null) return;
-        String lower = message.toLowerCase(Locale.ROOT);
-        long now = System.currentTimeMillis();
-
-        synchronized (lock) {
-            if (!armed) return;
-            if (!waitingForPathSuccess) return;
-            if (!lower.contains(BARITONE_PATH_COMPLETE_MARKER)) return;
-            if (pathStageInFlight != ReconnectStage.CRACKED_LOBBY_PATH && pathStageInFlight != ReconnectStage.MAIN_LOBBY_PATH) return;
-            logTimerSpeedSnapshotLocked("path-success-message-received:" + pathStageInFlight);
-
-            moveActiveSnapshotToDeferredRestoreLocked(resolveRestoreTargetForPathStage(pathStageInFlight), "path-success-message");
-            clearPathModuleSnapshotLocked();
-            waitingForPathSuccess = false;
-            pathPreCommandDelayUntilMs = 0L;
-            pathPostDelayUntilMs = now + PATH_POST_SUCCESS_DELAY_MS;
-            debugInfo("Reconnect path stage {} reported success. Waiting {} ms post-delay.", pathStageInFlight, PATH_POST_SUCCESS_DELAY_MS);
-            logTimerSpeedSnapshotLocked("path-success-post-delay-armed:" + pathStageInFlight);
-        }
-    }
-
-    @EventHandler
     private void onTick(meteordevelopment.meteorclient.events.world.TickEvent.Pre event) {
         ResumeDispatch resumeDispatch = null;
         FailureDispatch failureDispatch = null;
@@ -480,13 +453,13 @@ public final class ServerReconnectService {
 
             ServerState state = ServerStatusHandler.getInstance().getCommittedState();
             if (tryApplyDeferredRestoreLocked("onTick-pre-stage", state, now)) return;
-            updateProgressFlagsFromStateLocked(state);
 
-            ReconnectStage desired = desiredStageForStateLocked(state);
+            ReconnectStage desired = stageForState(state, disconnectObservedSinceArm);
             if (desired != stage) {
                 if (stage == ReconnectStage.MAIN_SERVER_READY && desired != ReconnectStage.MAIN_SERVER_READY) {
                     resumeCallbackFired = false;
                 }
+                if (pathStageInFlight != ReconnectStage.DISARMED) cancelBaritonePathingLocked();
                 stage = desired;
                 stageEnteredAtMs = now;
                 lastAwaitingDiagnosticAtMs = 0L;
@@ -552,42 +525,34 @@ public final class ServerReconnectService {
     }
 
     private void tickPathStageLocked(ReconnectStage activeStage, long now) {
+        if (mc.player == null || mc.level == null) return;
         if (pathStageInFlight != activeStage) {
             resetPathRuntimeLocked();
             pathStageInFlight = activeStage;
+            portalSearchOrigin = mc.player.position();
             logTimerSpeedSnapshotLocked("path-stage-enter:" + activeStage);
         }
 
-        if (pathPostDelayUntilMs > 0L) {
-            if (now < pathPostDelayUntilMs) return;
+        if (waitingForPortalArrival) {
+            IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
+            if (mc.level.getBlockState(mc.player.blockPosition()).is(Blocks.NETHER_PORTAL)) return;
+            boolean pathActive = baritone != null && baritone.getCustomGoalProcess().isActive();
+            if (now < pathDeadlineAtMs && (now < pathPreCommandDelayUntilMs || pathActive)) return;
 
-            if (activeStage == ReconnectStage.CRACKED_LOBBY_PATH) crackedLobbyPathCompleted = true;
-            if (activeStage == ReconnectStage.MAIN_LOBBY_PATH) mainLobbyPathCompleted = true;
-            resetPathRuntimeLocked();
-            return;
-        }
-
-        if (waitingForPathSuccess) {
-            if (now < pathDeadlineAtMs) return;
-
-            debugWarn("Reconnect path stage {} timed out waiting for success message. Retrying same stage.", activeStage);
-            logTimerSpeedSnapshotLocked("path-timeout-before-cancel:" + activeStage);
+            THMAddon.LOG.info("Reconnect portal path {} ended before transfer; retrying nearest portal.", activeStage);
             cancelBaritonePathingLocked();
-            waitingForPathSuccess = false;
+            waitingForPortalArrival = false;
             pathPreCommandDelayUntilMs = now + PATH_PRE_COMMAND_DELAY_MS;
-            pathPostDelayUntilMs = 0L;
             pathDeadlineAtMs = 0L;
             return;
         }
 
         if (!pathModulesForcedOff) {
-            // Always take a fresh snapshot per command attempt to avoid stale restore state.
-            clearPathModuleSnapshotLocked();
             if (!captureAndForcePathModulesOffLocked(activeStage)) return;
             pathModulesForcedOff = true;
             pathPreCommandDelayUntilMs = now + PATH_PRE_COMMAND_DELAY_MS;
             debugInfo(
-                "Reconnect path stage {} armed pre-command delay ({} ms) before goto.",
+                "Reconnect path stage {} armed pre-command delay ({} ms) before portal path.",
                 activeStage,
                 PATH_PRE_COMMAND_DELAY_MS
             );
@@ -604,8 +569,8 @@ public final class ServerReconnectService {
             return;
         }
 
-        waitingForPathSuccess = true;
-        pathPreCommandDelayUntilMs = 0L;
+        waitingForPortalArrival = true;
+        pathPreCommandDelayUntilMs = now + PATH_PRE_COMMAND_DELAY_MS;
         pathDeadlineAtMs = now + PATH_STAGE_TIMEOUT_MS;
     }
 
@@ -622,16 +587,52 @@ public final class ServerReconnectService {
         }
 
         try {
-            logTimerSpeedSnapshotLocked("before-goto-command:" + activeStage);
+            logTimerSpeedSnapshotLocked("before-portal-path:" + activeStage);
             baritone.getPathingBehavior().cancelEverything();
-            baritone.getCommandManager().execute(PORTAL_COMMAND);
+            BlockPos portalTarget = findNearestLoadedPortal();
+            if (portalTarget == null) return false;
+            baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(portalTarget));
             pathAttemptCount++;
-            debugInfo("Reconnect path stage {} started attempt {}.", activeStage, pathAttemptCount);
+            THMAddon.LOG.info("Reconnect portal path {} attempt {} from {} to {}.",
+                activeStage, pathAttemptCount, portalSearchOrigin, portalTarget);
             return true;
         } catch (Throwable t) {
             debugWarn("Reconnect path stage {} failed to start: {}", activeStage, t.toString());
             return false;
         }
+    }
+
+    private BlockPos findNearestLoadedPortal() {
+        List<BlockPos> portals = new ArrayList<>();
+        ChunkPos center = ChunkPos.containing(BlockPos.containing(portalSearchOrigin));
+        int radius = mc.options.getEffectiveRenderDistance();
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                var chunk = mc.level.getChunkSource().getChunkNow(center.x() + dx, center.z() + dz);
+                if (chunk == null) continue;
+                var sections = chunk.getSections();
+                for (int index = 0; index < sections.length; index++) {
+                    var section = sections[index];
+                    if (section == null || section.hasOnlyAir() || !section.maybeHas(state -> state.is(Blocks.NETHER_PORTAL))) continue;
+                    for (int y = 0; y < 16; y++) {
+                        for (int z = 0; z < 16; z++) {
+                            for (int x = 0; x < 16; x++) {
+                                if (!section.getBlockState(x, y, z).is(Blocks.NETHER_PORTAL)) continue;
+                                BlockPos pos = new BlockPos((center.x() + dx) * 16 + x,
+                                    mc.level.getMinY() + index * 16 + y, (center.z() + dz) * 16 + z);
+                                if (!mc.level.getBlockState(pos.below()).is(Blocks.NETHER_PORTAL)) portals.add(pos);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return nearestPortal(portalSearchOrigin, portals);
+    }
+
+    static BlockPos nearestPortal(Vec3 origin, List<BlockPos> portals) {
+        return portals.stream().min(Comparator.comparingDouble(pos ->
+            origin.distanceToSqr(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5))).orElse(null);
     }
 
     private FailureDispatch hardFailMissingPasswordLocked() {
@@ -705,24 +706,6 @@ public final class ServerReconnectService {
                 });
             } catch (Throwable t) {
                 debugWarn("Failed to schedule reconnect failure listener on client thread: {}", t.toString());
-            }
-        }
-    }
-
-    private void updateProgressFlagsFromStateLocked(ServerState state) {
-        switch (state) {
-            case CRACKED_LOGIN -> {
-                crackedLobbyPathCompleted = false;
-                mainLobbyPathCompleted = false;
-            }
-            case CRACKED_LOBBY -> mainLobbyPathCompleted = false;
-            case MAIN_LOBBY -> crackedLobbyPathCompleted = true;
-            case TRANSFER_SERVER, MAIN_SERVER -> {
-                crackedLobbyPathCompleted = true;
-                mainLobbyPathCompleted = true;
-            }
-            default -> {
-                // no-op
             }
         }
     }
@@ -801,7 +784,7 @@ public final class ServerReconnectService {
     private boolean isDeferredRestoreTargetSatisfiedLocked(PendingRestoreGate target, ServerState state) {
         if (target == null || target == PendingRestoreGate.NONE) return true;
         return switch (target) {
-            case MAIN_LOBBY -> state == ServerState.MAIN_LOBBY;
+            case MAIN_LOBBY -> state == ServerState.MAIN_LOBBY || state == ServerState.MAIN_SERVER;
             case MAIN_SERVER -> state == ServerState.MAIN_SERVER || stage == ReconnectStage.MAIN_SERVER_READY;
             default -> true;
         };
@@ -814,8 +797,8 @@ public final class ServerReconnectService {
             clearDeferredRestoreLocked();
             return false;
         }
-        if (waitingForPathSuccess) {
-            logPendingRestoreBlockedLocked("waiting-for-path-success", trigger);
+        if (waitingForPortalArrival) {
+            logPendingRestoreBlockedLocked("waiting-for-portal-arrival", trigger);
             return false;
         }
         if (isPathStageActiveLocked()) {
@@ -898,15 +881,14 @@ public final class ServerReconnectService {
         if (now - lastRestoreBlockedLogAtMs < RESTORE_BLOCK_LOG_INTERVAL_MS) return;
         lastRestoreBlockedLogAtMs = now;
         debugInfo(
-            "Deferred Timer/Speed restore blocked (reason={}, trigger={}, target={}, stage={}, inFlightStage={}, waitingForPathSuccess={}, preDelayMs={}, postDelayMs={}, deadlineMs={}, deferredReason={}, deferredCycleId={}, activeCycleId={}).",
+            "Deferred Timer/Speed restore blocked (reason={}, trigger={}, target={}, stage={}, inFlightStage={}, waitingForPortalArrival={}, preDelayMs={}, deadlineMs={}, deferredReason={}, deferredCycleId={}, activeCycleId={}).",
             reason,
             trigger,
             deferredRestoreTarget,
             stage,
             pathStageInFlight,
-            waitingForPathSuccess,
+            waitingForPortalArrival,
             pathPreCommandDelayUntilMs,
-            pathPostDelayUntilMs,
             pathDeadlineAtMs,
             deferredRestoreReason,
             deferredRestoreCycleId,
@@ -936,7 +918,7 @@ public final class ServerReconnectService {
 
         if (timerActive == traceLastTimerActive && speedActive == traceLastSpeedActive) return;
         debugInfo(
-            "Timer/Speed edge change ({}) timer {} -> {}, speed {} -> {}, cycleId={}, stage={}, inFlightStage={}, waitingForPathSuccess={}.",
+            "Timer/Speed edge change ({}) timer {} -> {}, speed {} -> {}, cycleId={}, stage={}, inFlightStage={}, waitingForPortalArrival={}.",
             source,
             traceLastTimerActive,
             timerActive,
@@ -945,7 +927,7 @@ public final class ServerReconnectService {
             activeCycleId,
             stage,
             pathStageInFlight,
-            waitingForPathSuccess
+            waitingForPortalArrival
         );
         traceLastTimerActive = timerActive;
         traceLastSpeedActive = speedActive;
@@ -954,14 +936,13 @@ public final class ServerReconnectService {
     private void logTimerSpeedSnapshotLocked(String point) {
         if (!TIMER_SPEED_TRACE_LOGS) return;
         debugInfo(
-            "Timer/Speed snapshot [{}] cycleId={}, stage={}, inFlightStage={}, waitingForPathSuccess={}, preDelayMs={}, postDelayMs={}, deadlineMs={}, pathAttempt={}, snapshotCaptured={}, snapshotOwnerStage={}, snapshotCycleId={}, snapshotTimer={}, snapshotSpeed={}, timerNow={}, speedNow={}, deferredPending={}, deferredTarget={}, deferredReason={}, deferredCycleId={}, deferredTimerTarget={}, deferredSpeedTarget={}.",
+            "Timer/Speed snapshot [{}] cycleId={}, stage={}, inFlightStage={}, waitingForPortalArrival={}, preDelayMs={}, deadlineMs={}, pathAttempt={}, snapshotCaptured={}, snapshotOwnerStage={}, snapshotCycleId={}, snapshotTimer={}, snapshotSpeed={}, timerNow={}, speedNow={}, deferredPending={}, deferredTarget={}, deferredReason={}, deferredCycleId={}, deferredTimerTarget={}, deferredSpeedTarget={}.",
             point,
             activeCycleId,
             stage,
             pathStageInFlight,
-            waitingForPathSuccess,
+            waitingForPortalArrival,
             pathPreCommandDelayUntilMs,
-            pathPostDelayUntilMs,
             pathDeadlineAtMs,
             pathAttemptCount,
             pathModuleSnapshotCaptured,
@@ -990,19 +971,13 @@ public final class ServerReconnectService {
         return speed != null && speed.isActive();
     }
 
-    private ReconnectStage desiredStageForStateLocked(ServerState state) {
-        if (!disconnectObservedSinceArm) return ReconnectStage.AWAITING_RECONNECT;
-        if (state == ServerState.MAIN_LOBBY
-            && deferredRestorePending
-            && deferredRestoreTarget == PendingRestoreGate.MAIN_LOBBY
-            && deferredRestoreCycleId == activeCycleId) {
-            return ReconnectStage.AWAITING_RECONNECT;
-        }
+    static ReconnectStage stageForState(ServerState state, boolean disconnectObserved) {
+        if (!disconnectObserved) return ReconnectStage.AWAITING_RECONNECT;
         return switch (state) {
             case MAIN_SERVER -> ReconnectStage.MAIN_SERVER_READY;
             case CRACKED_LOGIN -> ReconnectStage.CRACKED_LOGIN;
-            case CRACKED_LOBBY -> crackedLobbyPathCompleted ? ReconnectStage.TRANSFER_WAIT : ReconnectStage.CRACKED_LOBBY_PATH;
-            case MAIN_LOBBY -> mainLobbyPathCompleted ? ReconnectStage.TRANSFER_WAIT : ReconnectStage.MAIN_LOBBY_PATH;
+            case CRACKED_LOBBY -> ReconnectStage.CRACKED_LOBBY_PATH;
+            case MAIN_LOBBY -> ReconnectStage.MAIN_LOBBY_PATH;
             case TRANSFER_SERVER -> ReconnectStage.TRANSFER_WAIT;
             case UNKNOWN -> ReconnectStage.AWAITING_RECONNECT;
         };
@@ -1020,8 +995,9 @@ public final class ServerReconnectService {
         Timer timer = Modules.get().get(Timer.class);
         Speed speed = Modules.get().get(Speed.class);
 
-        pathTimerWasActive = timer != null && timer.isActive();
-        pathSpeedWasActive = speed != null && speed.isActive();
+        boolean pendingRestore = deferredRestorePending && deferredRestoreCycleId == activeCycleId;
+        pathTimerWasActive = (timer != null && timer.isActive()) || (pendingRestore && deferredRestoreTimerWasActive);
+        pathSpeedWasActive = (speed != null && speed.isActive()) || (pendingRestore && deferredRestoreSpeedWasActive);
         pathModuleSnapshotCaptured = true;
         pathModulesForcedOff = false;
         pathSnapshotOwnerStage = ownerStage == null ? ReconnectStage.DISARMED : ownerStage;
@@ -1039,7 +1015,7 @@ public final class ServerReconnectService {
 
     private boolean captureAndForcePathModulesOffLocked(ReconnectStage ownerStage) {
         if (!canToggleTimerSpeedNowLocked()) return false;
-        capturePathModuleSnapshotLocked(ownerStage);
+        if (!pathModuleSnapshotCaptured) capturePathModuleSnapshotLocked(ownerStage);
         return forcePathModulesOffLocked();
     }
 
@@ -1084,7 +1060,7 @@ public final class ServerReconnectService {
         boolean speedOff = speed == null || !speed.isActive();
         if (timerOff && speedOff) {
             debugInfo(
-                "Reconnect path prep confirmed Timer/Speed OFF before goto (snapshot timerActive={}, speedActive={}).",
+                "Reconnect path prep confirmed Timer/Speed OFF before portal path (snapshot timerActive={}, speedActive={}).",
                 pathTimerWasActive,
                 pathSpeedWasActive
             );
@@ -1140,8 +1116,6 @@ public final class ServerReconnectService {
         resumeCallbackFired = false;
         crackedLoginSentThisStage = false;
         crackedLoginMissingPasswordSinceMs = 0L;
-        crackedLobbyPathCompleted = false;
-        mainLobbyPathCompleted = false;
         deferredRestorePending = false;
         deferredRestoreCycleId = 0L;
         deferredRestoreTarget = PendingRestoreGate.NONE;
@@ -1281,11 +1255,11 @@ public final class ServerReconnectService {
         }
         clearPathModuleSnapshotLocked();
         pathStageInFlight = ReconnectStage.DISARMED;
-        waitingForPathSuccess = false;
+        waitingForPortalArrival = false;
         pathPreCommandDelayUntilMs = 0L;
-        pathPostDelayUntilMs = 0L;
         pathDeadlineAtMs = 0L;
         pathAttemptCount = 0;
+        portalSearchOrigin = null;
         logTimerSpeedSnapshotLocked("reset-path-runtime-after");
     }
 

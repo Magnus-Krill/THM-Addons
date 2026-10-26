@@ -13,11 +13,7 @@ import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.multiplayer.chat.GuiMessageTag;
-import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.GameType;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.chunk.LevelChunk;
-import net.minecraft.world.level.chunk.LevelChunkSection;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.utils.THMUtils;
 
@@ -116,10 +112,6 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
 
 
 public final class ServerStatusHandler {
-    private static final long PORTAL_SCAN_INTERVAL_MS = 1000L;
-    private long lastPortalScanAtMs;
-    private boolean lastPortalNearby;
-
     public enum ServerState {
         UNKNOWN,
         MAIN_LOBBY,
@@ -416,17 +408,7 @@ public final class ServerStatusHandler {
     }
 
     private EvidenceScore scoreStrictEvidence() {
-        EvidenceScore score = new EvidenceScore();
-
-        // Deterministic commit policy: self PlayerListEntry gamemode and the live dimension are
-        // authoritative. Trusted cracked-auth evidence only disambiguates Adventure + End.
         GameType gm = resolvePlayerListGameMode();
-        if (gm == null) {
-            score.reasons.add("strict:missing-player-list-gamemode");
-            return score;
-        }
-        String gmSource = "player-list";
-
         String dimensionId = "";
         if (mc != null && mc.level != null && mc.level.dimension() != null) {
             try {
@@ -435,28 +417,29 @@ public final class ServerStatusHandler {
             }
         }
 
-        boolean crackedAdventureEnd = gm == GameType.ADVENTURE && "minecraft:the_end".equals(dimensionId);
-        boolean postLoginTeleported = hasMetPostLoginTeleportGate();
+        return scoreStrictEvidence(gm, dimensionId, crackedPromptSeenThisConnection, hasMetPostLoginTeleportGate());
+    }
 
-        if (crackedPromptSeenThisConnection && crackedAdventureEnd && !postLoginTeleported) {
+    static EvidenceScore scoreStrictEvidence(GameType gm, String dimensionId, boolean crackedPromptSeen, boolean postLoginTeleported) {
+        EvidenceScore score = new EvidenceScore();
+        if (gm == null) {
+            score.reasons.add("strict:missing-player-list-gamemode");
+            return score;
+        }
+        String gmSource = "player-list";
+        boolean crackedAdventureEnd = gm == GameType.ADVENTURE && "minecraft:the_end".equals(dimensionId);
+
+        if (crackedPromptSeen && crackedAdventureEnd && !postLoginTeleported) {
             score.crackedLogin = 100;
             score.reasons.add("strict:connection-trusted-prompt+adventure-the_end-awaiting-post-login-teleport+gm-source:" + gmSource);
             return score;
         }
 
-        if (crackedPromptSeenThisConnection
+        if (crackedPromptSeen
             && crackedAdventureEnd
             && postLoginTeleported) {
             score.cracked = 100;
             score.reasons.add("strict:connection-trusted-prompt+adventure-the_end+teleport->cracked-lobby+gm-source:" + gmSource);
-            return score;
-        }
-
-        // Everyone is in adventure in the lobby, but the lobby world isn't always the overworld (custom
-        // lobby worlds, the end). A portal in render distance is what makes it a lobby for us: that is what we path to.
-        if (gm == GameType.ADVENTURE && netherPortalNearby()) {
-            score.lobby = 100;
-            score.reasons.add("strict:gamemode:ADVENTURE+nether-portal-nearby+dimension:" + dimensionId + "->main-lobby+gm-source:" + gmSource);
             return score;
         }
 
@@ -497,33 +480,6 @@ public final class ServerStatusHandler {
         return score;
     }
 
-    /** Palette check of every chunk in render distance, so it stays cheap; rescanned once a second. */
-    private boolean netherPortalNearby() {
-        if (mc == null || mc.level == null || mc.player == null) return false;
-
-        long now = System.currentTimeMillis();
-        if (now - lastPortalScanAtMs < PORTAL_SCAN_INTERVAL_MS) return lastPortalNearby;
-        lastPortalScanAtMs = now;
-
-        ChunkPos center = mc.player.chunkPosition();
-        int radius = mc.options.getEffectiveRenderDistance();
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
-                LevelChunk chunk = mc.level.getChunkSource().getChunkNow(center.x() + dx, center.z() + dz);
-                if (chunk == null) continue;
-                for (LevelChunkSection section : chunk.getSections()) {
-                    if (section == null || section.hasOnlyAir()) continue;
-                    if (section.maybeHas(state -> state.is(Blocks.NETHER_PORTAL))) {
-                        lastPortalNearby = true;
-                        return true;
-                    }
-                }
-            }
-        }
-        lastPortalNearby = false;
-        return false;
-    }
-
     private GameType resolvePlayerListGameMode() {
         if (mc == null || mc.player == null || mc.getConnection() == null) return null;
         try {
@@ -535,7 +491,7 @@ public final class ServerStatusHandler {
         }
     }
 
-    private ServerState resolveCandidate(EvidenceScore score) {
+    static ServerState resolveCandidate(EvidenceScore score) {
         int best = Math.max(Math.max(score.lobby, score.main), Math.max(Math.max(score.crackedLogin, score.cracked), score.transfer));
         if (best < MIN_CONFIDENCE) return ServerState.UNKNOWN;
 
@@ -637,7 +593,7 @@ public final class ServerStatusHandler {
 
     private record StateRequest(long deadlineMs, CompletableFuture<ServerState> future) {}
 
-    private static final class EvidenceScore {
+    static final class EvidenceScore {
         int lobby;
         int main;
         int crackedLogin;

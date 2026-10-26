@@ -81,6 +81,17 @@ Container restocking accepts replaceable blocks at the shulker/EChest position. 
 obstructs it, recovery keeps mining that block before tearing down the enclosure and retrying
 the restock. Unbreakable blocks or a 30-second clearing timeout stop with the block and position.
 
+### Reconnect Lobby Portals
+
+During an armed Highway Monitor or Elytra Route reconnect, Adventure mode in the Overworld
+identifies the main lobby. Adventure mode in the End identifies the backup/transfer server,
+except while a trusted cracked-login prompt identifies the authentication flow.
+
+On lobby entry, reconnect chooses the nearest portal from the loaded chunks using the entry
+position, then uses Baritone to walk into its bottom row. It waits for chunks if no portal is
+loaded and retries interrupted paths. A path-complete message does not finish the lobby stage;
+only a server-state change advances reconnect. Manual joins do not start portal walking.
+
 ### Basic Highway Shape
 
 | Setting | Default / Range | What to change it for |

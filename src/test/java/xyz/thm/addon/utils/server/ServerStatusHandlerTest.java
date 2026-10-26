@@ -8,6 +8,10 @@ package xyz.thm.addon.utils.server;
 
 import net.minecraft.client.multiplayer.chat.GuiMessageTag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import net.minecraft.world.level.GameType;
+import xyz.thm.addon.utils.server.ServerStatusHandler.ServerState;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.ClassNode;
@@ -16,6 +20,32 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ServerStatusHandlerTest {
+    @ParameterizedTest
+    @CsvSource({
+        "ADVENTURE,minecraft:overworld,false,false,MAIN_LOBBY",
+        "ADVENTURE,minecraft:overworld,true,false,MAIN_LOBBY",
+        "ADVENTURE,minecraft:the_end,false,false,TRANSFER_SERVER",
+        "ADVENTURE,minecraft:the_end,false,true,TRANSFER_SERVER",
+        "ADVENTURE,minecraft:the_end,true,false,CRACKED_LOGIN",
+        "ADVENTURE,minecraft:the_end,true,true,CRACKED_LOBBY",
+        "ADVENTURE,minecraft:the_nether,false,false,UNKNOWN",
+        "SPECTATOR,minecraft:overworld,false,false,TRANSFER_SERVER",
+        "SURVIVAL,minecraft:overworld,false,false,MAIN_SERVER",
+        "SURVIVAL,minecraft:the_end,false,false,MAIN_SERVER",
+        "CREATIVE,minecraft:overworld,false,false,MAIN_SERVER"
+    })
+    void dimensionsSeparateTheLobbyFromBackupAndCrackedAuthentication(GameType mode, String dimension,
+        boolean prompt, boolean teleported, ServerState expected) {
+        assertEquals(expected, ServerStatusHandler.resolveCandidate(
+            ServerStatusHandler.scoreStrictEvidence(mode, dimension, prompt, teleported)));
+    }
+
+    @Test
+    void missingGameModeDoesNotIdentifyALobby() {
+        assertEquals(ServerState.UNKNOWN, ServerStatusHandler.resolveCandidate(
+            ServerStatusHandler.scoreStrictEvidence(null, "minecraft:overworld", false, false)));
+    }
+
     @Test
     void recognizesTheTagFactoryUsedByVanillaServerSystemMessages() throws Exception {
         var chat = new ClassNode();

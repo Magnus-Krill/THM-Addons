@@ -146,6 +146,8 @@ addon-specific settings screen — don't confuse the two when adding a new modul
 
 **Highway statistics:** Persist movement continuity and sticky invalidation in every stats artifact. Jumps over 64 blocks and world/dimension changes invalidate distance and external submissions, including while paused. Adventure-mode backup/lobby visits preserve the last main-server checkpoint, including on cache restore; distance uses that checkpoint until main-server checks resume.
 
+**Reconnect lobby portals:** Only armed reconnects walk to portals. Adventure Overworld is the main lobby; Adventure End is backup/transfer unless trusted cracked-auth evidence applies. Choose the nearest loaded portal from lobby entry and advance only on server-state changes.
+
 **Stats screenshots:** Capture after `Minecraft.renderFrame` draws the GUI. Disconnect proof must match the expected reason/stats and complete two visible frames; keep disconnect captures alive across `GameLeftEvent`.
 
 **Screenshot clipboard:** Windows writes CF_DIB directly through Minecraft’s bundled JNA, using the game window as owner and retrying clipboard locks. Keep Linux clipboard tools Linux-only and preserve AWT errors if their fallback also fails.
