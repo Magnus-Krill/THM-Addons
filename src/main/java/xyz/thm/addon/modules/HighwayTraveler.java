@@ -27,13 +27,18 @@ import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.EndPortalBlock;
 import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.NetherPortalBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import meteordevelopment.meteorclient.systems.modules.movement.elytrafly.ElytraFlightModes;
+import meteordevelopment.meteorclient.systems.modules.movement.elytrafly.ElytraFly;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.settings.DescribedOption;
+import xyz.thm.addon.utils.ElytraNavigator;
+import xyz.thm.addon.utils.ElytraPathPlanner;
 import xyz.thm.addon.utils.THMUtils;
 
 import java.util.*;
@@ -47,7 +52,8 @@ public class HighwayTraveler extends Module {
 
     public enum TravelMethod implements DescribedOption {
         WALK("Walk"),
-        WASP("Wasp");
+        WASP("Wasp"),
+        FLY("Fly");
 
         public final String label;
         TravelMethod(String l) { label = l; }
@@ -60,6 +66,7 @@ public class HighwayTraveler extends Module {
             return switch (this) {
                 case WALK -> "Walk along the highway.";
                 case WASP -> "Travel using Wasp flight.";
+                case FLY -> "Fly with Elytra Fly and Elytra Route's obstacle pathing.";
             };
         }
     }
@@ -93,6 +100,27 @@ public class HighwayTraveler extends Module {
                 case POS_X_NEG_Z -> "Travel northeast along positive X and negative Z.";
                 case NEG_X_POS_Z -> "Travel southwest along negative X and positive Z.";
                 case NEG_X_NEG_Z -> "Travel northwest along negative X and Z.";
+            };
+        }
+    }
+
+    public enum StopAtEnd implements DescribedOption {
+        OFF("Off"),
+        PAVE("Pave"),
+        DUG("Dug");
+
+        public final String label;
+        StopAtEnd(String l) { label = l; }
+
+        @Override
+        public String toString() { return label; }
+
+        @Override
+        public String description() {
+            return switch (this) {
+                case OFF -> "Keep traveling.";
+                case PAVE -> "Stop where the obsidian floor ends.";
+                case DUG -> "Stop where the dug tunnel ends.";
             };
         }
     }
@@ -140,6 +168,45 @@ public class HighwayTraveler extends Module {
             .min(0.0)
             .sliderMax(0.5)
             .visible(() -> methodSetting.get() == TravelMethod.WASP)
+            .build()
+    );
+
+    private final Setting<Boolean> flyHoldY = sgGeneral.add(
+        new BoolSetting.Builder()
+            .name("fly-hold-y")
+            .description("Keeps Fly mode at a fixed Y level.")
+            .defaultValue(true)
+            .visible(() -> methodSetting.get() == TravelMethod.FLY)
+            .build()
+    );
+
+    private final Setting<Integer> flyYLevel = sgGeneral.add(
+        new IntSetting.Builder()
+            .name("fly-y-level")
+            .description("Y level Fly mode climbs back to as soon as it drops below.")
+            .defaultValue(122)
+            .range(-64, 320)
+            .sliderRange(0, 256)
+            .visible(() -> methodSetting.get() == TravelMethod.FLY && flyHoldY.get())
+            .build()
+    );
+
+    private final Setting<StopAtEnd> stopAtEnd = sgGeneral.add(
+        new EnumSetting.Builder<StopAtEnd>()
+            .name("stop-at-end")
+            .description("Stops at the end of the paved or dug highway.")
+            .defaultValue(StopAtEnd.OFF)
+            .build()
+    );
+
+    private final Setting<Integer> endRows = sgGeneral.add(
+        new IntSetting.Builder()
+            .name("end-rows")
+            .description("Unpaved rows in a row that count as the end of the pave.")
+            .defaultValue(3)
+            .range(2, 10)
+            .sliderRange(2, 8)
+            .visible(() -> stopAtEnd.get() == StopAtEnd.PAVE)
             .build()
     );
 
@@ -305,6 +372,8 @@ public class HighwayTraveler extends Module {
 
     private static final int OBSTACLE_WAIT_TICKS = 10;
     private static final int BOUNCE_Y_TOLERANCE = 2;
+    // How far past a gap the highway has to go on for the gap to count as damage rather than the end.
+    private static final int REPAIR_GAP_SCAN = 32;
     private static final int CHEST_SLOT_INDEX = 38;
 
     private TravelState     travelState = TravelState.FORWARD;
@@ -325,6 +394,44 @@ public class HighwayTraveler extends Module {
     private int     bounceRestartTicks  = 0;
     private double  bouncePrevFov       = 0;
     private int     stashedElytraSlot   = -1;
+    private int     baseFeetY           = Integer.MIN_VALUE;
+    private boolean handoffToBuilder    = true;
+
+    private static final int END_MAX_SCAN = 12;
+    private static final int END_LANDING_TICKS = 40;
+
+    // Fly mode: Elytra Route's navigator dodges obstacles, ElytraFly does the flying.
+    private static final double FLY_LANE_LOOKAHEAD = 12.0;
+    private static final int FLY_GOAL_DISTANCE = 100_000;
+    private static final int FLY_GOAL_STEP = 10_000;
+    // Climbs a little past the level so slow sinking doesn't drop it straight back below.
+    private static final double HOLD_Y_OVERSHOOT = 0.25;
+    private static final int FLY_FLOOR_SEARCH = 8;
+    private static final int FLY_MAX_DESCEND_TICKS = 200;
+    private final ElytraNavigator.Config navConfig = new ElytraNavigator.Config();
+    private final FlyTerrain flyTerrain = new FlyTerrain();
+    private final ElytraNavigator navigator = new ElytraNavigator(flyTerrain, navConfig);
+    private double laneX0, laneZ0;
+    private int flyDescendTicks;
+    // Hold-Y hysteresis: climb from one block below the level back up to it, sink from one block above.
+    private boolean flyClimbing, flySinking;
+    // Cleared whenever another method is selected, so switching to Fly later sets up floor and lane first.
+    private boolean flyInitialized;
+    // The lane sits on the highway's centre line once found; until then it is retried every second.
+    private boolean laneCentered;
+    private int laneCenterTicks;
+    private static final int LANE_SEARCH_WIDTH = 4;
+    private static final int LANE_CHECK_STEPS = 3;
+    // A railing (with a block above it) can put the feet up to two blocks above the highway.
+    private static final int LANE_DROP_SEARCH = 2;
+    private static final double LANE_CENTER_TOLERANCE = 0.3;
+    // Without a centre line found, takeoff waits this long before going ahead from where the player stands.
+    private static final int LANE_CENTER_WAIT_TICKS = 40;
+    private int laneCenterWaitTicks;
+    private static final int LANE_WALK_TICKS = 100;
+    private int laneWalkTicks;
+    private boolean flyJumped;
+    private static final double FLY_FALL_GLIDE_DISTANCE = 2.0;
 
     public HighwayTraveler() {
         super(THMAddon.MAIN, "highway-traveler",
@@ -347,18 +454,123 @@ public class HighwayTraveler extends Module {
         bounceRubberbanded = false;
         bounceRestartTicks = bounceRestartDelay.get();
         stashedElytraSlot  = -1;
+        baseFeetY          = Integer.MIN_VALUE;
+        handoffToBuilder   = true;
         bouncePrevFov      = mc.options.fovEffectScale().get();
         prevPos     = new Vec3(mc.player.getX(), mc.player.getY(), mc.player.getZ());
+        flyInitialized = false;
 
-        if (autoBounce.get()) bounceRecast(mc.player);
+        if (methodSetting.get() == TravelMethod.FLY && !initFly()) return;
+
+        if (bounceEnabled()) bounceRecast(mc.player);
 
         info("Heading " + activeDir.label + " (yaw " + (int) hwYaw + ")");
+    }
+
+    /** Sets up Fly mode from the current position; false (and module off) without Elytra Fly or a floor below. */
+    private boolean initFly() {
+        if (!isElytraFlyReady()) {
+            toggle();
+            return false;
+        }
+        baseFeetY = findFloorFeetY(mc.player);
+        if (baseFeetY == Integer.MIN_VALUE) {
+            error("Fly mode: no highway floor found below you.");
+            toggle();
+            return false;
+        }
+        laneX0 = mc.player.getBlockX() + 0.5;
+        laneZ0 = mc.player.getBlockZ() + 0.5;
+        laneCentered = centerLaneOnHighway();
+        laneCenterTicks = 0;
+        laneCenterWaitTicks = 0;
+        laneWalkTicks = 0;
+        flyJumped = false;
+        flyDescendTicks = 0;
+        flyClimbing = false;
+        flySinking = false;
+        navigator.reset();
+        flyInitialized = true;
+        return true;
+    }
+
+    /**
+     * Moves the Fly lane onto the highway's centre line: the nearest sideways offset from the current lane whose
+     * cross-sections pass Highway Builder's own check (width, floor, cleared space), either just ahead or just behind,
+     * so a gap right in front still leaves the intact highway behind to centre on. Also tries up to two blocks lower,
+     * since standing on a railing puts the feet above the highway; the match sets the highway's walking height.
+     * False when none is found nearby.
+     */
+    private boolean centerLaneOnHighway() {
+        HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
+        if (builder == null || mc.player == null) return false;
+
+        HorizontalDirection travelDir = HorizontalDirection.get(hwYaw);
+        HorizontalDirection lateral = travelDir.rotateLeftSkipOne();
+        BlockPos base = lanePointAtPlayer();
+        // Offsets 0, -1, 1, -2, 2, ...: the closest centre line wins.
+        for (int i = 0; i <= LANE_SEARCH_WIDTH * 2; i++) {
+            int off = (i + 1) / 2 * (i % 2 == 1 ? -1 : 1);
+            for (int dy = 0; dy >= -LANE_DROP_SEARCH; dy--) {
+                BlockPos candidate = base.offset(lateral.offsetX * off, dy, lateral.offsetZ * off);
+                if (builder.sectionsHealthy(travelDir, candidate, 1, LANE_CHECK_STEPS)
+                    || builder.sectionsHealthy(travelDir, candidate, -LANE_CHECK_STEPS, -1)) {
+                    laneX0 = candidate.getX() + 0.5;
+                    laneZ0 = candidate.getZ() + 0.5;
+                    baseFeetY = candidate.getY();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** The lane point level with the player, at the highway's walking height. */
+    private BlockPos lanePointAtPlayer() {
+        double len = Math.hypot(fwdX, fwdZ);
+        double dirX = fwdX / len, dirZ = fwdZ / len;
+        double along = (mc.player.getX() - laneX0) * dirX + (mc.player.getZ() - laneZ0) * dirZ;
+        return BlockPos.containing(laneX0 + dirX * along, baseFeetY, laneZ0 + dirZ * along);
+    }
+
+    private boolean bounceEnabled() {
+        return autoBounce.get() && methodSetting.get() != TravelMethod.FLY;
+    }
+
+    private boolean isElytraFlyReady() {
+        ElytraFly elytraFly = Modules.get().get(ElytraFly.class);
+        if (elytraFly == null || !elytraFly.isActive()) {
+            error("Fly mode needs Elytra Fly enabled.");
+            return false;
+        }
+        ElytraFlightModes mode = elytraFly.flightMode.get();
+        if (mode != ElytraFlightModes.Vanilla && mode != ElytraFlightModes.Packet) {
+            error("Fly mode needs Elytra Fly in Vanilla or Packet mode.");
+            return false;
+        }
+        if (elytraFly.autoPilot.get()) {
+            error("Fly mode: disable Elytra Fly auto-pilot.");
+            return false;
+        }
+        return true;
+    }
+
+    /** Walking height of the highway: the player's own block on the ground, else the first solid block below. */
+    private int findFloorFeetY(LocalPlayer p) {
+        if (p.onGround()) return p.getBlockY();
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos(p.getBlockX(), p.getBlockY(), p.getBlockZ());
+        for (int i = 0; i < FLY_FLOOR_SEARCH; i++) {
+            pos.move(0, -1, 0);
+            if (solid(pos)) return pos.getY() + 1;
+        }
+        return Integer.MIN_VALUE;
     }
 
     @Override
     public void onDeactivate() {
         releaseAll();
         mc.options.keyJump.setDown(false);
+        mc.options.keyShift.setDown(false);
         bounceRubberbanded = false;
         handoffTicks = -1;
         // If the module gets toggled off mid unequip-recast, don't leave the elytra sitting
@@ -380,9 +592,24 @@ public class HighwayTraveler extends Module {
         if (mc.player == null || mc.level == null) return;
         LocalPlayer p = mc.player;
 
+        if (methodSetting.get() != TravelMethod.FLY) flyInitialized = false;
+
         if (handoffTicks >= 0) {
             tickAwaitingHandoff(p);
             return;
+        }
+
+        // Before the end scan, so the repair check can tell a gap from the end right after switching to Fly.
+        if (methodSetting.get() == TravelMethod.FLY && !flyInitialized && !initFly()) return;
+
+        if (stopAtEnd.get() != StopAtEnd.OFF && travelState != TravelState.BACKUP) {
+            BlockPos end = findHighwayEnd(p);
+            if (end != null) {
+                // A hole with highway behind it is damage for the builder, not the end.
+                if (autoRepairSwap.get() && highwayAheadBroken()) beginHandoffWait(p);
+                else reachEnd(p, end);
+                return;
+            }
         }
 
         if (autoRepairSwap.get() && ++repairCheckTicks >= repairCheckInterval.get()) {
@@ -391,6 +618,11 @@ public class HighwayTraveler extends Module {
                 beginHandoffWait(p);
                 return;
             }
+        }
+
+        if (methodSetting.get() == TravelMethod.FLY) {
+            tickFly(p);
+            return;
         }
 
         if (travelState != TravelState.PATH_FOLLOW) {
@@ -418,7 +650,7 @@ public class HighwayTraveler extends Module {
         }
 
         // Bounce owns pitch (needs to dive to build speed) while it's active; otherwise keep it level.
-        if (!autoBounce.get()) p.setXRot(0);
+        if (!bounceEnabled()) p.setXRot(0);
     }
 
     /**
@@ -429,7 +661,7 @@ public class HighwayTraveler extends Module {
      */
     @EventHandler
     private void onBouncePostTick(TickEvent.Post event) {
-        if (!autoBounce.get() || mc.player == null || handoffTicks >= 0) return;
+        if (!bounceEnabled() || mc.player == null || handoffTicks >= 0) return;
         LocalPlayer p = mc.player;
 
         if (mc.options.keyJump.isDown() && !p.isFallFlying() && !bounceManualTakeoff.get()) {
@@ -463,13 +695,13 @@ public class HighwayTraveler extends Module {
 
     @EventHandler
     private void onBouncePreTick(TickEvent.Pre event) {
-        if (!autoBounce.get() || mc.player == null || handoffTicks >= 0) return;
+        if (!bounceEnabled() || mc.player == null || handoffTicks >= 0) return;
         if (bounceConditionsMet(mc.player) && sprintSetting.get()) mc.player.setSprinting(true);
     }
 
     @EventHandler
     private void onBouncePacketReceive(PacketEvent.Receive event) {
-        if (!autoBounce.get() || mc.player == null || handoffTicks >= 0) return;
+        if (!bounceEnabled() || mc.player == null || handoffTicks >= 0) return;
         if (event.packet instanceof ClientboundPlayerPositionPacket) {
             bounceRubberbanded = true;
             mc.player.stopFallFlying();
@@ -483,7 +715,7 @@ public class HighwayTraveler extends Module {
 
     @EventHandler
     private void onBouncePacketSend(PacketEvent.Send event) {
-        if (!autoBounce.get() || mc.player == null || handoffTicks >= 0 || sprintSetting.get()) return;
+        if (!bounceEnabled() || mc.player == null || handoffTicks >= 0 || sprintSetting.get()) return;
         if (event.packet instanceof ServerboundPlayerCommandPacket cmd && cmd.getAction() == ServerboundPlayerCommandPacket.Action.START_FALL_FLYING) {
             mc.player.setSprinting(true);
         }
@@ -585,6 +817,19 @@ public class HighwayTraveler extends Module {
     }
 
     private void tickForward(LocalPlayer p) {
+        // The end check tolerates short gaps and holes beside pave, so walking on would drop into them.
+        if (stopAtEnd.get() == StopAtEnd.PAVE && laneFloorMissingAhead(p)) {
+            if (autoRepairSwap.get() && highwayAheadBroken()) {
+                beginHandoffWait(p);
+                return;
+            }
+            warning("No pave ahead in the lane. Stopping.");
+            handoffToBuilder = false;
+            beginHandoffWait(p);
+            handoffTicks = 0;
+            return;
+        }
+
         switch (detectObstacle(p)) {
             case CLEAR    -> pressFwd();
             case JUMPABLE -> {
@@ -674,13 +919,35 @@ public class HighwayTraveler extends Module {
         }
     }
 
+    /**
+     * True when the highway ahead needs a repair. Fly mode measures from the lane centre at the highway's walking
+     * height, since it flies above and slightly beside it. With stop-at-end on, a gap only counts when the highway
+     * goes on behind it; otherwise it is the end of the pave or dig, which stop-at-end handles.
+     */
     private boolean highwayAheadBroken() {
         HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
-        if (builder == null) return false;
+        if (builder == null || mc.player == null) return false;
 
         HorizontalDirection travelDir = HorizontalDirection.get(hwYaw);
-        int tolerance = repairToleratesBounce.get() ? BOUNCE_Y_TOLERANCE : 0;
-        return !builder.isHighwayAheadClean(travelDir, repairScanBlocks.get(), tolerance);
+        boolean fly = methodSetting.get() == TravelMethod.FLY;
+        if (fly && !flyInitialized) return false;
+
+        BlockPos origin;
+        int tolerance;
+        if (fly) {
+            // Off the centre line the cross-sections are shifted and the check is meaningless.
+            if (!laneCentered) return false;
+            origin = lanePointAtPlayer();
+            tolerance = 0;
+        } else {
+            origin = new BlockPos(mc.player.getBlockX(), (int) Math.round(mc.player.getY()), mc.player.getBlockZ());
+            tolerance = repairToleratesBounce.get() ? BOUNCE_Y_TOLERANCE : 0;
+        }
+
+        int broken = builder.firstBrokenStepAhead(travelDir, origin, repairScanBlocks.get(), tolerance);
+        if (broken == -1) return false;
+        if (stopAtEnd.get() == StopAtEnd.OFF) return true;
+        return builder.highwayContinuesAhead(travelDir, origin, broken + 1, broken + REPAIR_GAP_SCAN, tolerance);
     }
 
     /**
@@ -705,17 +972,248 @@ public class HighwayTraveler extends Module {
         mc.options.keyJump.setDown(false);
         p.setSprinting(false);
 
+        // ElytraFly hovers in place once forward is released, so sneak down until landed.
+        if (methodSetting.get() == TravelMethod.FLY && p.isFallFlying() && flyDescendTicks++ < FLY_MAX_DESCEND_TICKS) {
+            mc.options.keyShift.setDown(true);
+            return;
+        }
+        mc.options.keyShift.setDown(false);
+
         if (--handoffTicks > 0) return;
         handoffTicks = -1;
 
         if (isActive()) toggle();
+        if (!handoffToBuilder) return;
 
         // Builder fully deactivates itself for the repair->travel handoff (so it doesn't keep
         // holding player input/movement while "paused" - see HighwayBuilderTHM's
         // travelHandoffDeactivateArmed), so it should always be inactive here. Reactivating it
         // resumes its stats session from the cached snapshot rather than starting fresh.
         HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
-        if (builder != null && !builder.isActive()) builder.toggle();
+        if (builder != null) builder.startRepairForTraveler(stopAtEnd.get() != StopAtEnd.OFF);
+    }
+
+    /**
+     * First block ahead where the chosen highway part ends, or null. Pave: the floor under the walking height stops
+     * being obsidian for {@code end-rows} rows in a row. Dug: feet and head height are walled off across the whole lane, so a
+     * lone block in the way is still routed around. Looks further ahead the faster the player moves.
+     */
+    private BlockPos findHighwayEnd(LocalPlayer p) {
+        // Taken once on first ground contact: bounce bobs, and detours may step onto a railing.
+        if (baseFeetY == Integer.MIN_VALUE && p.onGround()) baseFeetY = p.getBlockY();
+        if (baseFeetY == Integer.MIN_VALUE) return null;
+
+        Vec3 vel = p.getDeltaMovement();
+        int scan = Math.min(END_MAX_SCAN, 2 + (int) Math.ceil(Math.hypot(vel.x, vel.z) * 4));
+        int x = p.getBlockX(), z = p.getBlockZ();
+        if (methodSetting.get() == TravelMethod.FLY) {
+            // Fly mode judges the centre line: under a railing there is no pave, which read as the end on takeoff.
+            if (!laneCentered) return null;
+            BlockPos lane = lanePointAtPlayer();
+            x = lane.getX();
+            z = lane.getZ();
+        }
+
+        for (int step = 1; step <= scan; step++) {
+            int cx = x + fwdX * step, cz = z + fwdZ * step;
+            if (!mc.level.hasChunk(cx >> 4, cz >> 4)) return null;
+
+            if (stopAtEnd.get() == StopAtEnd.PAVE) {
+                if (paveEndsAt(cx, cz)) return new BlockPos(cx, baseFeetY, cz);
+            } else if (isDugWall(cx, cz)) {
+                return new BlockPos(cx, baseFeetY, cz);
+            }
+        }
+        return null;
+    }
+
+    /** True when {@code end-rows} rows from here on, all loaded, have no pave in the centre lane or the lanes beside it. */
+    private boolean paveEndsAt(int x, int z) {
+        for (int i = 0; i < endRows.get(); i++) {
+            int rx = x + fwdX * i, rz = z + fwdZ * i;
+            if (!mc.level.hasChunk(rx >> 4, rz >> 4) || rowHasPave(rx, rz)) return false;
+        }
+        return true;
+    }
+
+    /** A hole in one lane is damage, not the end: a row only counts as unpaved with no pave across the middle three lanes. */
+    private boolean rowHasPave(int x, int z) {
+        int sideX = -fwdZ, sideZ = fwdX;
+        for (int lane = -1; lane <= 1; lane++) {
+            if (isPaveFloor(x + sideX * lane, z + sideZ * lane)) return true;
+        }
+        return false;
+    }
+
+    /** Two blocks: releasing forward still slides the player about a third of a block. */
+    private boolean laneFloorMissingAhead(LocalPlayer p) {
+        // Off the walking height (railing, jump) the floor below is not the lane's.
+        if (baseFeetY == Integer.MIN_VALUE || p.getBlockY() != baseFeetY) return false;
+        for (int step = 1; step <= 2; step++) {
+            int x = p.getBlockX() + fwdX * step, z = p.getBlockZ() + fwdZ * step;
+            if (mc.level.hasChunk(x >> 4, z >> 4) && !isPaveFloor(x, z)) return true;
+        }
+        return false;
+    }
+
+    private boolean isPaveFloor(int x, int z) {
+        BlockState floor = mc.level.getBlockState(new BlockPos(x, baseFeetY - 1, z));
+        return floor.is(Blocks.OBSIDIAN) || floor.is(Blocks.CRYING_OBSIDIAN);
+    }
+
+    private boolean isDugWall(int x, int z) {
+        // Sideways along the lane: the perpendicular of the travel step.
+        int sideX = -fwdZ, sideZ = fwdX;
+        for (int lane = -1; lane <= 1; lane++) {
+            BlockPos feet = new BlockPos(x + sideX * lane, baseFeetY, z + sideZ * lane);
+            if (!solid(feet) || !solid(feet.above())) return false;
+        }
+        return true;
+    }
+
+    private void reachEnd(LocalPlayer p, BlockPos end) {
+        String part = stopAtEnd.get() == StopAtEnd.PAVE ? "paved" : "dug";
+        info("Reached the end of the %s highway at %d %d %d.", part, end.getX(), end.getY(), end.getZ());
+        handoffToBuilder = false;
+        beginHandoffWait(p);
+        // Only wait to land when actually in the air; on foot stop right away.
+        handoffTicks = p.onGround() && !p.isFallFlying() ? 0 : END_LANDING_TICKS;
+    }
+
+    private void tickFly(LocalPlayer p) {
+        p.setXRot(0);
+
+        if (!laneCentered && ++laneCenterTicks >= 20) {
+            laneCenterTicks = 0;
+            laneCentered = centerLaneOnHighway();
+        }
+
+        if (!p.isFallFlying()) {
+            releaseAll();
+            mc.options.keyShift.setDown(false);
+            mc.options.keyJump.setDown(false);
+            if (!LivingEntity.canGlideUsing(p.getItemBySlot(EquipmentSlot.CHEST), EquipmentSlot.CHEST)) {
+                error("Fly mode needs a usable elytra in your chest slot.");
+                toggle();
+                return;
+            }
+            if (p.onGround()) {
+                // Like Highway Builder, walk onto the centre line first, then take off from there.
+                flyJumped = false;
+                if (walkToLaneCenter(p)) return;
+                p.jumpFromGround();
+                flyJumped = true;
+            } else if ((flyJumped || p.fallDistance > FLY_FALL_GLIDE_DISTANCE) && p.getDeltaMovement().y < 0) {
+                // Not on stepping down from a railing on the way to the centre, only after the takeoff jump or a real fall.
+                mc.getConnection().send(new ServerboundPlayerCommandPacket(p, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
+                p.startFallFlying();
+            }
+            return;
+        }
+
+        navConfig.preferredY = flyHoldY.get() ? flyYLevel.get() : baseFeetY + 1;
+        navConfig.minY = mc.level.getMinY();
+        navConfig.maxY = mc.level.getMaxY();
+        navConfig.range = 64;
+        navConfig.lookahead = 16.0;
+
+        var box = p.getBoundingBox();
+        double cx = (box.minX + box.maxX) * 0.5, cy = (box.minY + box.maxY) * 0.5, cz = (box.minZ + box.maxZ) * 0.5;
+        Vec3 vel = p.getDeltaMovement();
+        double len = Math.hypot(fwdX, fwdZ);
+        double dirX = fwdX / len, dirZ = fwdZ / len;
+        // The goal moves ahead in coarse steps, so it stays FLY_GOAL_DISTANCE ahead without changing every tick.
+        double progress = Math.max(0.0, (cx - laneX0) * dirX + (cz - laneZ0) * dirZ);
+        double goalAlong = Math.floor(progress / FLY_GOAL_STEP) * FLY_GOAL_STEP + FLY_GOAL_DISTANCE;
+        int goalX = (int) Math.round(laneX0 + dirX * goalAlong);
+        int goalZ = (int) Math.round(laneZ0 + dirZ * goalAlong);
+
+        ElytraNavigator.Steer steer = navigator.update(cx, cy, cz, vel.x, vel.z, goalX, goalZ, 2.0);
+        if (steer.mode() == ElytraNavigator.Mode.FAILED) {
+            warning("Fly mode: no way around the obstacle. Landing.");
+            handoffToBuilder = false;
+            beginHandoffWait(p);
+            handoffTicks = END_LANDING_TICKS;
+            return;
+        }
+
+        double tx = steer.x(), tz = steer.z();
+        if (steer.mode() == ElytraNavigator.Mode.DIRECT) {
+            // Straight flight aims back onto the highway lane, so detours don't leave the player beside it.
+            // The navigator only checked its own target, so the lane point is used only when the way there is open.
+            double along = (cx - laneX0) * dirX + (cz - laneZ0) * dirZ + FLY_LANE_LOOKAHEAD;
+            double lx = laneX0 + dirX * along, lz = laneZ0 + dirZ * along;
+            if (ElytraPathPlanner.lineClear(flyTerrain, cx, cy, cz, lx, cy, lz, navConfig.radius)) {
+                tx = lx;
+                tz = lz;
+            }
+        }
+
+        p.setYRot((float) Math.toDegrees(Math.atan2(-(tx - cx), tz - cz)));
+        pressFwd();
+        // Detours keep the navigator's own climbing; straight flight holds the configured level.
+        int vertical = flyHoldY.get() && steer.mode() == ElytraNavigator.Mode.DIRECT
+            ? holdYVertical(p.getY(), flyYLevel.get())
+            : steer.vertical();
+        mc.options.keyJump.setDown(vertical > 0);
+        mc.options.keyShift.setDown(vertical < 0);
+    }
+
+    /**
+     * Walks sideways onto the lane's centre line, stepping off a railing if needed. True while still walking; false
+     * once centred, when no centre line has been found within {@link #LANE_CENTER_WAIT_TICKS}, or when the walk takes
+     * longer than {@link #LANE_WALK_TICKS} (e.g. blocked by the railing from outside), so takeoff goes on.
+     */
+    private boolean walkToLaneCenter(LocalPlayer p) {
+        if (!laneCentered) return ++laneCenterWaitTicks < LANE_CENTER_WAIT_TICKS;
+        if (++laneWalkTicks >= LANE_WALK_TICKS) {
+            releaseAll();
+            return false;
+        }
+
+        BlockPos lane = lanePointAtPlayer();
+        double dx = lane.getX() + 0.5 - p.getX(), dz = lane.getZ() + 0.5 - p.getZ();
+        if (dx * dx + dz * dz <= LANE_CENTER_TOLERANCE * LANE_CENTER_TOLERANCE) {
+            releaseAll();
+            return false;
+        }
+        p.setYRot((float) Math.toDegrees(Math.atan2(-dx, dz)));
+        pressFwd();
+        return true;
+    }
+
+    /** +1 climb, -1 sink, 0 hold: climbs as soon as the feet are below the level (block Y 121 for 122) until slightly above it. */
+    private int holdYVertical(double feetY, int level) {
+        if (feetY < level) flyClimbing = true;
+        else if (feetY >= level + HOLD_Y_OVERSHOOT) flyClimbing = false;
+
+        if (feetY >= level + 1) flySinking = true;
+        else if (feetY <= level + HOLD_Y_OVERSHOOT) flySinking = false;
+
+        if (flyClimbing) return 1;
+        return flySinking ? -1 : 0;
+    }
+
+    /** Navigator view of the world: solid, liquid or fire cells are walls; unloaded columns are unknown. */
+    private final class FlyTerrain implements ElytraPathPlanner.Terrain {
+        private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+
+        @Override
+        public boolean blocked(int x, int y, int z) {
+            if (mc.level == null) return true;
+            if (y < mc.level.getMinY() || y > mc.level.getMaxY()) return true;
+            if (!loaded(x, z)) return false;
+            BlockState state = mc.level.getBlockState(pos.set(x, y, z));
+            if (state.isAir()) return false;
+            if (!state.getFluidState().isEmpty()) return true;
+            if (state.is(Blocks.FIRE) || state.is(Blocks.SOUL_FIRE) || state.is(Blocks.COBWEB)) return true;
+            return !state.getCollisionShape(mc.level, pos).isEmpty();
+        }
+
+        @Override
+        public boolean loaded(int x, int z) {
+            return mc.level != null && mc.level.hasChunk(x >> 4, z >> 4);
+        }
     }
 
     private ObstacleKind detectObstacle(LocalPlayer p) {

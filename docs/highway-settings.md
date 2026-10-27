@@ -197,7 +197,7 @@ only a server-state change advances reconnect. Manual joins do not start portal 
 | --- | --- | --- |
 | `kitbot-update-on-finish` | `true` | Sends `$update` to KitBot1 with the current direction when the module finishes, then disconnects. |
 | `kitbot-periodic-update` | `true` | Sends periodic `$update` requests while building, deferred during restock. |
-| `kitbot-update-interval-minutes` | `30`, minimum `1`, slider `1-120` | Minutes between automatic updates; changing it restarts the countdown unless an update is pending after restock. |
+| `kitbot-update-interval-minutes` | `30`, range `30-60` | Minutes between automatic updates (minimum 30 so KitBot1 is not flooded). Changing it restarts the countdown unless an update is pending. The countdown uses real time and survives relogs; it only starts fresh after the builder was inactive for more than 10 minutes. |
 
 ### Highway Monitor Recovery
 
@@ -331,7 +331,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | --- | --- | --- | --- |
 | `kitbot-update-on-finish` | `true` | Always | Sends `$update` to KitBot1 with the current highway direction when the module finishes, waits for KitBot to teleport, then disconnects. |
 | `kitbot-periodic-update` | `true` | Always | Sends periodic `$update` requests to KitBot1 while building; delayed until restock completes. |
-| `kitbot-update-interval-minutes` | `30`, minimum `1`, slider `1-120` | `kitbot-periodic-update` is on | Minutes between automatic updates; changing it restarts the countdown unless an update is pending after restock. |
+| `kitbot-update-interval-minutes` | `30`, range `30-60` | `kitbot-periodic-update` is on | Minutes between automatic updates; real-time countdown that survives relogs. |
 
 ### THM-HighwayBuilder: Experimental
 

@@ -69,3 +69,6 @@
 
 - Vanilla 26.2 `ChunkMap.getPlayerViewDistance` clamps client requests to at least 2. `updateChunkTracking` skips an unchanged center/radius and diffs tracked chunks when they change. A client chunk-cache deletion does not request fresh server data; wait for server unload and replacement packets.
 - Fixed server send radii can retain the stalled chunk after a four-chunk retreat. Use `ClientPacketListener.serverChunkRadius` plus the tracking margin, and allow enough walking time. Unload and replacement packets can both arrive before a tick observes the chunk missing.
+
+- `ItemContainerContents.nonEmptyItems()` returns `ItemStackTemplate`s in 26.2. Use `nonEmptyItemCopyStream()` where code needs `ItemStack` methods such as `is`/`getCount`.
+- `ChunkPos` is a record in 26.2: its `x`/`z` fields are private, use `x()`/`z()`. `migrateMappings` does not rewrite these field accesses.

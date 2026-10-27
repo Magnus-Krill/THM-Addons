@@ -704,6 +704,16 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
+    public final Setting<Integer> handoffRepairFreeBlocks = sgAutoTravel.add(new IntSetting.Builder()
+        .name("handoff-repair-free-blocks")
+        .description("Blocks to travel without repairing anything before handing back to Highway Traveler.")
+        .defaultValue(32)
+        .min(0)
+        .sliderMax(256)
+        .visible(autoHandoffToTraveler::get)
+        .build()
+    );
+
     private final Setting<Rotation> rotation = sgGeneral.add(new EnumSetting.Builder<Rotation>()
         .name("rotation")
         .description("Mode of rotation.")
@@ -867,12 +877,13 @@ public class HighwayBuilderTHM extends Module {
         .name("kitbot-update-interval-minutes")
         .description("Minutes between automatic KitBot1 updates.")
         .defaultValue(30)
-        .min(1)
-        .sliderRange(1, 120)
+        .range(30, 60)
+        .sliderRange(30, 60)
         .visible(kitbotPeriodicUpdate::get)
         .onChanged(value -> {
-            if (isActive() && mc.level != null && !this.kitbotPeriodicUpdatePending) {
-                this.kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + value * 1200L;
+            // Restart the countdown so a changed interval takes effect right away.
+            if (isActive() && !this.kitbotPeriodicUpdatePending) {
+                this.kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + value * 60_000L;
             }
         })
         .build()
@@ -1892,7 +1903,9 @@ public class HighwayBuilderTHM extends Module {
     private long kitbotPeriodicUpdateStartTick;
     private boolean kitbotPeriodicUpdateTpAccepted;
     private boolean kitbotPeriodicUpdatePending;
-    private long kitbotPeriodicUpdateNextTick;
+    private long kitbotPeriodicUpdateNextAtMs;
+    private long kitbotLastActiveAtMs;
+    private static final long KITBOT_PERIODIC_UPDATE_FRESH_AFTER_MS = 10 * 60_000L;
     private boolean kitbotOrderInFlight;
     private boolean kitbotOrderFrontendSucceeded;
     private boolean kitbotEnclosureActive;
@@ -2992,7 +3005,14 @@ public class HighwayBuilderTHM extends Module {
         nextAdvertisementAtTick = 0L;
         kitbotPeriodicUpdateActive = false;
         kitbotPeriodicUpdatePending = false;
-        kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + kitbotUpdateIntervalMinutes.get() * 1200L;
+        // Keep the countdown across relogs (backup-server kicks re-run onActivate); only a long break starts it fresh.
+        long nowMs = System.currentTimeMillis();
+        if (kitbotPeriodicUpdateNextAtMs == 0L || nowMs - kitbotLastActiveAtMs > KITBOT_PERIODIC_UPDATE_FRESH_AFTER_MS) {
+            kitbotPeriodicUpdateNextAtMs = nowMs + kitbotPeriodicUpdateIntervalMs();
+        }
+        if (kitbotPeriodicUpdate.get()) {
+            info("Next KitBot1 $update in %d min.", Math.max(0L, (kitbotPeriodicUpdateNextAtMs - nowMs) / 60_000L));
+        }
         forwardSchedulerDebugFileErrorLogged = false;
         resetAdaptivePlacement();
         resetGhostBlockCheck();
@@ -3096,6 +3116,12 @@ public class HighwayBuilderTHM extends Module {
         travelHandoffDeactivateArmed = false;
         reconnectFailureDeactivateArmed = false;
         autoLogTerminalDeactivateArmed = false;
+        lastRepairWorkPos = null;
+        // A monitor pause resumes the same repair, so the Traveler handback stays requested through it.
+        if (!isMonitorPauseDeactivate) {
+            returnToTraveler = false;
+            returnToTravelerStopsAtEnd = false;
+        }
         if (isMonitorPauseDeactivate) {
             parkThmSpeedForReconnect("monitor-pause-deactivate");
         } else {
@@ -3635,24 +3661,55 @@ public class HighwayBuilderTHM extends Module {
      * tolerance lets the check ride out that bob instead of chasing it.
      */
     public boolean isHighwayAheadClean(HorizontalDirection travelDir, int maxSteps, int verticalTolerance) {
-        if (mc.player == null || travelDir == null) return false;
+        if (mc.player == null) return false;
+        BlockPos origin = new BlockPos(mc.player.getBlockX(), (int) Math.round(mc.player.getY()), mc.player.getBlockZ());
+        return firstBrokenStepAhead(travelDir, origin, maxSteps, verticalTolerance) == -1;
+    }
+
+    /**
+     * First step from 1 to {@code maxSteps} ahead of {@code origin} (lane centre at feet height) whose cross-section
+     * is broken, or -1 if all are healthy. Each step also accepts a healthy section within {@code verticalTolerance}.
+     */
+    public int firstBrokenStepAhead(HorizontalDirection travelDir, BlockPos origin, int maxSteps, int verticalTolerance) {
+        if (mc.level == null || travelDir == null || origin == null) return 1;
         boolean pavedProfile = THMSystem.get().mode.get() == THMSystem.Mode.HighwayBuilding;
-        int baseX = mc.player.getBlockX();
-        int baseY = (int) Math.round(mc.player.getY());
-        int baseZ = mc.player.getBlockZ();
 
         for (int step = 1; step <= maxSteps; step++) {
             boolean stepHealthy = false;
             for (int dy = -verticalTolerance; dy <= verticalTolerance; dy++) {
-                BlockPos origin = new BlockPos(baseX, baseY + dy, baseZ);
-                if (isCrossSectionHealthy(origin, travelDir, step, pavedProfile)) {
+                if (isCrossSectionHealthy(origin.offset(0, dy, 0), travelDir, step, pavedProfile)) {
                     stepHealthy = true;
                     break;
                 }
             }
-            if (!stepHealthy) return false;
+            if (!stepHealthy) return step;
+        }
+        return -1;
+    }
+
+    /** True if every cross-section from {@code fromStep} to {@code toStep} is healthy; negative steps lie behind. */
+    public boolean sectionsHealthy(HorizontalDirection travelDir, BlockPos origin, int fromStep, int toStep) {
+        if (mc.level == null || travelDir == null || origin == null) return false;
+        boolean pavedProfile = THMSystem.get().mode.get() == THMSystem.Mode.HighwayBuilding;
+        for (int step = fromStep; step <= toStep; step++) {
+            if (!isCrossSectionHealthy(origin, travelDir, step, pavedProfile)) return false;
         }
         return true;
+    }
+
+    /**
+     * True if any cross-section from {@code fromStep} to {@code toStep} ahead is healthy within the same
+     * {@code verticalTolerance} as {@link #firstBrokenStepAhead}: the highway goes on past a gap.
+     */
+    public boolean highwayContinuesAhead(HorizontalDirection travelDir, BlockPos origin, int fromStep, int toStep, int verticalTolerance) {
+        if (mc.level == null || travelDir == null || origin == null) return false;
+        boolean pavedProfile = THMSystem.get().mode.get() == THMSystem.Mode.HighwayBuilding;
+        for (int step = fromStep; step <= toStep; step++) {
+            for (int dy = -verticalTolerance; dy <= verticalTolerance; dy++) {
+                if (isCrossSectionHealthy(origin.offset(0, dy, 0), travelDir, step, pavedProfile)) return true;
+            }
+        }
+        return false;
     }
 
     private List<BlockPos> snapshotTemplate(MBPIterator iterator) {
@@ -3736,27 +3793,31 @@ public class HighwayBuilderTHM extends Module {
             return;
         }
 
-        if (mc.level.getGameTime() < kitbotPeriodicUpdateNextTick) return;
+        if (System.currentTimeMillis() < kitbotPeriodicUpdateNextAtMs) return;
 
         if (isRestockState(state)) {
             kitbotPeriodicUpdatePending = true;
-            kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + kitbotUpdateIntervalMinutes.get() * 1200L;
+            kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
             return;
         }
 
         sendKitbotPeriodicUpdate();
     }
 
+    private long kitbotPeriodicUpdateIntervalMs() {
+        return kitbotUpdateIntervalMinutes.get() * 60_000L;
+    }
+
     private void sendKitbotPeriodicUpdate() {
         if (!isOnOfficialHighway() || dir == null || mc.level == null) {
             kitbotPeriodicUpdatePending = false;
-            kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + kitbotUpdateIntervalMinutes.get() * 1200L;
+            kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
             return;
         }
         String kitbotDir = directionToKitbotCommand(dir);
         if (kitbotDir == null) {
             kitbotPeriodicUpdatePending = false;
-            kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + kitbotUpdateIntervalMinutes.get() * 1200L;
+            kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
             return;
         }
         ChatUtils.sendPlayerMsg("/msg KitBot1 $update " + kitbotDir);
@@ -3765,7 +3826,7 @@ public class HighwayBuilderTHM extends Module {
         kitbotPeriodicUpdateStartTick = mc.level.getGameTime();
         kitbotPeriodicUpdateTpAccepted = false;
         kitbotPeriodicUpdatePending = false;
-        kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + kitbotUpdateIntervalMinutes.get() * 1200L;
+        kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
     }
 
     private void buildKitbotUpdateEnclosure() {
@@ -5096,11 +5157,55 @@ public class HighwayBuilderTHM extends Module {
      * mc.player.input} unconditionally.
      */
     private boolean travelHandoffDeactivateArmed;
+    // Where the builder last mined or placed; null until the first tick after activation.
+    private BlockPos lastRepairWorkPos;
+    // Set when Highway Traveler hands over a repair, so the builder hands back even without auto-handoff-to-traveler.
+    private boolean returnToTraveler;
+    private boolean returnToTravelerStopsAtEnd;
+
+    // A repair for Highway Traveler looks only this far ahead, so a highway ending soon after the repair is not paved on.
+    private static final int TRAVELER_RETURN_SCAN = 16;
+
+    private int handbackCleanScan() {
+        return returnToTraveler ? Math.min(handoffCleanScanBlocks.get(), TRAVELER_RETURN_SCAN) : handoffCleanScanBlocks.get();
+    }
+
+    // How far past a gap the highway has to go on for the gap to be damage rather than its end.
+    private static final int HIGHWAY_END_CONFIRM_SCAN = 32;
+
+    /**
+     * True when a gap ahead has no highway behind it: the end of the highway, not damage. A repair for Highway
+     * Traveler then hands back so Traveler stops there, instead of the builder paving on past the end.
+     */
+    private boolean highwayEndsAhead() {
+        if (mc.player == null || dir == null) return false;
+        BlockPos origin = new BlockPos(mc.player.getBlockX(), (int) Math.round(mc.player.getY()), mc.player.getBlockZ());
+        int broken = firstBrokenStepAhead(dir, origin, handbackCleanScan(), 0);
+        // Step 1 broken means the builder is working right at it; only judge a gap that is still ahead.
+        return broken > 1 && !highwayContinuesAhead(dir, origin, broken + 1, broken + HIGHWAY_END_CONFIRM_SCAN, 0);
+    }
+
+    /**
+     * Starts the builder for a repair Highway Traveler found; it hands back once the highway is fine again. With
+     * {@code travelerStopsAtEnd} it also hands back before the highway's end; without it Traveler reads the end as
+     * damage, so handing back there would only bounce the repair between the two.
+     */
+    public void startRepairForTraveler(boolean travelerStopsAtEnd) {
+        returnToTraveler = true;
+        returnToTravelerStopsAtEnd = travelerStopsAtEnd;
+        if (!isActive()) toggle();
+    }
+
+    private double repairFreeDistance() {
+        if (lastRepairWorkPos == null || mc.player == null) return 0;
+        return Math.hypot(mc.player.getX() - (lastRepairWorkPos.getX() + 0.5), mc.player.getZ() - (lastRepairWorkPos.getZ() + 0.5));
+    }
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         tickPacketChoke();
         if (mc.player == null || mc.level == null) return;
+        kitbotLastActiveAtMs = System.currentTimeMillis();
         safetyPlacedThisTick = false;
 
         // ponytail: self-heal against whatever race leaves this owned outside MineEnderChests, instead of chasing it.
@@ -5258,10 +5363,15 @@ public class HighwayBuilderTHM extends Module {
         tickPacketBuildMainHandObby();
         boolean restockWatchdogOwnedTick = restockWatchdog.tickBeforeState();
         if (!restockWatchdogOwnedTick) {
-            if (autoHandoffToTraveler.get() && state == State.Forward
-                    && isHighwayAheadClean(dir, handoffCleanScanBlocks.get())) {
+            // Double mine and fall-save can already have worked this tick; that counts as repair work too.
+            boolean workedThisTick = count > 0 || safetyPlacedThisTick;
+            if (workedThisTick || lastRepairWorkPos == null) lastRepairWorkPos = mc.player.blockPosition();
+            if (!workedThisTick && (autoHandoffToTraveler.get() || returnToTraveler) && state == State.Forward
+                    && (repairFreeDistance() >= handoffRepairFreeBlocks.get() && isHighwayAheadClean(dir, handbackCleanScan())
+                        || returnToTraveler && returnToTravelerStopsAtEnd && highwayEndsAhead())) {
                 HighwayTraveler traveler = Modules.get().get(HighwayTraveler.class);
                 if (traveler != null) {
+                    lastRepairWorkPos = null;
                     travelHandoffDeactivateArmed = true;
                     toggle();
                     if (!traveler.isActive()) traveler.toggle();
@@ -5276,6 +5386,8 @@ public class HighwayBuilderTHM extends Module {
                 mc.player.isCreative()
             );
             state.tick(this);
+            // Any mined or placed block this tick counts as repair work and restarts the repair-free distance.
+            if (count > 0) lastRepairWorkPos = mc.player.blockPosition();
             restockWatchdog.tickAfterState();
         } else {
             if (debugLog.get()) tickDebug("idle: restock watchdog owns the tick (restock=%s)", restockTask.activeSummary());
@@ -6268,7 +6380,7 @@ public class HighwayBuilderTHM extends Module {
         }
 
         if (state == State.Forward && isRestockState(previousState) && kitbotPeriodicUpdatePending && kitbotPeriodicUpdate.get()) {
-            kitbotPeriodicUpdateNextTick = mc.level.getGameTime() + 600; // 30s after returning to Forward
+            kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + 30_000L; // 30s after returning to Forward
         }
 
         if (shouldLogRestockStateTransition(previousState, state, lastState)) {
