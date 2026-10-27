@@ -11,6 +11,7 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.phys.Vec3;
 import meteordevelopment.meteorclient.utils.misc.HorizontalDirection;
 import org.junit.jupiter.api.Test;
+import xyz.thm.addon.system.THMSystem;
 
 import java.util.Arrays;
 import java.util.HashSet;
@@ -20,6 +21,13 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 class HighwayBuilderTHMTest {
+    @Test
+    void apiProfileModeIsOptionalForLegacyCompatibility() {
+        assertEquals(":pave", HighwayBuilderTHM.apiModeSuffix(THMSystem.Mode.HighwayBuilding));
+        assertEquals(":dig", HighwayBuilderTHM.apiModeSuffix(THMSystem.Mode.HighwayDigging));
+        assertEquals("", HighwayBuilderTHM.apiModeSuffix(THMSystem.Mode.None));
+    }
+
     @Test
     void adventureBackupVisitPreservesTheMainServerCheckpoint() {
         var mainPosition = new Vec3(100000, 120, -100000);

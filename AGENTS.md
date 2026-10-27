@@ -153,7 +153,7 @@ addon-specific settings screen — don't confuse the two when adding a new modul
 
 **Screenshot clipboard:** Windows writes CF_DIB directly through Minecraft’s bundled JNA, using the game window as owner and retrying clipboard locks. Keep Linux clipboard tools Linux-only and preserve AWT errors if their fallback also fails.
 
-**Highway status:** Append `:pave` for HighwayBuilding or `:dig` for HighwayDigging to the six-field status payload. None omits the suffix. Send on startup, profile changes and every five minutes; Kitbot reuses fresh confirmations for same-direction PoW. Keep the PoW payload unchanged.
+**Highway status and PoW:** Append `:pave` for HighwayBuilding or `:dig` for HighwayDigging to status and PoW payloads, including off-main PoW. None omits the suffix. Send status on startup, profile changes and every five minutes. Kitbot validates the selected mode's block-to-distance floor; legacy PoW uses fresh status confirmation or estimation.
 
 **Better Baritone Build:** `BetterBaritoneBuild` indexes opened chests, barrels, and placed shulkers per world/dimension.
 `BaritoneBuilderMixin` captures missing materials directly; a temporary process fetches them without cancelling the build.

@@ -2648,11 +2648,7 @@ public class HighwayBuilderTHM extends Module {
         String playerName = mc.player.getName().tryCollapseToString();
         String axis = dir.toString();
 
-        String mode = switch (THMSystem.get().getMode()) {
-            case HighwayBuilding -> ":pave";
-            case HighwayDigging -> ":dig";
-            case None -> "";
-        };
+        String mode = apiModeSuffix(THMSystem.get().getMode());
         String statusMessage = String.format("%s:%s:%s:%d:%d:%s%s",
             THMSystem.get().getApiToken(),
             playerName,
@@ -2664,6 +2660,14 @@ public class HighwayBuilderTHM extends Module {
         );
 
         sendStatus(statusMessage);
+    }
+
+    static String apiModeSuffix(THMSystem.Mode mode) {
+        return switch (mode) {
+            case HighwayBuilding -> ":pave";
+            case HighwayDigging -> ":dig";
+            case None -> "";
+        };
     }
 
     private ServerState getCommittedServerState() {
@@ -11047,7 +11051,7 @@ public class HighwayBuilderTHM extends Module {
                         );
                         if (committed != null) {
                             String server = mc.getCurrentServer() != null ? mc.getCurrentServer().ip : "singleplayer";
-                            String statsMessageapi = String.format("%s:%s:%s:%.0f:%s:%s:%s:%s:%s",
+                            String statsMessageapi = String.format("%s:%s:%s:%.0f:%s:%s:%s:%s:%s%s",
                                 THMSystem.get().getApiToken(),
                                 playerName,
                                 server,
@@ -11056,7 +11060,8 @@ public class HighwayBuilderTHM extends Module {
                                 report.blocksPlaced(),
                                 dir,
                                 generateTimestamp(),
-                                manualPause != null ? manualPause.mainHighway() : isOnMainHighway()
+                                manualPause != null ? manualPause.mainHighway() : isOnMainHighway(),
+                                apiModeSuffix(THMSystem.get().getMode())
                             );
                             sendStatistics(statsMessageapi);
                             working = committed;

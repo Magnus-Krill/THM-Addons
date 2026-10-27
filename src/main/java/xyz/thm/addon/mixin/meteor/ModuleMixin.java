@@ -29,7 +29,7 @@ public abstract class ModuleMixin {
     }
 
     @Unique
-    static CompoundTag thm$migrateOffhandFilter(CompoundTag source) {
+    private static CompoundTag thm$migrateOffhandFilter(CompoundTag source) {
         boolean hasLegacy = false;
         for (var entry : source.getCompoundOrEmpty("settings").getListOrEmpty("groups")) {
             if (!(entry instanceof CompoundTag group)) continue;
