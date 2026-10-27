@@ -1486,9 +1486,9 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
-    public final Setting<Boolean> hotbarmanager = sgInventory.add(new BoolSetting.Builder()
+    public final Setting<Boolean> manageHotbar = sgInventory.add(new BoolSetting.Builder()
         .name("Manage-hotbar")
-        .description("Automatically sorts the Hotbar.")
+        .description("Keeps highway supplies ready in the hotbar.")
         .defaultValue(true)
         .build()
     );
@@ -1895,7 +1895,7 @@ public class HighwayBuilderTHM extends Module {
     private final ForwardSchedulerRuntime forwardSchedulerRuntime = new ForwardSchedulerRuntime();
     private int invalidRestockRecoveryRetries;
     private boolean invalidRestockRecoveryPending;
-    private boolean hotbarManagerPausedForTrash;
+    private int hotbarSortTicks;
     private boolean kitbotUpdateOnFinishActive;
     private long kitbotUpdateOnFinishStartTick;
     private boolean kitbotUpdateOnFinishTpAccepted;
@@ -3067,8 +3067,7 @@ public class HighwayBuilderTHM extends Module {
                 perspectiveChanged = true;
             }
         }
-        if (!Modules.get().get(HotbarManager.class).isActive() && hotbarmanager.get()) { Modules.get().get(HotbarManager.class).toggle();}
-        validateManagedHotbarReserveSlots();
+        hotbarSortTicks = 0;
         if (!Modules.get().get(AntiDrop.class).isActive() && antidrop.get()) { Modules.get().get(AntiDrop.class).toggle();}
         enableAntiHungerIfNeeded();
         syncManagedSpeedMineOwnership();
@@ -3087,7 +3086,6 @@ public class HighwayBuilderTHM extends Module {
         restoreSpeedmineAutoRebreak();
         KitbotFrontend.removeLifecycleListener(kitbotRestockLifecycleListener);
         if (input != null) input.stop();
-        restoreHotbarManagerAfterTrash("module-deactivate");
         clearDesyncWiggleProbe("module-deactivate");
         clearMainServerResumeGate();
         resetEatingPauseWatchdog();
@@ -3184,7 +3182,6 @@ public class HighwayBuilderTHM extends Module {
             mc.options.setCameraType(previousPerspective);
             perspectiveChanged = false;
         }
-        if (Modules.get().get(HotbarManager.class).isActive() && hotbarmanager.get()) { Modules.get().get(HotbarManager.class).toggle();}
         if (Modules.get().get(AntiDrop.class).isActive() && antidrop.get()) { Modules.get().get(AntiDrop.class).toggle();}
         restoreAntiHunger();
         if (disabledAutoTotem) { // no-swap-loadout no longer owns the offhand; give AutoTotem back
@@ -5359,6 +5356,7 @@ public class HighwayBuilderTHM extends Module {
         maybeQueuePickaxeRestock();
         maybeQueueEnderChestReserveRestock();
         maybeQueueFoodRestock();
+        tickHotbarSupplies();
         tickNoSwapLoadout();
         tickPacketBuildMainHandObby();
         boolean restockWatchdogOwnedTick = restockWatchdog.tickBeforeState();
@@ -6328,9 +6326,6 @@ public class HighwayBuilderTHM extends Module {
         }
         if (previousState == State.MineEnderChests && state != State.MineEnderChests) {
             restoreEChestBreakSpeedIfOwned("echest-exit:" + stateName(state));
-        }
-        if (previousState == State.ThrowOutTrash && state != State.ThrowOutTrash) {
-            restoreHotbarManagerAfterTrash("throw-out-trash-exit:" + stateName(state));
         }
         if (previousState == State.KitbotOrder && state != State.KitbotOrder) {
             clearKitbotCenteringRuntime("kitbot-order-exit:" + stateName(state));
@@ -8172,8 +8167,8 @@ public class HighwayBuilderTHM extends Module {
     private int findOffhandSupplySlot(Predicate<ItemStack> predicate) {
         return selectOffhandSupplySlot(36, i -> {
             ItemStack stack = mc.player.getInventory().getItem(i);
-            return predicate.test(stack) && (!isHotbarSlotReservedByManager(i) || stack.getCount() > 1);
-        }, this::isHotbarSlotReservedByManager);
+            return predicate.test(stack) && (!isHotbarSlotReserved(i) || stack.getCount() > 1);
+        }, this::isHotbarSlotReserved);
     }
 
     static int selectOffhandSupplySlot(int size, IntPredicate matches, IntPredicate reserved) {
@@ -8193,7 +8188,7 @@ public class HighwayBuilderTHM extends Module {
         int reserve = wantsEnderChestOffhand() && source.is(Items.ENDER_CHEST) ? saveEchests.get() : 0;
         int otherChests = reserve > 0 ? countLooseInventoryEnderChests() - source.getCount()
             - (offhandHoldsEnderChest() ? mc.player.getOffhandItem().getCount() : 0) : 0;
-        int keep = offhandSupplyReserve(otherChests, reserve, isHotbarSlotReservedByManager(slot));
+        int keep = offhandSupplyReserve(otherChests, reserve, isHotbarSlotReserved(slot));
         if (keep == 0) return moveLoadoutToOffhand(slot);
         if (source.getCount() <= keep) return false;
         if (mc.player.containerMenu != mc.player.inventoryMenu || !mc.player.containerMenu.getCarried().isEmpty()) return false;
@@ -8223,11 +8218,11 @@ public class HighwayBuilderTHM extends Module {
         int outside = countLooseInventoryEnderChests() - mc.player.getOffhandItem().getCount();
         if (outside >= reserve) return true;
         if (mc.player.containerMenu != mc.player.inventoryMenu || !mc.player.containerMenu.getCarried().isEmpty()) return false;
-        int destination = getPreferredManagedHotbarSlot(Items.ENDER_CHEST);
+        int destination = getPreferredHotbarSlot(Items.ENDER_CHEST);
         if (destination == -1 || !canReceiveOffhandChest(destination)) {
             destination = -1;
             for (int i = 0; i < 36; i++) {
-                if (canReceiveOffhandChest(i) && !isHotbarSlotReservedByManager(i)) {
+                if (canReceiveOffhandChest(i) && !isHotbarSlotReserved(i)) {
                     destination = i;
                     break;
                 }
@@ -8377,12 +8372,17 @@ public class HighwayBuilderTHM extends Module {
         if (obby.found() && obby.isHotbar()) InvUtils.swap(obby.slot(), false);
     }
 
+    private boolean isUsableHighwayPickaxe(ItemStack stack) {
+        if (wantsEnderChestOffhand()) return passesEChestMiningPickaxeGuard(stack);
+        return stack.is(ItemTags.PICKAXES) && (!dontBreakTools.get()
+            || stack.getMaxDamage() - stack.getDamageValue() > stack.getMaxDamage() * (breakDurability.get() / 100.0));
+    }
+
     private void ensurePickaxeInMainHand() {
-        Predicate<ItemStack> usable = wantsEnderChestOffhand()
-            ? this::passesEChestMiningPickaxeGuard : s -> s.is(ItemTags.PICKAXES);
+        Predicate<ItemStack> usable = this::isUsableHighwayPickaxe;
         int sel = mc.player.getInventory().getSelectedSlot();
         if (usable.test(mc.player.getInventory().getItem(sel))) {
-            int preferred = getPreferredManagedHotbarSlot(mc.player.getInventory().getItem(sel).getItem());
+            int preferred = getPreferredHotbarSlot(mc.player.getInventory().getItem(sel).getItem());
             if (preferred != -1 && preferred != sel && State.Forward.swapInventoryToHotbar(this, sel, preferred)) {
                 InvUtils.swap(preferred, false);
             }
@@ -12284,39 +12284,8 @@ public class HighwayBuilderTHM extends Module {
         return false;
     }
 
-    private boolean isHotbarSlotReservedByManager(int hotbarSlot) {
-        if (hotbarSlot < 0 || hotbarSlot >= 9) return false;
-
-        HotbarManager manager = Modules.get().get(HotbarManager.class);
-        return manager != null && (manager.isActive() || hotbarManagerPausedForTrash) && manager.managesSlot(hotbarSlot);
-    }
-
-    private boolean isHotbarSlotConfiguredByManager(int hotbarSlot) {
-        if (hotbarSlot < 0 || hotbarSlot >= 9) return false;
-
-        HotbarManager manager = Modules.get().get(HotbarManager.class);
-        return manager != null && (manager.isActive() || hotbarManagerPausedForTrash) && manager.managesSlot(hotbarSlot);
-    }
-
-    private boolean disableHotbarManagerForTrash(String reason) {
-        HotbarManager manager = Modules.get().get(HotbarManager.class);
-        if (manager == null || !manager.isActive()) return false;
-
-        manager.toggle();
-        hotbarManagerPausedForTrash = true;
-        if (restockDebugLog.get()) restockDebug("ThrowOutTrash paused HotbarManager (%s).", reason);
-        return true;
-    }
-
-    private void restoreHotbarManagerAfterTrash(String reason) {
-        if (!hotbarManagerPausedForTrash) return;
-        hotbarManagerPausedForTrash = false;
-
-        HotbarManager manager = Modules.get().get(HotbarManager.class);
-        if (manager == null || manager.isActive()) return;
-
-        manager.toggle();
-        if (restockDebugLog.get()) restockDebug("ThrowOutTrash restored HotbarManager (%s).", reason);
+    private boolean isHotbarSlotReserved(int hotbarSlot) {
+        return manageHotbar.get() && hotbarSlot >= 4 && hotbarSlot <= 8;
     }
 
     private void syncFoodManagementOnActivate() {
@@ -12345,115 +12314,56 @@ public class HighwayBuilderTHM extends Module {
         }
     }
 
-    private void validateManagedHotbarReserveSlots() {
-        if (!hotbarmanager.get()) return;
-
-        HotbarManager manager = Modules.get().get(HotbarManager.class);
-        if (manager == null || !manager.isActive()) return;
-
-        if (!hasManagedHotbarItem(manager, Items.ENDER_CHEST)) {
-            warning("Hotbar Manager reserve warning: no managed ender chest slot is configured.");
+    private int getPreferredHotbarSlot(Item item) {
+        if (!manageHotbar.get() || item == null || item == Items.AIR) return -1;
+        if (BuiltInRegistries.ITEM.wrapAsHolder(item).is(ItemTags.PICKAXES)) return 7;
+        if (isConfiguredFoodItem(item)) return 4;
+        if (item == Items.ENDER_CHEST) return 6;
+        if (item instanceof BlockItem blockItem) {
+            if (blocksToPlace.get().contains(blockItem.getBlock())) return 8;
+            if (isDroppableTrashItem(item)) return 5;
         }
-
-        if (!hasManagedHighwayPickaxeSlot(manager)) {
-            warning("Hotbar Manager reserve warning: no managed diamond or netherite pickaxe slot is configured.");
-        } else if (hasInvalidLiveManagedHighwayPickaxe(manager)) {
-            warning("Hotbar Manager reserve warning: the live managed pickaxe has Silk Touch or does not pass the durability guard.");
-        }
-
-        if (foodManagement.get() != FoodManagement.None) {
-            if (!hasConfiguredFoodTypes()) {
-                warning("Hotbar Manager reserve warning: Food Management is enabled but no food type is configured.");
-            } else if (!hasManagedConfiguredFoodSlot(manager)) {
-                warning("Hotbar Manager reserve warning: no managed slot matches the configured food type.");
-            }
-        }
-
-        if (blocksToPlace.get().contains(Blocks.NETHERRACK)) {
-            if (!hasManagedHotbarItem(manager, Items.NETHERRACK)) {
-                warning("Hotbar Manager reserve warning: digging with netherrack requires a managed netherrack reserve slot.");
-            }
-        } else {
-            if (!hasManagedHotbarItem(manager, Items.NETHERRACK)) {
-                warning("Hotbar Manager reserve warning: paving requires a managed netherrack reserve slot.");
-            }
-            if (!hasManagedHotbarItem(manager, Items.OBSIDIAN)) {
-                warning("Hotbar Manager reserve warning: paving requires a managed obsidian reserve slot.");
-            }
-        }
-    }
-
-    private boolean hasManagedHotbarItem(HotbarManager manager, Item item) {
-        if (manager == null || item == null || item == Items.AIR) return false;
-
-        for (int i = 0; i < 9; i++) {
-            if (manager.managesSlot(i) && manager.getManagedItem(i) == item) return true;
-        }
-
-        return false;
-    }
-
-    private boolean hasManagedConfiguredFoodSlot(HotbarManager manager) {
-        if (manager == null || !hasConfiguredFoodTypes()) return false;
-
-        for (int i = 0; i < 9; i++) {
-            if (manager.managesSlot(i) && isConfiguredFoodItem(manager.getManagedItem(i))) return true;
-        }
-
-        return false;
-    }
-
-    private boolean isManagedHighwayPickaxeItem(Item item) {
-        return item == Items.DIAMOND_PICKAXE || item == Items.NETHERITE_PICKAXE;
-    }
-
-    private boolean hasManagedHighwayPickaxeSlot(HotbarManager manager) {
-        if (manager == null) return false;
-
-        for (int i = 0; i < 9; i++) {
-            if (manager.managesSlot(i) && isManagedHighwayPickaxeItem(manager.getManagedItem(i))) return true;
-        }
-
-        return false;
-    }
-
-    private boolean hasInvalidLiveManagedHighwayPickaxe(HotbarManager manager) {
-        if (manager == null || mc.player == null) return false;
-
-        boolean invalidLiveStack = false;
-        for (int i = 0; i < 9; i++) {
-            if (!manager.managesSlot(i)) continue;
-
-            Item configuredItem = manager.getManagedItem(i);
-            if (!isManagedHighwayPickaxeItem(configuredItem)) continue;
-
-            ItemStack stack = mc.player.getInventory().getItem(i);
-            if (stack.isEmpty() || stack.getItem() != configuredItem) return false;
-            if (passesEChestMiningPickaxeGuard(stack)) return false;
-
-            invalidLiveStack = true;
-        }
-
-        return invalidLiveStack;
-    }
-
-    private Item getReservedHotbarItem(int hotbarSlot) {
-        HotbarManager manager = Modules.get().get(HotbarManager.class);
-        if (manager == null) return Items.AIR;
-        return manager.getManagedItem(hotbarSlot);
-    }
-
-    private int getPreferredManagedHotbarSlot(Item item) {
-        if (item == null || item == Items.AIR) return -1;
-
-        HotbarManager manager = Modules.get().get(HotbarManager.class);
-        if (manager == null || (!manager.isActive() && !hotbarManagerPausedForTrash)) return -1;
-
-        for (int i = 0; i < 9; i++) {
-            if (manager.managesSlot(i) && manager.getManagedItem(i) == item) return i;
-        }
-
         return -1;
+    }
+
+    private void tickHotbarSupplies() {
+        if (!manageHotbar.get() || ownsRestockInventory() || mc.player.isUsingItem()
+            || mc.player.containerMenu != mc.player.inventoryMenu
+            || !mc.player.containerMenu.getCarried().isEmpty()) return;
+        if (hotbarSortTicks > 0) {
+            hotbarSortTicks--;
+            return;
+        }
+
+        for (int target = 4; target <= 8; target++) {
+            int hotbarSlot = target;
+            int source = selectHotbarSupplySlot(36, target, i -> {
+                ItemStack stack = mc.player.getInventory().getItem(i);
+                if (stack.isEmpty() || getPreferredHotbarSlot(stack.getItem()) != hotbarSlot) return false;
+                if (hotbarSlot == 5) return isStableFullTrashBlockStack(stack);
+                if (hotbarSlot == 7) return isUsableHighwayPickaxe(stack);
+                return true;
+            });
+            if (source == -1 || source == target) continue;
+            if (State.Forward.swapInventoryToHotbar(this, source, target)) {
+                hotbarSortTicks = Math.max(inventoryDelay.get(), 1);
+                return;
+            }
+        }
+    }
+
+    static int selectHotbarSupplySlot(int size, int target, IntPredicate matches) {
+        if (matches.test(target)) return target;
+        return selectOffhandSupplySlot(size, matches, i -> false);
+    }
+
+    static Set<Integer> selectTrashKeepSlots(int size, int budget, IntPredicate eligible, Comparator<Integer> preference) {
+        List<Integer> slots = new ArrayList<>();
+        for (int i = 0; i < size; i++) {
+            if (eligible.test(i)) slots.add(i);
+        }
+        slots.sort(preference);
+        return new HashSet<>(slots.subList(0, Math.min(Math.max(budget, 0), slots.size())));
     }
 
     private boolean isForwardPlaceableBlock(ItemStack stack) {
@@ -12497,7 +12407,7 @@ public class HighwayBuilderTHM extends Module {
 
         if (emptySlot == -1) {
             for (int i = 0; i < 9; i++) {
-                if (avoidReservedHotbarSlots && isHotbarSlotReservedByManager(i)) continue;
+                if (avoidReservedHotbarSlots && isHotbarSlotReserved(i)) continue;
                 if (mc.player.getInventory().getItem(i).isEmpty()) {
                     emptySlot = i;
                     break;
@@ -14946,12 +14856,11 @@ public class HighwayBuilderTHM extends Module {
 
             @Override
             protected void start(HighwayBuilderTHM b) {
-                boolean pausedHotbarManager = b.disableHotbarManagerForTrash("throw-out-trash-start");
                 keepSlots.clear();
                 skippedDropSlots.clear();
                 firstTick = true;
                 completionDelayStarted = false;
-                timer = pausedHotbarManager ? Math.max(1, b.inventoryDelay.get()) : 0;
+                timer = Math.max(1, b.inventoryDelay.get());
                 clearFailedDropState();
                 failedRotationRetries = 0;
                 cachedPreRotateYaw = b.mc.player.getYRot();
@@ -15118,7 +15027,6 @@ public class HighwayBuilderTHM extends Module {
             private int findTrashSwapSlot(HighwayBuilderTHM b, boolean allowProtectedTrash) {
                 refreshProtectedTrashSlots(b);
                 for (int i = 0; i < b.mc.player.getInventory().getNonEquipmentItems().size(); i++) {
-                    if (isManagedHotbarTrashSlot(b, i)) continue;
                     ItemStack itemStack = b.mc.player.getInventory().getItem(i);
                     if (!isEligibleTrashReserveStack(b, itemStack)) continue;
                     if (!allowProtectedTrash && keepSlots.contains(i)) continue;
@@ -15130,20 +15038,10 @@ public class HighwayBuilderTHM extends Module {
 
             private void refreshProtectedTrashSlots(HighwayBuilderTHM b) {
                 keepSlots.clear();
-
-                List<Integer> trashBlockSlots = new ArrayList<>();
-                for (int i = 0; i < b.mc.player.getInventory().getNonEquipmentItems().size(); i++) {
-                    if (isManagedHotbarTrashSlot(b, i)) continue;
-                    ItemStack itemStack = b.mc.player.getInventory().getItem(i);
-                    if (!isEligibleTrashReserveStack(b, itemStack)) continue;
-                    trashBlockSlots.add(i);
-                }
-
-                trashBlockSlots.sort(b::compareTrashBlockPreferenceSlots);
-
-                int keepBudget = Math.max(b.keepTrashBlockStacks.get(), 0);
-                int keepCount = Math.min(keepBudget, trashBlockSlots.size());
-                for (int i = 0; i < keepCount; i++) keepSlots.add(trashBlockSlots.get(i));
+                keepSlots.addAll(selectTrashKeepSlots(b.mc.player.getInventory().getNonEquipmentItems().size(),
+                    b.keepTrashBlockStacks.get(),
+                    i -> isEligibleTrashReserveStack(b, b.mc.player.getInventory().getItem(i)),
+                    b::compareTrashBlockPreferenceSlots));
             }
 
             private boolean dropDirectTrashBatch(HighwayBuilderTHM b) {
@@ -15163,11 +15061,6 @@ public class HighwayBuilderTHM extends Module {
                             && !isProtectedShulkerForTrash(b, itemStack);
                         boolean droppableTrashItem = b.isDroppableTrashStack(itemStack);
                         if (!droppableShulker && !droppableTrashItem) continue;
-
-                        if (isManagedHotbarTrashSlot(b, i)) {
-                            blockedThisPass = true;
-                            continue;
-                        }
 
                         if (isSkippedDropSlot(i, itemStack)) {
                             blockedThisPass = true;
@@ -15223,10 +15116,6 @@ public class HighwayBuilderTHM extends Module {
                 }
 
                 return false;
-            }
-
-            private boolean isManagedHotbarTrashSlot(HighwayBuilderTHM b, int slot) {
-                return slot >= 0 && slot < 9 && b.isHotbarSlotConfiguredByManager(slot);
             }
 
             private boolean isSkippedDropSlot(int slot, ItemStack itemStack) {
@@ -15397,10 +15286,8 @@ public class HighwayBuilderTHM extends Module {
                     b.restockTask.markCurrentSourceExhausted(RestockTask.SourcePhase.MineEnderChests);
                     if (b.restockTask.isCurrentTaskSuccessful()) {
                         completeAndReturnToAnchor(b);
-                    } else if (b.canUseKitbotForActiveRestock() && b.restockTask.shouldAttemptKitbotAfterMineEnderChests()) {
-                        b.enterKitbotRestockWithAvailabilityGate("MineEnderChests exhausted; trying KitBot restock.", true);
                     } else {
-                        b.error("No usable ender chests available to continue obsidian restock.");
+                        b.setState(Restock, Restock);
                     }
                     return;
                 }
@@ -17007,7 +16894,7 @@ public class HighwayBuilderTHM extends Module {
 
                 if (session.isMineEnderChestsExhausted()) {
                     int usableLooseEchests = countUsableLooseInventoryEnderChests(b);
-                    if (shouldMineEnderChestsForMaterials(b) && usableLooseEchests > 0) {
+                    if (shouldMineEnderChestsForMaterials(b) && usableLooseEchests > session.mineEnderChestsExhaustedStock) {
                         b.restockTask.reopenSourcePhase(RestockTask.SourcePhase.MineEnderChests);
                         if (b.restockDebugLog.get()) {
                             b.restockDebug("Restock.start reopened MineEnderChests because usable loose ender chest supply changed (usableLooseEchests=%d).",
@@ -17651,7 +17538,7 @@ public class HighwayBuilderTHM extends Module {
                 if (inventorySlot < 9) return inventorySlot;
 
                 ItemStack inventoryStack = b.mc.player.getInventory().getItem(inventorySlot);
-                int hotbarSlot = b.getPreferredManagedHotbarSlot(inventoryStack.getItem());
+                int hotbarSlot = b.getPreferredHotbarSlot(inventoryStack.getItem());
                 if (hotbarSlot == -1) {
                     hotbarSlot = findHotbarSlot(b, false, failHardNoHotbar);
                 }
@@ -17841,9 +17728,8 @@ public class HighwayBuilderTHM extends Module {
             }
 
             private boolean canMineEnderChestsForObsidian(HighwayBuilderTHM b) {
-                return isObsidianRestockTask(b)
-                    && b.mineEnderChests.get()
-                    && (b.restockTask.getSession() == null || !b.restockTask.getSession().isMineEnderChestsExhausted());
+                // Exhausted loose stock does not invalidate the e-chests still inside shulkers.
+                return isObsidianRestockTask(b) && b.mineEnderChests.get();
             }
 
             private int countUsableLooseInventoryEnderChests(HighwayBuilderTHM b) {
@@ -18920,12 +18806,9 @@ public class HighwayBuilderTHM extends Module {
             // Loop hotbar
             for (int i = 0; i < 9; i++) {
                 ItemStack itemStack = b.mc.player.getInventory().getItem(i);
-                if (b.isHotbarSlotReservedByManager(i)) {
+                if (b.isHotbarSlotReserved(i)) {
                     if (b.restockDebugLog.get()) {
-                        b.restockDebug("findHotbarSlot skipping reserved hotbar slot %d for HotbarManager item %s.",
-                            i,
-                            b.getReservedHotbarItem(i)
-                        );
+                        b.restockDebug("findHotbarSlot skipping highway supply slot %d.", i);
                     }
                     continue;
                 }
@@ -18992,7 +18875,7 @@ public class HighwayBuilderTHM extends Module {
             // Check hotbar
             int slot = findSlot(b, predicate, true);
             if (slot != -1) {
-                int preferred = b.getPreferredManagedHotbarSlot(b.mc.player.getInventory().getItem(slot).getItem());
+                int preferred = b.getPreferredHotbarSlot(b.mc.player.getInventory().getItem(slot).getItem());
                 if (preferred != -1 && preferred != slot) {
                     if (!swapInventoryToHotbar(b, slot, preferred)) return -1;
                     slot = preferred;
@@ -19017,10 +18900,10 @@ public class HighwayBuilderTHM extends Module {
             }
 
             ItemStack inventoryStack = b.mc.player.getInventory().getItem(slot);
-            int hotbarSlot = b.getPreferredManagedHotbarSlot(inventoryStack.getItem());
+            int hotbarSlot = b.getPreferredHotbarSlot(inventoryStack.getItem());
             if (hotbarSlot != -1) {
                 if (b.restockDebugLog.get()) {
-                    b.restockDebug("findAndMoveToHotbar using HotbarManager slot %d for managed item %s.", hotbarSlot, inventoryStack.getItem());
+                    b.restockDebug("findAndMoveToHotbar using highway supply slot %d for managed item %s.", hotbarSlot, inventoryStack.getItem());
                 }
             } else {
                 hotbarSlot = findHotbarSlot(b, false, failHardNoHotbar);
@@ -19044,10 +18927,10 @@ public class HighwayBuilderTHM extends Module {
             ItemStack cursorStack = b.mc.player.containerMenu.getCarried();
             if (cursorStack.isEmpty() || !predicate.test(cursorStack)) return -1;
 
-            int hotbarSlot = b.getPreferredManagedHotbarSlot(cursorStack.getItem());
+            int hotbarSlot = b.getPreferredHotbarSlot(cursorStack.getItem());
             if (hotbarSlot != -1) {
                 if (b.restockDebugLog.get()) {
-                    b.restockDebug("findAndMoveToHotbar using HotbarManager slot %d for cursor item %s.", hotbarSlot, cursorStack.getItem());
+                    b.restockDebug("findAndMoveToHotbar using highway supply slot %d for cursor item %s.", hotbarSlot, cursorStack.getItem());
                 }
             } else {
                 hotbarSlot = findHotbarSlot(b, false, failHardNoHotbar);
@@ -19079,10 +18962,10 @@ public class HighwayBuilderTHM extends Module {
             if (slot < 9) return slot;
 
             ItemStack inventoryStack = b.mc.player.getInventory().getItem(slot);
-            int hotbarSlot = b.getPreferredManagedHotbarSlot(inventoryStack.getItem());
+            int hotbarSlot = b.getPreferredHotbarSlot(inventoryStack.getItem());
             if (hotbarSlot != -1) {
                 if (b.restockDebugLog.get()) {
-                    b.restockDebug("findPreferredTrashBlockToHotbar using HotbarManager slot %d for preferred trash block %s.",
+                    b.restockDebug("findPreferredTrashBlockToHotbar using highway supply slot %d for preferred trash block %s.",
                         hotbarSlot,
                         inventoryStack.getItem()
                     );
@@ -19141,11 +19024,11 @@ public class HighwayBuilderTHM extends Module {
                 }
             }
 
-            int hotbarSlot = b.getPreferredManagedHotbarSlot(bestStack.getItem());
+            int hotbarSlot = b.getPreferredHotbarSlot(bestStack.getItem());
             if (bestSlot < 9 && (hotbarSlot == -1 || hotbarSlot == bestSlot)) return bestSlot;
             if (hotbarSlot != -1) {
                 if (b.restockDebugLog.get()) {
-                    b.restockDebug("findAndMoveBestToolToHotbar using HotbarManager slot %d for managed item %s.",
+                    b.restockDebug("findAndMoveBestToolToHotbar using highway supply slot %d for managed item %s.",
                         hotbarSlot,
                         bestStack.getItem()
                     );
@@ -20717,6 +20600,7 @@ public class HighwayBuilderTHM extends Module {
             private boolean inventoryShulkersExhausted;
             private boolean enderChestExhausted;
             private boolean mineEnderChestsExhausted;
+            private int mineEnderChestsExhaustedStock;
             private boolean madeInventoryShulkerForwardProgressThisSession;
             private boolean madeEnderChestForwardProgressThisSession;
             private boolean triedInventoryLocal;
@@ -21183,7 +21067,10 @@ public class HighwayBuilderTHM extends Module {
                         enderChestExhausted = true;
                         triedEnderChestBank = true;
                     }
-                    case MineEnderChests -> mineEnderChestsExhausted = true;
+                    case MineEnderChests -> {
+                        mineEnderChestsExhausted = true;
+                        mineEnderChestsExhaustedStock = Math.max(b.countLooseInventoryEnderChests() - saveEchestsReserve, 0);
+                    }
                     default -> { }
                 }
             }
@@ -21311,10 +21198,6 @@ public class HighwayBuilderTHM extends Module {
             }
 
             private boolean shouldAttemptKitbot() {
-                return !isTaskSuccessful() && !triedKitbot;
-            }
-
-            private boolean shouldAttemptKitbotAfterMineEnderChests() {
                 return !isTaskSuccessful() && !triedKitbot;
             }
 
@@ -21878,10 +21761,6 @@ public class HighwayBuilderTHM extends Module {
 
         public boolean shouldAttemptKitbot() {
             return session != null && session.shouldAttemptKitbot();
-        }
-
-        public boolean shouldAttemptKitbotAfterMineEnderChests() {
-            return session != null && session.shouldAttemptKitbotAfterMineEnderChests();
         }
 
         public void markInventoryLocalTried() {

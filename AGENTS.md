@@ -15,7 +15,7 @@ travel, PvP, and QoL modules. It's not a standalone mod: it registers modules/HU
 Meteor Client via `MeteorAddon`, and several modules require Baritone to be present.
 
 The released 1.21.11 source is preserved on branch `1.21.11`. Branch `26.2` uses Mojang names,
-Java 25, Fabric Loader 0.19.5, Fabric API 0.161.0+26.2, and Meteor 26.2-SNAPSHOT. The code port
+Java 25, Fabric Loader 0.20.1, Fabric API 0.161.0+26.2, and Meteor 26.2-SNAPSHOT. The code port
 builds and passes automated checks. In-game feature parity and both graphics backends still need verification before publishing.
 
 ## Code comments & setting descriptions
@@ -29,6 +29,8 @@ why, or which other settings it interacts with. If it needs more than one senten
 
 ## Build & run
 
+The wrapper uses Gradle 9.8.2 with Loom 1.19.3. Dependency versions live in `gradle/libs.versions.toml`.
+
 - `./gradlew build` — full build, jar lands in `build/libs`.
 - `./gradlew checkBuildRules` — standalone block-state checks for Baritone build rules; initializes vanilla registries without starting a client.
 - `./gradlew checkShaders` — OpenGL/Vulkan compiler and linker tests for backgrounds, blur, and
@@ -37,7 +39,7 @@ why, or which other settings it interacts with. If it needs more than one senten
   No GPU or client is started.
 - `./gradlew runClient` — launch a dev client with the addon loaded (via Fabric Loom). Autonomous
   client tests, including creating and joining local test worlds, are allowed for this repository.
-- `./gradlew test` — JUnit 5 unit tests in `src/test/java` (also run by `build`). They run without
+- `./gradlew test` — JUnit 6 unit tests in `src/test/java` (also run by `build`). They run without
   a game instance: only test code that doesn't need Minecraft's bootstrap/registries (vanilla value
   classes like `BlockPos` are fine). Pull testable logic out of modules into `utils/` classes
   (e.g. `AdaptiveRate`, `GhostBlockProbe`) instead of testing a `Module`. Check runtime behavior
@@ -139,7 +141,7 @@ startup, so `THMHwyMonitor` and `HighwayTools` are registered without a separate
 Highway", `THMAddon.PVP` = "THM PVP") via `onRegisterCategories()`. `THMTab` is a separate,
 addon-specific settings screen — don't confuse the two when adding a new module's config surface.
 
-**Highway restock inventory:** Offhand refills preserve managed hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
+**Highway restock inventory:** HighwayBuilder owns supply slots 5-9 through `Manage-hotbar`. Trash limits include hotbar stacks. Offhand refills preserve reserved hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
 
 **Meteor Offhand:** `OffhandMixin` adds `held-item-filter`: Off, Only when holding, or Only when not holding. `held-items` supplies the whitelist/blocklist. Filtering includes Offhand's totem swaps and releases its lock when blocked. `ModuleMixin` migrates the old toggle.
 

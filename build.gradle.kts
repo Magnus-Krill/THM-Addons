@@ -53,9 +53,9 @@ dependencies {
     runtimeOnly(libs.baritone)
 
     // Inspect optional mixin targets without loading these mods into the dev client.
-    testRuntimeOnly("maven.modrinth:sodium:mc26.2-0.9.2-fabric")
-    testRuntimeOnly("maven.modrinth:xaeros-minimap:fabric-26.2-26.5.1")
-    testRuntimeOnly("maven.modrinth:xaeros-world-map:fabric-26.2-1.46.1")
+    testRuntimeOnly(libs.sodium)
+    testRuntimeOnly(libs.xaeros.minimap)
+    testRuntimeOnly(libs.xaeros.world.map)
 
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)
@@ -248,6 +248,8 @@ tasks {
         val propertyMap = mapOf(
             "version" to project.version,
             "mc_version" to libs.versions.minecraft.get(),
+            "fabric_loader_version" to libs.versions.fabric.loader.get(),
+            "fabric_api_version" to libs.versions.fabric.api.get(),
             "gh_hash" to (System.getenv("GITHUB_SHA") ?: run {
                 val process = ProcessBuilder("git", "rev-parse", "HEAD")
                     .directory(rootDir)

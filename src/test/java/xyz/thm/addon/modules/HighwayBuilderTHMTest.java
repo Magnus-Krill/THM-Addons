@@ -17,6 +17,8 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.Comparator;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -119,6 +121,51 @@ class HighwayBuilderTHMTest {
         assertFalse(pause.arrived(new Vec3(-16.9, 120.875, 23.9)));
         assertFalse(pause.arrived(new Vec3(-15.9, 119.875, 23.9)));
         assertFalse(pause.arrived(new Vec3(-16.2, 119.875, 24.6)));
+    }
+
+    @Test
+    void hotbarSupplyKeepsTheCurrentStackAndRefillsFromInventoryWhenEmpty() {
+        var stock = new HashSet<>(Set.of(2, 6, 15));
+        assertEquals(6, HighwayBuilderTHM.selectHotbarSupplySlot(36, 6, stock::contains));
+        stock.remove(6);
+        assertEquals(15, HighwayBuilderTHM.selectHotbarSupplySlot(36, 6, stock::contains));
+        stock.remove(15);
+        assertEquals(2, HighwayBuilderTHM.selectHotbarSupplySlot(36, 6, stock::contains));
+        stock.clear();
+        assertEquals(-1, HighwayBuilderTHM.selectHotbarSupplySlot(36, 6, stock::contains));
+    }
+
+    @Test
+    void hotbarSupplyDoesNotAlternateEquivalentPickaxesAfterSwapping() {
+        var stock = new HashSet<>(Set.of(1, 15));
+        for (int tick = 0; tick < 100; tick++) {
+            int source = HighwayBuilderTHM.selectHotbarSupplySlot(36, 7, stock::contains);
+            if (tick == 0) {
+                assertEquals(15, source);
+                stock.remove(source);
+                stock.add(7);
+            } else {
+                assertEquals(7, source);
+            }
+        }
+    }
+
+    @Test
+    void oneTrashStackMeansOneAcrossTheHotbarAndInventory() {
+        Set<Integer> trash = Set.of(0, 3, 5, 20);
+        var keep = HighwayBuilderTHM.selectTrashKeepSlots(36, 1, trash::contains, Comparator.naturalOrder());
+        assertEquals(Set.of(0), keep);
+        assertEquals(3, trash.stream().filter(i -> !keep.contains(i)).count());
+        assertEquals(Set.of(0, 3), HighwayBuilderTHM.selectTrashKeepSlots(36, 2, trash::contains, Comparator.naturalOrder()));
+    }
+
+    @Test
+    void trashReserveKeepsPreferredSuppliesAndCapsAtAvailableStacks() {
+        Set<Integer> trash = Set.of(5, 20);
+        assertEquals(Set.of(20), HighwayBuilderTHM.selectTrashKeepSlots(36, 1, trash::contains, Comparator.reverseOrder()));
+        assertEquals(trash, HighwayBuilderTHM.selectTrashKeepSlots(36, 10, trash::contains, Comparator.naturalOrder()));
+        assertTrue(HighwayBuilderTHM.selectTrashKeepSlots(36, 0, trash::contains, Comparator.naturalOrder()).isEmpty());
+        assertTrue(HighwayBuilderTHM.selectTrashKeepSlots(36, 1, i -> false, Comparator.naturalOrder()).isEmpty());
     }
 
     @Test

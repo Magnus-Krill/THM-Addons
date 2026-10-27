@@ -42,7 +42,11 @@ Restock and KitBot enclosures use Netherrack. With `offhand-build`, it is tempor
 
 TPS safety enclosures also use Netherrack. After TPS recovers, the builder removes its enclosure blocks on all four sides before moving forward. Existing nearby blocks are left alone.
 
-An active HotbarManager keeps priority for configured slots, even with `Manage-hotbar` off. Offhand refills use spare inventory stacks first and leave at least one item in managed slots. Its sorting waits during restocking while HighwayBuilder uses those slots directly.
+With `Manage-hotbar` enabled, HighwayBuilder keeps food in slot 5, trash blocks in slot 6, ender chests in slot 7, a usable pickaxe in slot 8, and configured placement blocks in slot 9. It refills empty supply slots from inventory and pauses sorting during restocks, open containers, and item use. Offhand refills use spare inventory stacks first and leave at least one item in reserved hotbar slots.
+
+`keep-trash-block-stacks` counts hotbar and main-inventory stacks together. A limit of `1` keeps one trash block stack across both. Protected items remain excluded from trash cleanup.
+
+Carried shulkers are checked before external restock sources. Exhausting loose ender chests does not hide ender chests still inside shulkers; `search-shulkers` and `mine-ender-chests` must be enabled to use them for obsidian.
 
 Restock cleanup keeps the held tool when another tool has the same mining score. Offhand and packet-build loadouts let the restock state control the main hand while containers are being removed.
 
@@ -300,12 +304,12 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `food-management` | `None`; options `None`, `Auto Eat`, `Auto Gap` | Always | Keeps the selected Meteor food module enabled while HighwayBuilder is running. |
 | `food-types` | Empty list, any number of items | `food-restock` is on or `food-management` is not `None` | Food items counted for restock and food module setup. Multiple can be selected; list order is priority (top = highest), used for the restock max-stack-size math. Picker screen has Up/Down/remove buttons per row instead of a plain checklist. |
 | `save-food` | `16`, range `1-32` | `food-restock` is on | Restock threshold for the configured food count. |
-| `keep-trash-block-stacks` | `1`, range `1-10` | Always | Number of trash block stacks to keep before dropping the rest. |
+| `keep-trash-block-stacks` | `1`, range `1-10` | Always | Total trash block stacks to keep across the hotbar and main inventory. |
 | `inventory-delay` | `3`, minimum `0` | Always | Delay in ticks between inventory interactions. |
 | `eject-useless-shulkers` | `true` | Always | Drops shulkers that do not contain protected items, place blocks, pickaxes, or food. |
 | `search-ender-chest` | `false` | Always | Searches your ender chest for usable items. |
 | `search-shulkers` | `true` | Always | Searches shulker contents for usable items. |
-| `Manage-hotbar` | `true` | Always | Automatically sorts the hotbar. |
+| `Manage-hotbar` | `true` | Always | Maintains HighwayBuilder supply slots and refills them from inventory. |
 | `Anti-drop` | `false` | Always | Prevents dropping items the module considers needed. |
 | `offhand-build` | `true` | Always | Mines with the pickaxe in hand and places your block from the offhand. AutoTotem is paused and Meteor Offhand cannot swap the slot while building; the builder puts a totem there at low health or with an enemy near. While ender chests are being mined the offhand holds the chests instead, so a chest can be placed and mined in the same tick without swapping; the offhand returns to your placement block afterwards. |
 | `Anti-hunger` | `true` | Always | Turns Meteor's AntiHunger on while building and off again when it stops. If you already had it on, it is left alone. |
