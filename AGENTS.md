@@ -144,7 +144,9 @@ addon-specific settings screen — don't confuse the two when adding a new modul
 **Highway restock inventory:** HighwayBuilder owns supply slots 5-9 through `Manage-hotbar`. Trash limits include hotbar stacks. Offhand refills preserve reserved hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
 
 **THMScaffold:** `modules/THMScaffold` owns Scaffold settings and its optional packet budget in one
-source file. Meteor Scaffold is unmodified. The budget reserves complete placement transactions;
+source file. Radius and ahead-distance work independently of air-place; support searches stay on the
+placement plane. Air-place uses existing faces first and waits for server state before another direct
+air click. Meteor Scaffold is unmodified. The budget reserves complete placement transactions;
 `PaketLimiter` always allows hotbar slot changes to preserve swap recovery.
 
 **Meteor Offhand:** `OffhandMixin` adds `held-item-filter`: Off, Only when holding, or Only when not holding. `held-items` supplies the whitelist/blocklist. Filtering includes Offhand's totem swaps and releases its lock when blocked. `ModuleMixin` migrates the old toggle.
@@ -196,11 +198,6 @@ Retreat uses the server's reported radius plus its tracking margin; travel and h
 replacement on the client thread before world application. Prediction retains the incoming state for rollback.
 Speedmine also checks client replacements before and after placement ticks. Strong can retry its completed
 target without an air confirmation; other pending normal breaks still keep validation priority.
-
-**Speedmine timing:** Progress advances once per client tick; rendering only reads it. Slot and mining
-state follow `PacketEvent.Sent`. A delayed secondary keeps its first STOP; instant STARTs need no extra
-STOP. Rebreaks run at most once per client tick. Expired predictions roll back and retry a normal START
-after safe probes; validation tools remain owned until confirmation or recovery.
 
 **Speedmine Air Miner:** Public 26.2 only. The optional Air Miner group defaults off and claims ground around START/STOP mining packets, once per client tick. `PlayerAirMiningMixin` removes the local airborne mining penalty; Speedmine's custom progress uses the same eligibility. Claims expire and restore only on their original connection. Keep gliding opt-in and retain the speed cap. Source and manual checks: `docs/quiettee-air-miner.md`.
 

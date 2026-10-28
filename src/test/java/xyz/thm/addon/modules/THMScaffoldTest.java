@@ -6,13 +6,110 @@
 
 package xyz.thm.addon.modules;
 
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
+
+import java.util.HashSet;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class THMScaffoldTest {
+    @ParameterizedTest
+    @CsvSource({"0,1", "0.5,1", "1,5", "1.5,9", "2,13", "6,113"})
+    void radiusUsesHorizontalDistanceOnOnePlane(double radius, int count) {
+        BlockPos center = new BlockPos(-14, 119, -21);
+        var targets = THMScaffold.placementTargets(center, radius, Vec3.atCenterOf(center).add(0, 1.5, 0));
+        assertEquals(count, targets.size());
+        assertEquals(count, new HashSet<>(targets).size());
+        assertEquals(center, targets.getFirst());
+        for (BlockPos target : targets) {
+            assertEquals(center.getY(), target.getY());
+            assertTrue(target.distSqr(center) <= radius * radius);
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Direction.class, names = {"NORTH", "SOUTH", "EAST", "WEST"})
+    void radiusPrioritizesTheApproachingEdge(Direction direction) {
+        BlockPos center = new BlockPos(-2, 119, -3);
+        Vec3 origin = Vec3.atCenterOf(center).add(direction.getStepX() * 0.49, 1.5, direction.getStepZ() * 0.49);
+        var targets = THMScaffold.placementTargets(center, 1, origin);
+        assertEquals(center, targets.getFirst());
+        assertEquals(center.relative(direction), targets.get(1), "A filled center must not starve the next block ahead.");
+    }
+
+    @ParameterizedTest
+    @EnumSource(Direction.class)
+    void supportingFacesPlaceAtTheTargetInsteadOfOnTopOfIt(Direction support) {
+        BlockPos target = new BlockPos(8, 119, -5);
+        var hit = THMScaffold.placementHit(target, support);
+        assertEquals(target.relative(support), hit.getBlockPos());
+        assertEquals(target, hit.getBlockPos().relative(hit.getDirection()));
+        assertEquals(Vec3.atCenterOf(target).add(support.getStepX() * 0.5, support.getStepY() * 0.5,
+            support.getStepZ() * 0.5), hit.getLocation());
+    }
+
+    @Test
+    void supportedRadiusExtendsAnExistingPlatformWithoutAirClicks() {
+        BlockPos center = new BlockPos(0, 119, 0);
+        var platform = new HashSet<BlockPos>();
+        platform.add(center);
+        for (BlockPos target : THMScaffold.placementTargets(center, 1, Vec3.atCenterOf(center))) {
+            if (platform.contains(target)) continue;
+            Direction support = null;
+            for (Direction direction : Direction.values()) {
+                if (platform.contains(target.relative(direction))) { support = direction; break; }
+            }
+            assertNotNull(support);
+            var hit = THMScaffold.placementHit(target, support);
+            BlockPos placed = hit.getBlockPos().relative(hit.getDirection());
+            assertEquals(119, placed.getY());
+            platform.add(placed);
+        }
+        assertEquals(5, platform.size());
+    }
+
+    @Test
+    void acceptedAirPlaceStaysBlockedUntilTheServerReportsAirAgain() {
+        BlockPos target = new BlockPos(0, 119, 0);
+        var hit = THMScaffold.placementHit(target, null);
+        assertEquals(target, hit.getBlockPos());
+        var state = new THMScaffold.PacketState();
+        state.markSent(target.asLong(), 1);
+        state.answer(target.asLong(), false);
+        for (int tick = 0; tick < 100; tick++) {
+            state.beginTick();
+            assertTrue(state.isPending(target.asLong()), "A second air click would place above the accepted block.");
+            assertTrue(state.isConfirmed(target.asLong()));
+        }
+        state.answer(target.asLong(), true);
+        state.beginTick();
+        assertFalse(state.isPending(target.asLong()));
+        assertFalse(state.isConfirmed(target.asLong()));
+        assertTrue(state.snapshot().isEmpty());
+    }
+
+    @Test
+    void aSameTickReplacementKeepsTheLatestServerState() {
+        var state = new THMScaffold.PacketState();
+        state.markSent(123, 1);
+        state.answer(123, true);
+        state.answer(123, false);
+        state.beginTick();
+        assertTrue(state.isPending(123));
+        assertTrue(state.isConfirmed(123));
+        state.forget(123);
+        assertFalse(state.isConfirmed(123));
+        assertTrue(state.snapshot().isEmpty());
+    }
+
     @Test
     void budgetReservesWholeSwapTransactionsBeforeScheduling() {
         var state = new THMScaffold.PacketState();
@@ -41,8 +138,8 @@ class THMScaffoldTest {
         for (int tick = 0; tick < 100; tick++) state.beginTick();
         assertTrue(state.isPending(123));
         Thread network = new Thread(() -> {
-            state.answer(123);
-            for (long unrelated = 1000; unrelated < 100_000; unrelated++) state.answer(unrelated);
+            state.answer(123, true);
+            for (long unrelated = 1000; unrelated < 100_000; unrelated++) state.answer(unrelated, true);
         });
         network.start();
         network.join();
@@ -57,7 +154,7 @@ class THMScaffoldTest {
     void resetAndRejectedSendsReleasePendingState() {
         var state = new THMScaffold.PacketState();
         state.markSent(123, 1);
-        state.answer(123);
+        state.answer(123, true);
         state.forget(123);
         state.markSent(123, 2);
         state.beginTick();

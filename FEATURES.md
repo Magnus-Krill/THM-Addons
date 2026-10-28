@@ -14,7 +14,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `Highway-Tools` — Highway utilities: axis walker, highway teleporter, boundary finder, and highway checker. Requires Baritone.
 - `axis-viewer` — Displays world axes and Nether highways, including XaeroPlus rings, diamonds, the 50k grid, and 125k extensions.
 - `scaffold-THM` — Scaffolds blocks under you.
-- `THMScaffold` — Scaffold with silent swaps, an internal packet budget, gap filling, lookahead, tower, safe movement, and height locking.
+- `THMScaffold` — Scaffold with a horizontal radius, support-first air-place, silent swaps, an internal packet budget, gap filling, lookahead, tower, safe movement, and height locking.
 - `auto-portal` — For the Base Hunter who has places to be.
 - `Fly-Bypass` — Fly using packets.
 - `no-fall`: Meteor NoFall with NoGround mode, mace support, and optional reset packets on disable.
@@ -24,7 +24,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 ## Mining and Building
 - `better-baritone-build` — Index opened storage, fetch missing build materials with Baritone, and manage block replacement/acceptance rules, dirt/grass equivalence, and log stripping in a custom screen.
 - `tunnel-miner` — Mines a tunnel block-by-block to target XZ coordinates at the same Y.
-- `Speedmine`: Packet mining with server-confirmation recovery, tick-based progress, shared tool swaps, and early packet rebreaks and client-world fallback, Off/Strict/Strong/Bypass modes, a rebreak-rate monitor, tool swap timing, TPS sync, client prediction, and optional multitasking while using items. Auto Mine can independently continue bedrock mining while eating with `bedrock-while-eating` (off by default). Optional `debug-auto-mine` reports targets and idle reasons in chat. Strong retries completed targets without an air confirmation. Active and automatic mining continue with the inventory open. Optional Air Miner removes the airborne speed penalty and claims ground around mining actions, with a speed cap and opt-in gliding.
+- `Speedmine`: Packet mining with early packet rebreaks and client-world fallback, Off/Strict/Strong/Bypass modes, a rebreak-rate monitor, tool swap timing, TPS sync, client prediction, and optional multitasking while using items. Auto Mine can independently continue bedrock mining while eating with `bedrock-while-eating` (off by default). Optional `debug-auto-mine` reports targets and idle reasons in chat. Strong retries completed targets without an air confirmation. Active and automatic mining continue with the inventory open. Optional Air Miner removes the airborne speed penalty and claims ground around mining actions, with a speed cap and opt-in gliding.
 - `BlockCounter` — Counts the selected blocks.
 - `Better-echest-farmer` — Better echest farmer that uses instant rebreak exploit.
 - `sign-render` — Renders sign text through walls with advanced clustering.
