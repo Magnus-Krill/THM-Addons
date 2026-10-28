@@ -147,8 +147,8 @@ addon-specific settings screen — don't confuse the two when adding a new modul
 
 **Highway restock inventory:** HighwayBuilder owns supply slots 5-9 through `Manage-hotbar`. Trash limits include hotbar stacks. Offhand refills preserve reserved hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
 
-**THMScaffold:** `modules/THMScaffold` owns Scaffold settings and its optional packet budget in one
-source file. Radius controls the build area; fallback support searches use the player's block reach
+**THMScaffold:** Replaces the legacy `scaffold-THM` module. `modules/THMScaffold` owns settings and
+its optional packet budget in one source file. Radius controls the build area; fallback support searches use the player's block reach
 on the placement plane. Air-place uses existing faces first and horizontal faces for direct clicks.
 Packet-place-once controls confirmation waits; disabling it retries each tick within the placement
 and packet budgets. Successful sends keep their per-tick reservation across radius and lookahead.

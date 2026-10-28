@@ -159,7 +159,6 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         Modules.get().add(new AxisViewer());
         Modules.get().add(new DiscordNotifs());
         Modules.get().add(new AntiDrop());
-        Modules.get().add(new ScaffoldTHM());
         Modules.get().add(new THMScaffold());
         Modules.get().add(new Nuker());
         Modules.get().add(new PaketLimiter());

@@ -123,21 +123,21 @@ public class THMScaffold extends Module {
     private final Setting<Boolean> rotate = sgGeneral.add(new BoolSetting.Builder()
         .name("rotate")
         .description("Rotates towards the blocks being placed.")
-        .defaultValue(true)
+        .defaultValue(false)
         .build()
     );
 
     private final Setting<Boolean> airPlace = sgGeneral.add(new BoolSetting.Builder()
         .name("air-place")
         .description("Air-place only when no supporting face is available.")
-        .defaultValue(false)
+        .defaultValue(true)
         .build()
     );
 
     private final Setting<Double> radius = sgGeneral.add(new DoubleSetting.Builder()
         .name("radius")
         .description("Horizontal placement radius.")
-        .defaultValue(0)
+        .defaultValue(5.2)
         .min(0)
         .max(6)
         .build()
@@ -146,7 +146,7 @@ public class THMScaffold extends Module {
     private final Setting<Integer> blocksPerTick = sgGeneral.add(new IntSetting.Builder()
         .name("blocks-per-tick")
         .description("How many blocks to place in one tick.")
-        .defaultValue(3)
+        .defaultValue(10)
         .min(1)
         .build()
     );
@@ -212,13 +212,13 @@ public class THMScaffold extends Module {
         super(THMAddon.MAIN, "THMScaffold", "Scaffolds with silent swaps and a built-in packet budget.");
         thm$packetPlace = sgGeneral.add(new BoolSetting.Builder()
             .name("packet-place").description("Places blocks without client prediction.")
-            .defaultValue(false).build());
+            .defaultValue(true).build());
         thm$packetPlaceOnce = sgGeneral.add(new BoolSetting.Builder()
             .name("packet-place-once").description("Waits for server updates instead of retrying each tick.")
             .defaultValue(false).visible(thm$packetPlace::get).build());
         thm$packetLimiter = sgGeneral.add(new BoolSetting.Builder()
             .name("packet-limiter").description("Limits Scaffold packets per tick.")
-            .defaultValue(false).build());
+            .defaultValue(true).build());
         thm$packetLimit = sgGeneral.add(new IntSetting.Builder()
             .name("packet-limit").description("Scaffold packet budget per tick, including slot swaps and swings.")
             .defaultValue(23).min(1).sliderRange(1, 100).visible(thm$packetLimiter::get).build());
