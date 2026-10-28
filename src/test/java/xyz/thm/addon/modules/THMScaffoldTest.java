@@ -49,7 +49,7 @@ class THMScaffoldTest {
     @EnumSource(Direction.class)
     void supportingFacesPlaceAtTheTargetInsteadOfOnTopOfIt(Direction support) {
         BlockPos target = new BlockPos(8, 119, -5);
-        var hit = THMScaffold.placementHit(target, support);
+        var hit = THMScaffold.placementHit(target, support, Vec3.atCenterOf(target).add(0, 2, 0));
         assertEquals(target.relative(support), hit.getBlockPos());
         assertEquals(target, hit.getBlockPos().relative(hit.getDirection()));
         assertEquals(Vec3.atCenterOf(target).add(support.getStepX() * 0.5, support.getStepY() * 0.5,
@@ -68,7 +68,7 @@ class THMScaffoldTest {
                 if (platform.contains(target.relative(direction))) { support = direction; break; }
             }
             assertNotNull(support);
-            var hit = THMScaffold.placementHit(target, support);
+            var hit = THMScaffold.placementHit(target, support, Vec3.atCenterOf(target).add(0, 2, 0));
             BlockPos placed = hit.getBlockPos().relative(hit.getDirection());
             assertEquals(119, placed.getY());
             platform.add(placed);
@@ -77,23 +77,70 @@ class THMScaffoldTest {
     }
 
     @Test
-    void acceptedAirPlaceStaysBlockedUntilTheServerReportsAirAgain() {
+    void onceModeWaitsUntilTheServerReportsAirAgain() {
         BlockPos target = new BlockPos(0, 119, 0);
-        var hit = THMScaffold.placementHit(target, null);
+        var hit = THMScaffold.placementHit(target, null, Vec3.atCenterOf(target).add(0, 2, 0));
         assertEquals(target, hit.getBlockPos());
         var state = new THMScaffold.PacketState();
         state.markSent(target.asLong(), 1);
         state.answer(target.asLong(), false);
         for (int tick = 0; tick < 100; tick++) {
-            state.beginTick();
-            assertTrue(state.isPending(target.asLong()), "A second air click would place above the accepted block.");
+            state.beginTick(true);
+            assertFalse(state.canSend(target.asLong(), true), "Once mode must keep its confirmation wait.");
             assertTrue(state.isConfirmed(target.asLong()));
         }
         state.answer(target.asLong(), true);
-        state.beginTick();
-        assertFalse(state.isPending(target.asLong()));
+        state.beginTick(true);
+        assertTrue(state.canSend(target.asLong(), true));
         assertFalse(state.isConfirmed(target.asLong()));
         assertTrue(state.snapshot().isEmpty());
+    }
+
+    @Test
+    void disablingOnceAllowsRetriesWithoutAnAirConfirmation() {
+        var state = new THMScaffold.PacketState();
+        state.markSent(123, 1);
+        state.answer(123, false);
+        state.beginTick(true);
+        assertFalse(state.canSend(123, true));
+        assertTrue(state.canSend(123, false), "The queued callback must also respect disabling once.");
+        for (int tick = 0; tick < 10; tick++) {
+            state.beginTick(false);
+            assertTrue(state.canSend(123, false));
+            assertTrue(state.snapshot().isEmpty(), "Repeat mode must not leave confirmation waits or probes.");
+            assertFalse(state.isConfirmed(123));
+        }
+    }
+
+    @Test
+    void switchingBackToOnceDoesNotRestoreOldWaitsOrAnswers() {
+        var state = new THMScaffold.PacketState();
+        state.markSent(123, 1);
+        state.answer(123, false);
+        state.beginTick(false);
+        state.answer(123, false);
+        state.beginTick(true);
+        assertTrue(state.canSend(123, true));
+        state.markSent(123, 2);
+        assertFalse(state.canSend(123, true));
+        state.answer(123, true);
+        state.beginTick(true);
+        assertTrue(state.canSend(123, true));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Direction.class, names = {"NORTH", "SOUTH", "EAST", "WEST"})
+    void directAirClicksFaceThePlayerAndCannotStackAboveTheFloor(Direction direction) {
+        BlockPos target = new BlockPos(8, 119, -5);
+        Vec3 eye = Vec3.atCenterOf(target).add(direction.getStepX() * 2, 2, direction.getStepZ() * 2);
+        var hit = THMScaffold.placementHit(target, null, eye);
+        assertEquals(target, hit.getBlockPos(), "A replaceable target is placed directly.");
+        assertEquals(direction, hit.getDirection());
+        assertEquals(0, hit.getDirection().getStepY());
+        assertEquals(Vec3.atCenterOf(target).add(direction.getStepX() * 0.5, 0,
+            direction.getStepZ() * 0.5), hit.getLocation());
+        BlockPos duplicate = hit.getBlockPos().relative(hit.getDirection());
+        assertEquals(target.getY(), duplicate.getY(), "A late server placement can only offset a retry horizontally.");
     }
 
     @Test
@@ -102,8 +149,8 @@ class THMScaffoldTest {
         state.markSent(123, 1);
         state.answer(123, true);
         state.answer(123, false);
-        state.beginTick();
-        assertTrue(state.isPending(123));
+        state.beginTick(true);
+        assertFalse(state.canSend(123, true));
         assertTrue(state.isConfirmed(123));
         state.forget(123);
         assertFalse(state.isConfirmed(123));
@@ -117,7 +164,7 @@ class THMScaffoldTest {
         assertFalse(state.reserve(true, 9, 5));
         assertTrue(state.reserve(true, 9, 4), "A rejected transaction must not consume budget.");
         assertFalse(state.reserve(true, 9, 1));
-        state.beginTick();
+        state.beginTick(true);
         assertTrue(state.reserve(true, 9, 5));
     }
 
@@ -126,7 +173,7 @@ class THMScaffoldTest {
         var state = new THMScaffold.PacketState();
         assertTrue(state.reserve(false, 1, 5));
         assertFalse(state.reserve(true, 5, 1));
-        state.beginTick();
+        state.beginTick(true);
         assertFalse(state.reserve(true, 1, 2));
         assertTrue(state.reserve(true, 1, 1));
     }
@@ -135,18 +182,18 @@ class THMScaffoldTest {
     void onlyServerAnswersReleasePendingPlacements() throws Exception {
         var state = new THMScaffold.PacketState();
         state.markSent(123, 1);
-        for (int tick = 0; tick < 100; tick++) state.beginTick();
-        assertTrue(state.isPending(123));
+        for (int tick = 0; tick < 100; tick++) state.beginTick(true);
+        assertFalse(state.canSend(123, true));
         Thread network = new Thread(() -> {
             state.answer(123, true);
             for (long unrelated = 1000; unrelated < 100_000; unrelated++) state.answer(unrelated, true);
         });
         network.start();
         network.join();
-        assertTrue(state.isPending(123), "Receive events must wait for the client tick.");
+        assertFalse(state.canSend(123, true), "Receive events must wait for the client tick.");
         assertEquals(1, state.snapshot().size());
-        state.beginTick();
-        assertFalse(state.isPending(123));
+        state.beginTick(true);
+        assertTrue(state.canSend(123, true));
         assertTrue(state.snapshot().isEmpty());
     }
 
@@ -157,11 +204,11 @@ class THMScaffoldTest {
         state.answer(123, true);
         state.forget(123);
         state.markSent(123, 2);
-        state.beginTick();
-        assertTrue(state.isPending(123), "A cancelled send must not retain an old answer.");
+        state.beginTick(true);
+        assertFalse(state.canSend(123, true), "A cancelled send must not retain an old answer.");
         state.reserve(true, 5, 5);
         state.clear();
-        assertFalse(state.isPending(123));
+        assertTrue(state.canSend(123, true));
         assertTrue(state.reserve(true, 5, 5));
     }
 

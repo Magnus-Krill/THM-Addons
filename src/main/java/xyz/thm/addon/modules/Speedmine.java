@@ -35,6 +35,7 @@ import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.PacketType;
+import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.GamePacketTypes;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.InteractionHand;
@@ -264,7 +265,7 @@ public class Speedmine extends Module {
 
     private final Setting<Boolean> debugRebreak = sgMine.add(new BoolSetting.Builder()
         .name("debug-rebreak")
-        .description("Show rebreak attempts per second in chat and module info.")
+        .description("Show server-confirmed rebreaks per second.")
         .defaultValue(false)
         .onChanged(enabled -> resetRebreakMonitor())
         .build());
@@ -335,6 +336,8 @@ public class Speedmine extends Module {
     private long rebreakMonitorStartNs;
     private int rebreakCount;
     private String rebreakRate = "0.0";
+    private final RebreakConfirmations rebreakConfirmations = new RebreakConfirmations();
+    private MiningAction miningAction;
     private BlockPos lastStartedPos;
     public final Deque<BlockPos> queue = new ArrayDeque<>();
 
@@ -513,6 +516,7 @@ public class Speedmine extends Module {
 
     private void confirmBreak(BlockPos pos, BlockState state) {
         if (!state.isAir()) return;
+        if (rebreakConfirmations.confirm(pos, System.nanoTime())) rebreakCount++;
         if (pos.equals(lastStartedPos) && (pos.equals(lastBrokenPos) || (primary != null && pos.equals(primary.pos)))) {
             lastBrokenPos = pos.immutable();
             lastBreakConfirmed = true;
@@ -553,6 +557,11 @@ public class Speedmine extends Module {
         if (rebreakPending && now >= rebreakDeadlineMs) rebreakPending = false;
         updateRebreakMonitor();
 
+        boolean paused = shouldPauseMining();
+        long progressNow = System.nanoTime();
+        if (primary != null) primary.advance(progressNow, paused);
+        if (secondary != null) secondary.advance(progressNow, paused);
+
         InventoryManager inventory = InventoryManager.getInstance();
         if (debugAutoMine.get()) {
             autoMineStatus = !autoMine.get() ? "Disabled."
@@ -561,10 +570,8 @@ public class Speedmine extends Module {
                     ? "Paused by another inventory action."
                     : "Paused while using an item or eating.";
         }
-        if (shouldPauseMining()) {
+        if (paused) {
             releaseHeldSlot();
-            if (primary != null) primary.lastProgressMs = now;
-            if (secondary != null) secondary.lastProgressMs = now;
             boolean eating = inventory.isEating()
                 || (mc.player.isUsingItem() && mc.player.getUseItem().has(DataComponents.FOOD));
             if (canMineBedrockWhileEating(bedrockWhileEating.get(), eating, inventory.getCurrentPriority())) tickAutoMine();
@@ -578,14 +585,15 @@ public class Speedmine extends Module {
                 ((PlayerInventoryAccessor) mc.player.getInventory()).setSelectedSlot(validationSlot);
                 if (inventory.getServerSlot() != validationSlot) inventory.setSlotForced(validationSlot);
             }
-        } else if (validationSlot != -1) holdTool(validationSlot, false);
+        } else if (validationSlot != -1) holdTool(validationSlot);
         else if (swapMode.get() == SwapMode.SameTick) releaseHeldSlot();
         else if (swapMode.get() != SwapMode.EndOfTick) {
-            if (primary != null) holdTool(primary.startSlot, false);
-            else if (secondary != null) holdTool(secondary.startSlot, false);
-            else if (heldSlot != -1 && !pendingBreaks.isEmpty()) holdTool(heldSlot, false);
+            if (primary != null) holdTool(primary.startSlot);
+            else if (secondary != null) holdTool(secondary.startSlot);
+            else if (heldSlot != -1 && !pendingBreaks.isEmpty()) holdTool(heldSlot);
         }
 
+        if (primary != null && !primary.started && !shouldRemove(primary.pos)) sendStart(primary);
         tickAutoMine();
 
         rebreakReplacement();
@@ -668,9 +676,8 @@ public class Speedmine extends Module {
         MineContext ctx = new MineContext(pos, state, false);
         ctx.rebreak = true;
         ctx.packetRebreak = packet;
-        if (!strong && tpsSync.get()) startCredit = Math.max(0, startCredit - 1);
         if (rotate.get()) lookAt(pos);
-        finishBreak(ctx, silentSwap.get());
+        if (finishBreak(ctx, silentSwap.get()) && !strong && tpsSync.get()) startCredit = Math.max(0, startCredit - 1);
     }
 
     private void handleBlockClick(BlockPos pos, BlockState state) {
@@ -699,7 +706,10 @@ public class Speedmine extends Module {
             primary = new MineContext(pos, state, true);
             sendStart(primary);
         } else if (canAddSecondary) {
-            stopWithTool(primary, silentSwap.get());
+            if (!stopWithTool(primary, silentSwap.get())) {
+                if (queueEnabled.get() && !queue.contains(pos)) queue.addLast(pos.immutable());
+                return;
+            }
             secondary = primary;
             secondary.isPrimary = false;
             primary   = new MineContext(pos, state, true);
@@ -731,48 +741,44 @@ public class Speedmine extends Module {
     // ── Packet building ───────────────────────────────────────────────────────
 
     private void sendStart(MineContext ctx) {
-        rebreakPending = false;
-        bypassConfirmed = false;
-        packetReplacement = null;
-        lastBreakConfirmed = false;
-        lastStartedPos = ctx.pos;
-        if (tpsSync.get()) startCredit = Math.max(0, startCredit - 1);
+        if (ctx.started || !ctx.active) return;
         if (rotate.get()) lookAt(ctx.pos);
         withMiningTool(ctx, silentSwap.get(), () -> {
-            if (grimBypass.get()) {
-                sendSequencedAction(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, ctx.pos);
-            }
-            sendSequencedAction(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, ctx.pos);
+            if (grimBypass.get() && !sendSequencedAction(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, ctx, false)) return;
+            if (!sendSequencedAction(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, ctx, false)) return;
+            ctx.started = true;
+            ctx.instaBreak = ctx.tickDamage >= 1.0f;
+            ctx.timing.start(System.nanoTime(), ctx.tickDamage, effectiveTps());
+            rebreakPending = false;
+            bypassConfirmed = false;
+            packetReplacement = null;
+            lastBreakConfirmed = false;
+            lastStartedPos = ctx.pos;
+            if (tpsSync.get()) startCredit = Math.max(0, startCredit - 1);
             if (ctx.instaBreak) finishBreak(ctx, silentSwap.get());
         });
     }
 
     /** STOP must use the same tool as START. */
-    private void stopWithTool(MineContext ctx, boolean silent) {
-        if (mc.level == null || mc.player == null) return;
-        withMiningTool(ctx, silent, () -> sendSequencedAction(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, ctx.pos));
+    private boolean stopWithTool(MineContext ctx, boolean silent) {
+        if (!ctx.started || mc.level == null || mc.player == null) return false;
+        withMiningTool(ctx, silent, () -> ctx.stopSent = sendSequencedAction(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, ctx, false));
+        return ctx.stopSent;
     }
 
-    private void finishBreak(MineContext ctx, boolean silent) {
-        if (mc.level == null || mc.player == null || mc.gameMode == null) return;
+    private boolean finishBreak(MineContext ctx, boolean silent) {
+        if (!ctx.active || (!ctx.started && !ctx.rebreak) || mc.level == null || mc.player == null || mc.gameMode == null) return false;
 
         boolean clientRemove = clientPrediction.get();
-        withMiningTool(ctx, silent, () ->
-            ((ClientPlayerInteractionManagerTHMAccessor) mc.gameMode).thm$sendSequencedPacket(mc.level, sequence -> {
-                // Prediction must share the STOP sequence so rejected breaks restore the server state.
-                if (clientRemove && ctx.packetRebreak) {
-                    var prediction = ((ClientLevelPredictionAccessor) mc.level).thm$getBlockStatePredictionHandler();
-                    // The replacement may still be air locally; retain the packet state for rollback.
-                    prediction.retainKnownServerState(ctx.pos, ctx.state, mc.player);
-                    prediction.updateKnownServerState(ctx.pos, ctx.state);
-                }
-                if (clientRemove) mc.level.setBlock(ctx.pos, Blocks.AIR.defaultBlockState(), 3);
-                return new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK,
-                    ctx.pos, Direction.DOWN, sequence);
-            }));
+        // Instant STARTs do not prime the server's target for subsequent STOPs.
+        var action = ctx.rebreak && ctx.instaBreak
+            ? ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK
+            : ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK;
+        withMiningTool(ctx, silent, () -> ctx.stopSent = sendSequencedAction(action, ctx, clientRemove));
+        if (!ctx.stopSent) return false;
 
         if (ctx.requiresValidation() || (silent && swapMode.get() == SwapMode.ToolHold)) {
-            double ticksPerMs = serverTicks(1, TickRate.INSTANCE.getTickRate()) * ctx.calcDelta();
+            double ticksPerMs = serverTicks(1, TickRate.INSTANCE.getTickRate()) * ctx.tickDamage;
             long deadline = System.currentTimeMillis() + (long) Math.clamp(
                 ticksPerMs > 0 ? 1 / ticksPerMs + 1000 : 30000, 2000, 30000);
             // At most two normal validations and the latest instant/rebreak hold.
@@ -790,12 +796,13 @@ public class Speedmine extends Module {
             rebreakPending = true;
             rebreakDeadlineMs = System.currentTimeMillis() + 2000;
             packetReplacement = null;
-            if (debugRebreak.get()) rebreakCount++;
+            if (debugRebreak.get()) rebreakConfirmations.sent(ctx.pos, System.nanoTime(), lastBreakConfirmed);
         }
         ctx.active    = false;
         if (ctx == primary)        primary   = null;
         else if (ctx == secondary) secondary = null;
-        if (silent && hasPendingNormalBreak()) holdTool(validationToolSlot(), false);
+        if (silent && hasPendingNormalBreak()) holdTool(validationToolSlot());
+        return true;
     }
 
     // ── Silent swap ───────────────────────────────────────────────────────────
@@ -807,13 +814,13 @@ public class Speedmine extends Module {
             releaseHeldSlot();
             withSilentTool(ctx.state, action);
         } else {
-            if (silent) holdTool(ctx.startSlot, true);
+            if (silent) holdTool(ctx.startSlot);
             else equipBestTool(ctx.state);
             action.run();
         }
         int validationSlot = validationToolSlot();
         if (validationSlot != -1) {
-            if (silent) holdTool(validationSlot, false);
+            if (silent) holdTool(validationSlot);
             else {
                 ((PlayerInventoryAccessor) mc.player.getInventory()).setSelectedSlot(validationSlot);
                 InventoryManager inventory = InventoryManager.getInstance();
@@ -834,7 +841,7 @@ public class Speedmine extends Module {
         try {
             action.run();
         } finally {
-            if (swap) inventory.setSlotForced(prev);
+            if (swap && inventory.getServerSlot() != prev) inventory.setSlotForced(prev);
         }
     }
 
@@ -1069,19 +1076,18 @@ public class Speedmine extends Module {
 
     record PendingBreak(BlockPos pos, int toolSlot, boolean normal, boolean secondary, long deadlineMs) {}
 
-    /** Mining packets force selection; tick refreshes can reuse the tracked slot. */
-    private void holdTool(int slot, boolean force) {
+    private void holdTool(int slot) {
         if (slot < 0 || mc.player == null) return;
 
         InventoryManager inventory = InventoryManager.getInstance();
-        boolean retained = (swapMode.get() == SwapMode.Keep || swapMode.get() == SwapMode.EndOfTick) && heldSlot == slot;
-        if ((force && !retained) || inventory.getServerSlot() != slot) inventory.setSlotForced(slot);
+        if (inventory.getServerSlot() != slot) inventory.setSlotForced(slot);
         heldSlot = slot;
     }
 
     private void releaseHeldSlot() {
         InventoryManager inventory = InventoryManager.getInstance();
-        if (heldSlot != -1 && mc.player != null && inventory.getServerSlot() == heldSlot) {
+        if (heldSlot != -1 && mc.player != null && inventory.getServerSlot() == heldSlot
+            && inventory.getServerSlot() != mc.player.getInventory().getSelectedSlot()) {
             inventory.setSlotForced(mc.player.getInventory().getSelectedSlot());
         }
         heldSlot  = -1;
@@ -1090,10 +1096,51 @@ public class Speedmine extends Module {
 
     // ── Sequenced packet helpers ──────────────────────────────────────────────
 
-    private void sendSequencedAction(ServerboundPlayerActionPacket.Action action, BlockPos pos) {
-        if (mc.gameMode == null || mc.level == null) return;
-        ((ClientPlayerInteractionManagerTHMAccessor) mc.gameMode)
-            .thm$sendSequencedPacket(mc.level, seq -> new ServerboundPlayerActionPacket(action, pos, Direction.DOWN, seq));
+    private boolean sendSequencedAction(ServerboundPlayerActionPacket.Action action, MineContext ctx, boolean predict) {
+        if (mc.gameMode == null || mc.level == null || mc.getConnection() == null) return false;
+        MiningAction previous = miningAction;
+        try {
+            ((ClientPlayerInteractionManagerTHMAccessor) mc.gameMode).thm$sendSequencedPacket(mc.level, sequence -> {
+                var packet = new ServerboundPlayerActionPacket(action, ctx.pos, Direction.DOWN, sequence);
+                miningAction = new MiningAction(packet, predict ? () -> {
+                    if (ctx.packetRebreak) {
+                        var prediction = ((ClientLevelPredictionAccessor) mc.level).thm$getBlockStatePredictionHandler();
+                        // The replacement may still be air locally; retain its server state for rollback.
+                        prediction.retainKnownServerState(ctx.pos, ctx.state, mc.player);
+                        prediction.updateKnownServerState(ctx.pos, ctx.state);
+                    }
+                    mc.level.setBlock(ctx.pos, Blocks.AIR.defaultBlockState(), 3);
+                } : null);
+                return packet;
+            });
+            return miningAction != previous && miningAction.sent;
+        } finally {
+            miningAction = previous;
+        }
+    }
+
+    @EventHandler
+    private void onMiningPacketSent(PacketEvent.Sent event) {
+        if (miningAction != null && mc.getConnection() != null
+            && event.connection == mc.getConnection().getConnection()) miningAction.sent(event.packet);
+    }
+
+    static final class MiningAction {
+        private final ServerboundPlayerActionPacket packet;
+        private final Runnable prediction;
+        private boolean sent;
+
+        MiningAction(ServerboundPlayerActionPacket packet, Runnable prediction) {
+            this.packet = packet;
+            this.prediction = prediction;
+        }
+
+        void sent(Packet<?> candidate) {
+            if (candidate != packet || sent) return;
+            sent = true;
+            // Sent runs before vanilla closes this action's prediction sequence.
+            if (prediction != null) prediction.run();
+        }
     }
 
     // ── Tool selection ────────────────────────────────────────────────────────
@@ -1103,7 +1150,8 @@ public class Speedmine extends Module {
         int slot = findBestHotbarSlot(state);
         if (slot != -1 && mc.player != null) {
             ((PlayerInventoryAccessor) mc.player.getInventory()).setSelectedSlot(slot);
-            InventoryManager.getInstance().setSlotForced(slot);
+            InventoryManager inventory = InventoryManager.getInstance();
+            if (inventory.getServerSlot() != slot) inventory.setSlotForced(slot);
         }
     }
 
@@ -1150,15 +1198,17 @@ public class Speedmine extends Module {
         rebreakMonitorStartNs = System.nanoTime();
         rebreakCount = 0;
         rebreakRate = "0.0";
+        rebreakConfirmations.clear();
     }
 
     private void updateRebreakMonitor() {
         if (!debugRebreak.get()) return;
         long now = System.nanoTime();
+        rebreakConfirmations.expire(now);
         long elapsed = now - rebreakMonitorStartNs;
         if (elapsed < 1_000_000_000L) return;
         rebreakRate = String.format(Locale.ROOT, "%.1f", rebreakCount * 1_000_000_000.0 / elapsed);
-        info("Rebreaks/s: %s attempts", rebreakRate);
+        info("Rebreaks/s: %s confirmed", rebreakRate);
         rebreakMonitorStartNs = now;
         rebreakCount = 0;
     }
@@ -1215,7 +1265,8 @@ public class Speedmine extends Module {
     // ── Rendering ─────────────────────────────────────────────────────────────
 
     private void renderMineContext(Render3DEvent event, MineContext ctx) {
-        RenderUtilsTHM.renderBlockShapeScaled(event, ctx.pos, ctx.state, ctx.progress(),
+        RenderUtilsTHM.renderBlockShapeScaled(event, ctx.pos, ctx.state,
+            ctx.timing.renderFraction(System.nanoTime(), ctx.isPrimary ? breakThreshold.get() : 1),
             renderColor.get(), renderColor.get(), ShapeMode.Lines);
     }
 
@@ -1310,6 +1361,61 @@ public class Speedmine extends Module {
 
     // ── MineContext ───────────────────────────────────────────────────────────
 
+    static final class RebreakConfirmations {
+        private final Map<BlockPos, Long> awaiting = new HashMap<>();
+
+        void sent(BlockPos pos, long now, boolean initialConfirmed) {
+            // A late initial air response must not count as a successful Strong retry.
+            if (!initialConfirmed) return;
+            expire(now);
+            awaiting.putIfAbsent(pos.immutable(), now + 2_000_000_000L);
+        }
+
+        boolean confirm(BlockPos pos, long now) {
+            Long deadline = awaiting.remove(pos);
+            return deadline != null && now < deadline;
+        }
+
+        void expire(long now) {
+            awaiting.values().removeIf(deadline -> now >= deadline);
+        }
+
+        void clear() {
+            awaiting.clear();
+        }
+    }
+
+    static final class MiningProgress {
+        private long lastNs;
+        private double damage;
+        private double rate;
+        private boolean started;
+
+        void start(long now, float delta, float tps) {
+            lastNs = now;
+            damage = Float.isFinite(delta) ? Math.max(0, delta) : 0;
+            rate = damage * serverTicks(1000, tps) / 1_000_000_000.0;
+            started = true;
+        }
+
+        void advance(long now, float delta, float tps, boolean paused) {
+            if (!started) return;
+            damage += Math.max(0, now - lastNs) * rate;
+            lastNs = Math.max(lastNs, now);
+            rate = paused || !Float.isFinite(delta) ? 0
+                : Math.max(0, delta) * serverTicks(1000, tps) / 1_000_000_000.0;
+        }
+
+        double fraction(double threshold) {
+            return Math.clamp(damage / threshold, 0, 1);
+        }
+
+        double renderFraction(long now, double threshold) {
+            // Extrapolate at most one client tick without changing mining work.
+            return Math.clamp((damage + Math.clamp(now - lastNs, 0, 50_000_000L) * rate) / threshold, 0, 1);
+        }
+    }
+
     public class MineContext {
 
         public final BlockPos   pos;
@@ -1317,14 +1423,16 @@ public class Speedmine extends Module {
         public final long       startMs;
         public final float      hardness;
         public boolean          isPrimary;
-        public final boolean    instaBreak;
+        public boolean          instaBreak;
         /** Hotbar slot holding the tool this block was started with; -1 if none. */
         public final int        startSlot;
         public boolean          active = true;
         private boolean rebreak;
         private boolean packetRebreak;
-        private long lastProgressMs;
-        private double elapsedTicks;
+        private boolean started;
+        private boolean stopSent;
+        private float tickDamage;
+        private final MiningProgress timing = new MiningProgress();
 
         public MineContext(BlockPos pos, BlockState state, boolean isPrimary) {
             this.pos            = pos.immutable();
@@ -1333,10 +1441,8 @@ public class Speedmine extends Module {
             this.isPrimary      = isPrimary;
             this.startSlot      = findBestHotbarSlot(state);
             this.startMs        = System.currentTimeMillis();
-            this.lastProgressMs = startMs;
-            this.elapsedTicks   = 1;
-            float delta         = calcDelta();
-            this.instaBreak     = delta >= 1.0f;
+            this.tickDamage     = calcDelta();
+            this.instaBreak     = tickDamage >= 1.0f;
         }
 
         private boolean requiresValidation() {
@@ -1344,16 +1450,12 @@ public class Speedmine extends Module {
         }
 
         public double progress() {
-            if (mc.player == null || mc.level == null || hardness < 0) return 0;
-            long now = System.currentTimeMillis();
-            if (!shouldPauseMining()) {
-                elapsedTicks += serverTicks(now - lastProgressMs, effectiveTps());
-            }
-            lastProgressMs = now;
-            float perTick = calcDelta();
-            if (perTick <= 0) return 0;
-            float target  = isPrimary ? breakThreshold.get().floatValue() : 1.0f;
-            return Math.min((perTick * elapsedTicks) / target, 1.0);
+            return timing.fraction(isPrimary ? breakThreshold.get() : 1);
+        }
+
+        private void advance(long now, boolean paused) {
+            tickDamage = paused ? 0 : calcDelta();
+            timing.advance(now, tickDamage, effectiveTps(), paused);
         }
 
         private float calcDelta() {

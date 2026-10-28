@@ -55,6 +55,9 @@ import java.util.Set;
 
 /** Scaffold placement adapted from Meteor Client (copyright Meteor Development). */
 public class THMScaffold extends Module {
+    private static final Direction[] SUPPORT_SIDES = {
+        Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST, Direction.UP
+    };
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgRender = settings.createGroup("Render");
 
@@ -128,25 +131,6 @@ public class THMScaffold extends Module {
         .name("air-place")
         .description("Air-place only when no supporting face is available.")
         .defaultValue(false)
-        .build()
-    );
-
-    private final Setting<Double> aheadDistance = sgGeneral.add(new DoubleSetting.Builder()
-        .name("ahead-distance")
-        .description("How far ahead to place blocks.")
-        .defaultValue(0)
-        .min(0)
-        .sliderMax(1)
-        .build()
-    );
-
-    private final Setting<Double> placeRange = sgGeneral.add(new DoubleSetting.Builder()
-        .name("closest-block-range")
-        .description("Horizontal support search range.")
-        .defaultValue(4)
-        .min(0)
-        .max(8).sliderMax(8)
-        .visible(() -> !airPlace.get())
         .build()
     );
 
@@ -230,7 +214,7 @@ public class THMScaffold extends Module {
             .name("packet-place").description("Places blocks without client prediction.")
             .defaultValue(false).build());
         thm$packetPlaceOnce = sgGeneral.add(new BoolSetting.Builder()
-            .name("packet-place-once").description("Waits for a server block update before retrying.")
+            .name("packet-place-once").description("Waits for server updates instead of retrying each tick.")
             .defaultValue(false).visible(thm$packetPlace::get).build());
         thm$packetLimiter = sgGeneral.add(new BoolSetting.Builder()
             .name("packet-limiter").description("Limits Scaffold packets per tick.")
@@ -349,7 +333,7 @@ public class THMScaffold extends Module {
         thm$epoch++;
         thm$tick++;
         thm$queued.clear();
-        thm$packets.beginTick();
+        thm$packets.beginTick(!thm$packetPlace.get() || thm$packetPlaceOnce.get());
         if (mc.player == null || mc.level == null) return;
         if (thm$keepY.get() && thm$lockedY == Integer.MIN_VALUE) thm$lockedY = mc.player.getBlockY() - 1;
         if (!thm$keepY.get()) thm$lockedY = Integer.MIN_VALUE;
@@ -357,7 +341,7 @@ public class THMScaffold extends Module {
         for (var entry : thm$packets.snapshot().entrySet()) {
             BlockPos pos = BlockPos.of(entry.getKey());
             if (mc.level.getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4) == null
-                || mc.player.getEyePosition().distanceToSqr(Vec3.atCenterOf(pos)) > 36) {
+                || !mc.player.isWithinBlockInteractionRange(pos, 0)) {
                 thm$packets.forget(entry.getKey());
                 continue;
             }
@@ -422,11 +406,12 @@ public class THMScaffold extends Module {
             thm$queued.remove(target.asLong());
             return false;
         }
-        if (thm$packets.isPending(target.asLong())) {
+        boolean packet = thm$packetPlace.get();
+        if (!thm$packets.canSend(target.asLong(), !packet || thm$packetPlaceOnce.get())) {
             thm$queued.remove(target.asLong());
             return false;
         }
-        BlockHitResult hit = placementHit(target, side);
+        BlockHitResult hit = placementHit(target, side, mc.player.getEyePosition());
         Vec3 hitPos = hit.getLocation();
         int swapCost = item.isOffhand() ? 0 : 2;
         if (!thm$packets.reserve(thm$packetLimiter.get(), thm$packetLimit.get(), 2 + swapCost + (rotate ? 1 : 0))) {
@@ -437,37 +422,42 @@ public class THMScaffold extends Module {
         long epoch = thm$epoch;
         var player = mc.player;
         var level = mc.level;
-        boolean packet = thm$packetPlace.get();
         Runnable action = () -> {
+            boolean placed = false;
             try {
                 if (!isActive() || epoch != thm$epoch || mc.player != player || mc.level != level
-                    || thm$packets.isPending(target.asLong()) || packet != thm$packetPlace.get() || (onlyOnClick.get() && !mc.options.keyUse.isDown()) || !thm$canPlace(target, item, checkEntities)) return;
-                if (side != null && level.getBlockState(hit.getBlockPos()).canBeReplaced()) return;
+                    || !thm$packets.canSend(target.asLong(), !packet || thm$packetPlaceOnce.get())
+                    || packet != thm$packetPlace.get() || (onlyOnClick.get() && !mc.options.keyUse.isDown()) || !thm$canPlace(target, item, checkEntities)) return;
+                Direction currentSide = thm$placeSide(target);
+                if (currentSide == null && !airPlace.get()) return;
+                // A changed support needs a fresh rotation, not the queued air click.
+                if (rotate && currentSide != side) return;
+                BlockHitResult currentHit = rotate ? hit : placementHit(target, currentSide, player.getEyePosition());
                 int previousSlot = player.getInventory().getSelectedSlot();
                 InteractionHand hand = item.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
-                // Direct air clicks must never repeat onto an unacknowledged server block.
-                boolean trackPending = side == null || (packet && thm$packetPlaceOnce.get());
+                boolean trackPending = packet ? thm$packetPlaceOnce.get() : currentSide == null;
+                thm$sent = false;
                 try {
                     if (!item.isOffhand()) thm$selectSlot(item.slot());
-                    thm$placingHit = hit;
-                    thm$sent = false;
+                    thm$placingHit = currentHit;
                     if (trackPending) thm$packets.markSent(target.asLong(), thm$tick);
                     if (packet) {
-                        player.connection.send(new ServerboundUseItemOnPacket(hand, hit, 0));
+                        player.connection.send(new ServerboundUseItemOnPacket(hand, currentHit, 0));
                         if (thm$sent) {
                             if (swing) player.swing(hand);
                             else player.connection.send(new ServerboundSwingPacket(hand));
                         }
                     } else {
-                        BlockUtils.interact(hit, hand, swing);
+                        BlockUtils.interact(currentHit, hand, swing);
                     }
                 } finally {
-                    if (trackPending && !thm$sent) thm$packets.forget(target.asLong());
+                    placed = thm$sent;
+                    if (trackPending && !placed) thm$packets.forget(target.asLong());
                     thm$placingHit = null;
                     if (!item.isOffhand() && mc.player == player && mc.level == level) thm$selectSlot(previousSlot);
                 }
             } finally {
-                if (epoch == thm$epoch) thm$queued.remove(target.asLong());
+                if (epoch == thm$epoch && !placed) thm$queued.remove(target.asLong());
             }
         };
         if (rotate) Rotations.rotate(Rotations.getYaw(hitPos), Rotations.getPitch(hitPos), priority, action);
@@ -490,12 +480,12 @@ public class THMScaffold extends Module {
         ItemStack stack = item.isOffhand() ? mc.player.getOffhandItem() : mc.player.getInventory().getItem(item.slot());
         return validItem(stack, pos) && stack.getItem() instanceof BlockItem block
             && mc.level.getWorldBorder().isWithinBounds(pos)
-            && mc.player.getEyePosition().distanceToSqr(Vec3.atCenterOf(pos)) <= 36
+            && mc.player.isWithinBlockInteractionRange(pos, 0)
             && BlockUtils.canPlaceBlock(pos, checkEntities, block.getBlock());
     }
 
     private Direction thm$placeSide(BlockPos pos) {
-        for (Direction side : Direction.values()) {
+        for (Direction side : SUPPORT_SIDES) {
             var state = mc.level.getBlockState(pos.relative(side));
             if (!state.canBeReplaced() && state.getFluidState().isEmpty() && !BlockUtils.isClickable(state.getBlock())) return side;
         }
@@ -515,9 +505,18 @@ public class THMScaffold extends Module {
             ? new BlockPos(pos.getX(), thm$lockedY, pos.getZ()) : pos;
     }
 
-    static BlockHitResult placementHit(BlockPos target, Direction side) {
+    static BlockHitResult placementHit(BlockPos target, Direction side, Vec3 eye) {
         Vec3 hit = Vec3.atCenterOf(target);
-        if (side == null) return new BlockHitResult(hit, Direction.UP, target, false);
+        if (side == null) {
+            Direction face = Direction.NORTH;
+            double closest = Double.POSITIVE_INFINITY;
+            for (Direction horizontal : Direction.Plane.HORIZONTAL) {
+                double distance = eye.distanceToSqr(hit.add(horizontal.getStepX() * 0.5, 0, horizontal.getStepZ() * 0.5));
+                if (distance < closest) { closest = distance; face = horizontal; }
+            }
+            // An unacknowledged solid target may offset a retry; keep it on the floor plane.
+            return new BlockHitResult(hit.add(face.getStepX() * 0.5, 0, face.getStepZ() * 0.5), face, target, false);
+        }
         hit = hit.add(side.getStepX() * 0.5, side.getStepY() * 0.5, side.getStepZ() * 0.5);
         return new BlockHitResult(hit, side.getOpposite(), target.relative(side), false);
     }
@@ -538,13 +537,6 @@ public class THMScaffold extends Module {
         if (onlyOnClick.get() && !mc.options.keyUse.isDown()) return;
 
         Vec3 pos = mc.player.position().add(mc.player.getDeltaMovement());
-        if (aheadDistance.get() != 0 && !towering() && !mc.level.getBlockState(mc.player.blockPosition().below()).getCollisionShape(mc.level, mc.player.blockPosition()).isEmpty()) {
-            Vec3 dir = Vec3.directionFromRotation(0, mc.player.getYRot()).scale(aheadDistance.get());
-            if (mc.options.keyUp.isDown()) pos = pos.add(dir.x, 0, dir.z);
-            if (mc.options.keyDown.isDown()) pos = pos.add(-dir.x, 0, -dir.z);
-            if (mc.options.keyLeft.isDown()) pos = pos.add(dir.z, 0, -dir.x);
-            if (mc.options.keyRight.isDown()) pos = pos.add(-dir.z, 0, dir.x);
-        }
         bp.set(pos.x, pos.y - 0.75, pos.z);
         if (mc.options.keyShift.isDown() && !mc.options.keyJump.isDown()) bp.setY(bp.getY() - 1);
         if (bp.getY() >= mc.player.getBlockY()) bp.setY(mc.player.getBlockY() - 1);
@@ -556,9 +548,10 @@ public class THMScaffold extends Module {
             if (placementsThisTick >= blocksPerTick.get()) break;
             placed |= place(target);
         }
+        double reach = mc.player.blockInteractionRange();
         if (!placed && !airPlace.get() && mc.level.getBlockState(anchor).canBeReplaced()
-            && thm$placeSide(anchor) == null && placeRange.get() > radius.get()) {
-            for (BlockPos target : placementTargets(anchor, placeRange.get(), pos)) {
+            && thm$placeSide(anchor) == null && reach > radius.get()) {
+            for (BlockPos target : placementTargets(anchor, reach, pos)) {
                 if (place(target)) break;
             }
         }
@@ -579,16 +572,6 @@ public class THMScaffold extends Module {
                 mc.player.setOnGround(true);
             }
         }
-    }
-
-    public boolean scaffolding() {
-        return isActive() && (!onlyOnClick.get() || (onlyOnClick.get() && mc.options.keyUse.isDown()));
-    }
-
-    public boolean towering() {
-        FindItemResult result = InvUtils.findInHotbar(itemStack -> validItem(itemStack, bp));
-        return scaffolding() && fastTower.get() && mc.options.keyJump.isDown() && !mc.options.keyShift.isDown() &&
-            (whileMoving.get() || !PlayerUtils.isMoving()) && result.found() && (autoSwitch.get() || result.getHand() != null);
     }
 
     private boolean validItem(ItemStack itemStack, BlockPos pos) {
@@ -626,8 +609,12 @@ public class THMScaffold extends Module {
         private final Set<Long> confirmed = new HashSet<>();
         private int used;
 
-        public synchronized void beginTick() {
+        public synchronized void beginTick(boolean waitForServer) {
             used = 0;
+            if (!waitForServer) {
+                clearPending();
+                return;
+            }
             answered.forEach((pos, replaceable) -> {
                 if (replaceable) { pending.remove(pos); confirmed.remove(pos); }
                 else confirmed.add(pos);
@@ -641,7 +628,7 @@ public class THMScaffold extends Module {
             return true;
         }
 
-        public synchronized boolean isPending(long pos) { return pending.containsKey(pos); }
+        public synchronized boolean canSend(long pos, boolean waitForServer) { return !waitForServer || !pending.containsKey(pos); }
         public synchronized void markSent(long pos, long tick) { pending.put(pos, tick); }
         public synchronized void answer(long pos, boolean replaceable) { if (pending.containsKey(pos)) answered.put(pos, replaceable); }
         public synchronized boolean isConfirmed(long pos) { return confirmed.contains(pos); }

@@ -7,9 +7,11 @@
 package xyz.thm.addon.modules;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.network.protocol.game.GamePacketTypes;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -22,6 +24,147 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SpeedmineTest {
+    @Test
+    void strongRetriesBeforeTheInitialBreakCannotClaimItsAirConfirmation() {
+        var confirmations = new Speedmine.RebreakConfirmations();
+        BlockPos pos = new BlockPos(1, 64, 0);
+        confirmations.sent(pos, 0, false);
+        assertFalse(confirmations.confirm(pos, 50_000_000));
+        confirmations.sent(pos, 100_000_000, true);
+        assertTrue(confirmations.confirm(pos, 150_000_000));
+    }
+
+    @Test
+    void rebreakAttemptsOnlyCountOnceAfterMatchingServerAir() {
+        var confirmations = new Speedmine.RebreakConfirmations();
+        BlockPos pos = new BlockPos(1, 64, 0);
+        assertFalse(confirmations.confirm(pos, 0), "Initial breaks and unsolicited air are not rebreaks.");
+        confirmations.sent(pos, 0, true);
+        confirmations.sent(pos, 50_000_000, true);
+        assertFalse(confirmations.confirm(pos.east(), 100_000_000));
+        assertTrue(confirmations.confirm(pos, 100_000_000));
+        assertFalse(confirmations.confirm(pos, 110_000_000), "Duplicate air must not count twice.");
+        confirmations.sent(pos, 150_000_000, true);
+        assertTrue(confirmations.confirm(pos, 200_000_000), "A subsequent replacement can count again.");
+    }
+
+    @Test
+    void switchingTargetsDoesNotLoseAnOutstandingRebreakConfirmation() {
+        var confirmations = new Speedmine.RebreakConfirmations();
+        BlockPos first = new BlockPos(1, 64, 0), second = first.east();
+        confirmations.sent(first, 0, true);
+        confirmations.sent(second, 50_000_000, true);
+        assertTrue(confirmations.confirm(first, 100_000_000));
+        assertTrue(confirmations.confirm(second, 150_000_000));
+    }
+
+    @Test
+    void expiredAndClearedRebreaksDoNotCountAsSuccess() {
+        var confirmations = new Speedmine.RebreakConfirmations();
+        BlockPos pos = new BlockPos(1, 64, 0);
+        confirmations.sent(pos, 0, true);
+        confirmations.sent(pos, 1_900_000_000, true);
+        assertFalse(confirmations.confirm(pos, 2_000_000_000L), "Retries must not indefinitely extend the same wait.");
+        confirmations.sent(pos, 3_000_000_000L, true);
+        confirmations.expire(5_000_000_000L);
+        assertFalse(confirmations.confirm(pos, 5_000_000_000L));
+        confirmations.sent(pos, 6_000_000_000L, true);
+        confirmations.clear();
+        assertFalse(confirmations.confirm(pos, 6_100_000_000L));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ServerboundPlayerActionPacket.Action.class, names = {"START_DESTROY_BLOCK", "STOP_DESTROY_BLOCK"})
+    void miningPredictionRequiresTheExactDispatchedPacket(ServerboundPlayerActionPacket.Action action) {
+        BlockPos pos = new BlockPos(1, 64, 0);
+        var packet = new ServerboundPlayerActionPacket(action, pos, Direction.DOWN, 5);
+        int[] predictions = {0};
+        var dispatch = new Speedmine.MiningAction(packet, () -> predictions[0]++);
+        assertEquals(0, predictions[0], "Creating a packet is not dispatch.");
+        dispatch.sent(new ServerboundPlayerActionPacket(action, pos, Direction.DOWN, 5));
+        assertEquals(0, predictions[0], "An equal packet from another action must not complete this one.");
+        dispatch.sent(packet);
+        assertEquals(1, predictions[0]);
+        dispatch.sent(packet);
+        assertEquals(1, predictions[0], "Prediction runs once within the action's sequence.");
+    }
+
+    @Test
+    void blockedStartCannotEarnDamageBeforeSuccessfulRetry() {
+        var progress = new Speedmine.MiningProgress();
+        progress.advance(1_000_000_000L, 0.1f, 20, false);
+        assertEquals(0, progress.fraction(1));
+        assertEquals(0, progress.renderFraction(1_025_000_000L, 1));
+        progress.start(2_000_000_000L, 0.1f, 20);
+        assertEquals(0.1, progress.fraction(1), 1e-6, "Only the accepted START earns its first tick.");
+        progress.advance(2_050_000_000L, 0.1f, 20, false);
+        assertEquals(0.2, progress.fraction(1), 1e-6);
+    }
+
+    @Test
+    void renderedProgressMovesSmoothlyWithoutChangingMiningWork() {
+        var progress = new Speedmine.MiningProgress();
+        progress.start(0, 0.1f, 20);
+        double before = progress.fraction(1);
+        for (int frame = 0; frame <= 50; frame++) {
+            assertEquals(0.1 + frame * 0.002, progress.renderFraction(frame * 1_000_000L, 1), 1e-6);
+            assertEquals(before, progress.fraction(1), "Frame rate must not advance mining.");
+        }
+        progress.advance(50_000_000L, 0.1f, 20, false);
+        assertEquals(0.2, progress.renderFraction(50_000_000L, 1), 1e-6, "The next tick must not snap backwards.");
+    }
+
+    @Test
+    void visualExtrapolationIsBoundedToOneTick() {
+        var progress = new Speedmine.MiningProgress();
+        progress.start(0, 0.1f, 20);
+        assertEquals(progress.renderFraction(50_000_000L, 1), progress.renderFraction(5_000_000_000L, 1));
+        assertEquals(0.1, progress.fraction(1), 1e-6);
+    }
+
+    @Test
+    void hasteAndTpsChangesDoNotMultiplyPreviouslyEarnedDamage() {
+        var progress = new Speedmine.MiningProgress();
+        progress.start(0, 0.1f, 20);
+        progress.advance(50_000_000L, 0.2f, 10, false);
+        assertEquals(0.2, progress.fraction(1), 1e-6);
+        progress.advance(150_000_000L, 0.2f, 10, false);
+        assertEquals(0.4, progress.fraction(1), 1e-6);
+    }
+
+    @Test
+    void pausedMiningFreezesBothWorkAndVisualExtrapolation() {
+        var progress = new Speedmine.MiningProgress();
+        progress.start(0, 0.1f, 20);
+        double lastFrame = progress.renderFraction(40_000_000L, 1);
+        progress.advance(50_000_000L, 0, 20, true);
+        double paused = progress.fraction(1);
+        assertTrue(paused >= lastFrame, "Entering a pause must not snap the animation backwards.");
+        assertEquals(paused, progress.renderFraction(75_000_000L, 1));
+        progress.advance(5_000_000_000L, 0.1f, 20, false);
+        assertEquals(paused, progress.fraction(1), "Resuming must not catch up through a pause.");
+        progress.advance(5_050_000_000L, 0.1f, 20, false);
+        assertEquals(paused + 0.1, progress.fraction(1), 1e-6);
+    }
+
+    @Test
+    void clockRegressionCannotAwardMiningWorkTwice() {
+        var progress = new Speedmine.MiningProgress();
+        progress.start(100_000_000L, 0.1f, 20);
+        progress.advance(50_000_000L, 0.1f, 20, false);
+        progress.advance(150_000_000L, 0.1f, 20, false);
+        assertEquals(0.2, progress.fraction(1), 1e-6);
+    }
+
+    @Test
+    void primaryAndSecondaryThresholdsShareTheSameAccumulatedWork() {
+        var progress = new Speedmine.MiningProgress();
+        progress.start(0, 0.35f, 20);
+        progress.advance(50_000_000L, 0.35f, 20, false);
+        assertEquals(1, progress.fraction(0.7), 1e-6);
+        assertEquals(0.7, progress.fraction(1), 1e-6);
+    }
+
     @Test
     void bedrockSwingCheckUsesPacketTypesFromTheLimiter() {
         var blocked = Set.of(GamePacketTypes.SERVERBOUND_SWING);
