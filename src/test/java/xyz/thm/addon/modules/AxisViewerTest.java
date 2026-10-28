@@ -12,6 +12,41 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class AxisViewerTest {
     @Test
+    void rewardEligibilityIncludesEveryRingAndDiamondInAllQuadrants() {
+        for (int radius : AxisViewer.RING_ROADS) {
+            for (int sign : new int[] {-1, 1}) {
+                assertTrue(AxisViewer.isOnHighway(sign * radius + 0.5, radius * 0.37 + 0.5, true));
+                assertTrue(AxisViewer.isOnHighway(radius * 0.37 + 0.5, sign * radius + 0.5, true));
+            }
+        }
+        for (int radius : AxisViewer.DIAMONDS) {
+            for (int sx : new int[] {-1, 1}) {
+                for (int sz : new int[] {-1, 1}) {
+                    assertTrue(AxisViewer.isOnHighway(sx * radius * 0.37 + 0.5, sz * radius * 0.63 + 0.5, true));
+                }
+            }
+        }
+    }
+
+    @Test
+    void rewardEligibilityIncludesAxesGridAndExtensionsButNotUnmappedTerrain() {
+        assertTrue(AxisViewer.isOnHighway(0.5, 1234567.5, false));
+        assertTrue(AxisViewer.isOnHighway(-1234566.5, 1234567.5, false));
+        assertTrue(AxisViewer.isOnHighway(5000.5, 42123.5, true));
+        assertTrue(AxisViewer.isOnHighway(-42122.5, -4999.5, true));
+        assertTrue(AxisViewer.isOnHighway(50000.5, 124999.5, true));
+        assertTrue(AxisViewer.isOnHighway(-124998.5, -49999.5, true));
+        assertTrue(AxisViewer.isOnHighway(62504.5, 23123.5, true), "allow the highway's width");
+        assertFalse(AxisViewer.isOnHighway(62506.5, 23123.5, true));
+        assertFalse(AxisViewer.isOnHighway(54321.5, 12345.5, true));
+        assertFalse(AxisViewer.isOnHighway(5000.5, 51123.5, true), "grid roads stop at 50k");
+        assertFalse(AxisViewer.isOnHighway(50000.5, 125006.5, true), "extensions stop at 125k");
+        assertFalse(AxisViewer.isOnHighway(62500.5, 23123.5, false), "rings are Nether-only");
+        assertFalse(AxisViewer.isOnHighway(Double.NaN, 0.5, true));
+        assertFalse(AxisViewer.isOnHighway(Double.POSITIVE_INFINITY, 0.5, true));
+    }
+
+    @Test
     void highwayRadiiCoverXaeroPlusAndKeepExistingThmDiamonds() {
         assertArrayEquals(new int[] {
             200, 500, 750, 1000, 1500, 2000, 2500, 3131, 3500, 5000, 6250, 7500,

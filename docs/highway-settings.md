@@ -26,6 +26,12 @@ uses a recent confirmation for the status board and API proof-of-work classifica
 direction. `None` sends the original status format without a mode field, so Kitbot estimates from
 block counts. Proof-of-work validation still applies.
 
+Status and proof-of-work submissions include the addon version. Proof of work also checks the
+Axis Viewer network: axes, Nether rings, diamonds, grid roads and extensions keep their normal
+rates. Work outside that network receives 20% distance credit. Rendering toggles do not affect
+this check, and pausing preserves eligibility from the build position. Older clients keep their
+existing rates until the server enables a minimum addon version.
+
 The first time `HighwayBuilding` or `HighwayDigging` is applied, it starts from the current settings and applies these public seed values:
 
 | Profile | Initial public seed values |

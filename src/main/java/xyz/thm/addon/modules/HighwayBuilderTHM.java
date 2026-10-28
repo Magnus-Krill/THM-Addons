@@ -102,6 +102,7 @@ import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.HangingSignBlockEntity;
@@ -2445,7 +2446,8 @@ public class HighwayBuilderTHM extends Module {
         }
 
         ManualPause saved = new ManualPause(mc.player.position(), dir, mc.player.getXRot(),
-            Utils.getWorldName(), mc.level.dimension().identifier().toString(), isOnMainHighway());
+            Utils.getWorldName(), mc.level.dimension().identifier().toString(), isOnMainHighway(),
+            AxisViewer.isOnHighway(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER));
         resumeStatsSessionOnNextActivate = true;
         // Travel handoffs already release controls without finalizing statistics.
         travelHandoffDeactivateArmed = true;
@@ -2527,7 +2529,8 @@ public class HighwayBuilderTHM extends Module {
             && manualPause.dimension().equals(mc.level.dimension().identifier().toString());
     }
 
-    record ManualPause(Vec3 position, HorizontalDirection direction, float pitch, String world, String dimension, boolean mainHighway) {
+    record ManualPause(Vec3 position, HorizontalDirection direction, float pitch, String world, String dimension,
+                       boolean mainHighway, boolean mappedHighway) {
         boolean arrived(Vec3 current) {
             double dx = current.x - position.x;
             double dz = current.z - position.z;
@@ -11260,7 +11263,7 @@ public class HighwayBuilderTHM extends Module {
                         );
                         if (committed != null) {
                             String server = mc.getCurrentServer() != null ? mc.getCurrentServer().ip : "singleplayer";
-                            String statsMessageapi = String.format("%s:%s:%s:%.0f:%s:%s:%s:%s:%s%s",
+                            String statsMessageapi = String.format("%s:%s:%s:%.0f:%s:%s:%s:%s:%s%s:official=%s",
                                 THMSystem.get().getApiToken(),
                                 playerName,
                                 server,
@@ -11270,7 +11273,9 @@ public class HighwayBuilderTHM extends Module {
                                 dir,
                                 generateTimestamp(),
                                 manualPause != null ? manualPause.mainHighway() : isOnMainHighway(),
-                                apiModeSuffix(THMSystem.get().getMode())
+                                apiModeSuffix(THMSystem.get().getMode()),
+                                manualPause != null ? manualPause.mappedHighway()
+                                    : AxisViewer.isOnHighway(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER)
                             );
                             sendStatistics(statsMessageapi);
                             working = committed;

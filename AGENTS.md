@@ -71,6 +71,10 @@ existing Bearer API token, with membership enforced by the server.
 Queued requests use the current configured token; the server still validates ownership and membership.
 `THMSystem` publishes credential changes through volatile snapshots for worker reads.
 
+Highway status and PoW append the loaded addon version through `APIUtils`. PoW also reports
+Axis Viewer's mapped-network eligibility, independent of render toggles; manual pause preserves
+the build position's eligibility. Keep this separate from the main-axis flag and KitBot `$update` guards.
+
 Every outbound request — API calls and player-configured webhooks alike — goes through
 `TrustedHttp`, not raw `HttpURLConnection`: it rejects non-http(s) schemes, resolves the hostname
 and blocks loopback/RFC1918/link-local/CGNAT/metadata targets (SSRF), only follows same-host
@@ -144,9 +148,11 @@ addon-specific settings screen — don't confuse the two when adding a new modul
 **Highway restock inventory:** HighwayBuilder owns supply slots 5-9 through `Manage-hotbar`. Trash limits include hotbar stacks. Offhand refills preserve reserved hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
 
 **THMScaffold:** `modules/THMScaffold` owns Scaffold settings and its optional packet budget in one
-source file. Radius and ahead-distance work independently of air-place; support searches stay on the
-placement plane. Air-place uses existing faces first and waits for server state before another direct
-air click. Meteor Scaffold is unmodified. The budget reserves complete placement transactions;
+source file. Radius controls the build area; fallback support searches use the player's block reach
+on the placement plane. Air-place uses existing faces first and horizontal faces for direct clicks.
+Packet-place-once controls confirmation waits; disabling it retries each tick within the placement
+and packet budgets. Successful sends keep their per-tick reservation across radius and lookahead.
+Meteor Scaffold is unmodified. The budget reserves complete placement transactions;
 `PaketLimiter` always allows hotbar slot changes to preserve swap recovery.
 
 **Meteor Offhand:** `OffhandMixin` adds `held-item-filter`: Off, Only when holding, or Only when not holding. `held-items` supplies the whitelist/blocklist. Filtering includes Offhand's totem swaps and releases its lock when blocked. `ModuleMixin` migrates the old toggle.
@@ -200,6 +206,11 @@ Speedmine also checks client replacements before and after placement ticks. Stro
 target without an air confirmation; other pending normal breaks still keep validation priority.
 
 **Speedmine Air Miner:** Public 26.2 only. The optional Air Miner group defaults off and claims ground around START/STOP mining packets, once per client tick. `PlayerAirMiningMixin` removes the local airborne mining penalty; Speedmine's custom progress uses the same eligibility. Claims expire and restore only on their original connection. Keep gliding opt-in and retain the speed cap. Source and manual checks: `docs/quiettee-air-miner.md`.
+
+**Speedmine timing:** Credit START and predict air only after `PacketEvent.Sent`, inside the action's
+prediction sequence. Accumulate damage once per tick; rendering extrapolates the cached rate for at
+most one tick without changing work. The rebreak monitor counts matching server air updates after a
+confirmed initial break. Strong has no additional per-tick attempt cap.
 
 **Surround:** `modules/Surround` replaces SurroundPlus, retaining the `surround-plus` registry name
 and showing as Surround. Both triggers repair client-world air; `onPacket` also preplaces on break effects

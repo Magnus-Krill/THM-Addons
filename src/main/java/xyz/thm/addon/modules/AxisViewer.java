@@ -20,6 +20,9 @@ import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.utils.RenderUtilsTHM;
 
 public class AxisViewer extends Module {
+    private static final int GRID_RADIUS = 50_000;
+    private static final int GRID_STEP = 5_000;
+    private static final int EXTENSION_RADIUS = 125_000;
     private final SettingGroup sgOverworld = settings.createGroup("Overworld");
     private final SettingGroup sgNether = settings.createGroup("Nether");
     private final SettingGroup sgEnd = settings.createGroup("End");
@@ -194,6 +197,28 @@ public class AxisViewer extends Module {
         3750000
     );
 
+    // Eligibility uses the full network, independent of rendering toggles and camera position.
+    public static boolean isOnHighway(double x, double z, boolean nether) {
+        if (!Double.isFinite(x) || !Double.isFinite(z)) return false;
+        x -= 0.5;
+        z -= 0.5;
+        double ax = Math.abs(x), az = Math.abs(z);
+        if (Math.max(ax, az) >= 30_000_005) return false;
+        if (ax < 5 || az < 5 || Math.abs(ax - az) < 5) return true;
+        if (!nether) return false;
+        for (int radius : RING_ROADS) {
+            if (Math.abs(Math.max(ax, az) - radius) < 5) return true;
+        }
+        for (int radius : DIAMONDS) {
+            if (Math.abs(ax + az - radius) < 5) return true;
+        }
+        if (ax < GRID_RADIUS + 5 && az < GRID_RADIUS + 5
+            && (Math.abs(x - Math.round(x / GRID_STEP) * GRID_STEP) < 5
+                || Math.abs(z - Math.round(z / GRID_STEP) * GRID_STEP) < 5)) return true;
+        return (Math.abs(ax - GRID_RADIUS) < 5 && az < EXTENSION_RADIUS + 5)
+            || (Math.abs(az - GRID_RADIUS) < 5 && ax < EXTENSION_RADIUS + 5);
+    }
+
     @EventHandler
     private void onRender3D(Render3DEvent event) {
         if (mc.level == null || mc.gui.hud.isHidden()) return;
@@ -266,20 +291,20 @@ public class AxisViewer extends Module {
             }
         }
         if (netherGrid.get()) {
-            for (int coordinate = -50_000; coordinate < 50_000; coordinate += 5_000) {
+            for (int coordinate = -GRID_RADIUS; coordinate < GRID_RADIUS; coordinate += GRID_STEP) {
                 if (coordinate == 0) continue;
-                drawLine(event, coordinate + offset, -50_000 + offset,
-                    coordinate + offset, 50_000 + offset, y, lineColor);
-                drawLine(event, -50_000 + offset, coordinate + offset,
-                    50_000 + offset, coordinate + offset, y, lineColor);
+                drawLine(event, coordinate + offset, -GRID_RADIUS + offset,
+                    coordinate + offset, GRID_RADIUS + offset, y, lineColor);
+                drawLine(event, -GRID_RADIUS + offset, coordinate + offset,
+                    GRID_RADIUS + offset, coordinate + offset, y, lineColor);
             }
         }
         if (netherExtensions.get()) {
             for (int side = -1; side <= 1; side += 2) {
                 for (int direction = -1; direction <= 1; direction += 2) {
-                    double start = direction * 50_000 + offset;
-                    double end = direction * 125_000 + offset;
-                    double fixed = side * 50_000 + offset;
+                    double start = direction * GRID_RADIUS + offset;
+                    double end = direction * EXTENSION_RADIUS + offset;
+                    double fixed = side * GRID_RADIUS + offset;
                     drawLine(event, start, fixed, end, fixed, y, lineColor);
                     drawLine(event, fixed, start, fixed, end, y, lineColor);
                 }

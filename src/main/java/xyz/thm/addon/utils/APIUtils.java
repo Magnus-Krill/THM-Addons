@@ -130,11 +130,11 @@ public class APIUtils {
     }
 
     public static void sendStatus(String message) {
-        apiPost("status", GeneratedApiEndpoints.statusUrl(), jsonContent(message));
+        apiPost("status", GeneratedApiEndpoints.statusUrl(), jsonContent(message + ":v" + THMAddon.VERSION));
     }
 
     public static void sendStatistics(String message) {
-        apiPost("statistics", GeneratedApiEndpoints.highwayUrl(), jsonContent(message));
+        apiPost("statistics", GeneratedApiEndpoints.highwayUrl(), jsonContent(message + ":v" + THMAddon.VERSION));
     }
 
     // Discord webhook URL, supplied by the player at runtime - never attach our API token to it.
