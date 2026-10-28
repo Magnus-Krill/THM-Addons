@@ -153,6 +153,9 @@ public class HighwayBuilderScreen extends WindowScreen {
             else module.pauseBuilder();
             updateStatus();
         };
+        WButton rates = controls.add(theme.button("Toggle block rate debug")).expandX().widget();
+        rates.tooltip = "Starts or stops one chat update per second.";
+        rates.action = module::toggleBlockRateDebug;
         updateStatus();
 
         WHorizontalList profiles = add(theme.horizontalList()).expandX().widget();
@@ -306,8 +309,8 @@ public class HighwayBuilderScreen extends WindowScreen {
             : module.isActive()
             ? String.format(Locale.ROOT, "%s  -  heading %s", module.currentStateName(), module.dir == null ? "?" : module.dir.toString())
             : "Off");
-        statsLabel.set(String.format(Locale.ROOT, "placed %d   broken %d   %.1f blocks/s",
-            module.blocksPlaced, module.blocksBroken, module.getMeasuredPlacesPerSecond()));
+        statsLabel.set(String.format(Locale.ROOT, "placed %d   broken %d   Dug %.1f/s   Paved %.1f/s",
+            module.blocksPlaced, module.blocksBroken, module.getMeasuredBreaksPerSecond(), module.getMeasuredPlacesPerSecond()));
         rateLabel.set(String.format(Locale.ROOT, "mine %.1f/tick   place %.1f/tick   restock %s",
             module.currentMineRate(), module.currentPlaceRate(),
             TimeFormat.eta(HighwayHud.getRestockBlocks(), module.getMeasuredPlacesPerSecond())));

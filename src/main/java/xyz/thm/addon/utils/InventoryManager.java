@@ -24,7 +24,6 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.*;
 import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.block.state.BlockState;
-import xyz.thm.addon.mixin.accessor.ClientPlayerInteractionManagerTHMAccessor;
 import xyz.thm.addon.mixin.accessor.InputAccessor;
 import xyz.thm.addon.mixin.accessor.PlayerInventoryAccessor;
 import xyz.thm.addon.mixin.accessor.UpdateSelectedSlotS2CPacketAccessor;
@@ -39,8 +38,9 @@ import static meteordevelopment.meteorclient.utils.player.ChatUtils.info;
 public class InventoryManager {
     private static InventoryManager INSTANCE;
     private final List<PreSwapData> swapData = new CopyOnWriteArrayList<>();
-    private int serverSlot = -1;
+    private volatile int serverSlot = -1;
     private boolean sendingPacket = false;
+    private int pendingRestoreSlot = -1;
     private boolean isEating = false;
     private long lastSetbackTime = -1;
     private final int[] transactions = new int[4];
@@ -78,13 +78,23 @@ public class InventoryManager {
                 event.cancel();
                 return;
             }
-            serverSlot = packetSlot;
+        }
+    }
+    @EventHandler
+    public void onPacketSent(PacketEvent.Sent event) {
+        if (mc.getConnection() == null || event.connection != mc.getConnection().getConnection()) return;
+        if (event.packet instanceof ServerboundSetCarriedItemPacket packet && Inventory.isHotbarSlot(packet.getSlot())) {
+            serverSlot = packet.getSlot();
         }
     }
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPacketReceive(PacketEvent.Receive event) {
         if (event.packet instanceof ClientboundSetHeldSlotPacket packet) {
-            serverSlot = ((UpdateSelectedSlotS2CPacketAccessor) (Object) packet).getSlot();
+            int slot = ((UpdateSelectedSlotS2CPacketAccessor) (Object) packet).getSlot();
+            mc.execute(() -> {
+                if (mc.getConnection() != null && event.connection == mc.getConnection().getConnection()
+                    && Inventory.isHotbarSlot(slot)) serverSlot = slot;
+            });
         }
         else if (event.packet instanceof ClientboundPingPacket packet) {
             if (transactionIndex > 3) {
@@ -110,10 +120,16 @@ public class InventoryManager {
         if (!isEating && currentPriority > Priority.NORMAL) {
             currentPriority = Priority.NORMAL;
         }
+        if (pendingRestoreSlot != -1 && currentPriority == Priority.NORMAL && !isEating) {
+            int slot = pendingRestoreSlot;
+            pendingRestoreSlot = -1;
+            restoreSilentSlot(slot);
+        }
     }
     @EventHandler
     public void onDisconnect(GameLeftEvent event) {
         serverSlot = -1;
+        pendingRestoreSlot = -1;
         sendingPacket = false;
         isEating = false;
         currentPriority = Priority.NORMAL;
@@ -155,12 +171,14 @@ public class InventoryManager {
             serverSlot = ((PlayerInventoryAccessor) mc.player.getInventory()).getSelectedSlot();
         }
         if (serverSlot != barSlot && Inventory.isHotbarSlot(barSlot)) {
+            int previous = serverSlot;
             setSlotForced(barSlot);
+            if (serverSlot != barSlot) return;
             final ItemStack[] hotbarCopy = new ItemStack[9];
             for (int i = 0; i < 9; i++) {
                 hotbarCopy[i] = mc.player.getInventory().getItem(i);
             }
-            swapData.add(new PreSwapData(hotbarCopy, serverSlot, barSlot));
+            swapData.add(new PreSwapData(hotbarCopy, previous, barSlot));
             currentPriority = priority;
         }
     }
@@ -177,11 +195,10 @@ public class InventoryManager {
         }
     }
     public void setSlotForced(final int barSlot) {
-        if (mc.getConnection() == null) return;
+        if (mc.getConnection() == null || !Inventory.isHotbarSlot(barSlot)) return;
         sendingPacket = true;
         try {
             mc.getConnection().send(new ServerboundSetCarriedItemPacket(barSlot));
-            serverSlot = barSlot;
         } finally {
             sendingPacket = false;
         }
@@ -488,7 +505,7 @@ public class InventoryManager {
         private final ItemStack[] preHotbar;
         private final int starting;
         private final int swapTo;
-        private long clearTime = -1;
+        private long clearTime = System.currentTimeMillis();
         public PreSwapData(ItemStack[] preHotbar, int start, int swapTo) {
             this.preHotbar = preHotbar;
             this.starting = start;
@@ -511,42 +528,77 @@ public class InventoryManager {
         }
     }
 
-    /**
-     * Silently swaps to the best hotbar tool for {@code state}, runs {@code action},
-     * then swaps back — all via sequenced packets so the visual held item never changes.
-     *
-     * <pre>{@code
-     * BlockState state = mc.world.getBlockState(pos);
-     * Speedmine.INSTANCE.withSilentTool(state, () -> {
-     *     mc.interactionManager.sendSequencedPacket(mc.world, seq ->
-     *         new PlayerActionC2SPacket(STOP_DESTROY_BLOCK, pos, dir, seq));
-     * });
-     * }</pre>
-     */
-    public void withSilentTool(BlockState state, Runnable action) {
-        if (mc.player == null) { action.run(); return; }
-        int best = findBestHotbarSlot(state);
-        int prev = ((PlayerInventoryAccessor) mc.player.getInventory()).getSelectedSlot();
-        boolean swap = best != -1 && best != prev;
-        if (swap) sendSequencedUpdateSlot(best);
-        action.run();
-        if (swap) sendSequencedUpdateSlot(prev);
+    /** Preserves an existing silent hold and restores only while this action still owns the slot. */
+    public boolean withSilentSlot(int slot, Runnable action) {
+        if (mc.player == null || mc.getConnection() == null || !Inventory.isHotbarSlot(slot)) return false;
+        var player = mc.player;
+        var connection = mc.getConnection();
+        int previous = getServerSlot(), clientSlot = getClientSlot();
+        int priority = currentPriority;
+        if (previous != slot) setSlotForced(slot);
+        if (getServerSlot() != slot) return false;
+        try {
+            action.run();
+            return true;
+        } finally {
+            if (mc.player == player && mc.getConnection() == connection) {
+                if (currentPriority > priority) restoreSilentSlot(slot);
+                else if (getServerSlot() == slot) {
+                    int restore = getClientSlot() == clientSlot ? previous : getClientSlot();
+                    if (restore != slot) setSlotForced(restore);
+                }
+            }
+        }
     }
+
+    public void restoreSilentSlot(int ownedSlot) {
+        if (mc.player == null || ownedSlot < 0) return;
+        if (currentPriority > Priority.NORMAL || isEating) {
+            pendingRestoreSlot = ownedSlot;
+            return;
+        }
+        int restore = restorationSlot(ownedSlot, getServerSlot(), getClientSlot());
+        if (restore != -1 && restore != getServerSlot()) setSlotForced(restore);
+    }
+
+    public void cancelSilentRestore(int ownedSlot) {
+        if (pendingRestoreSlot == ownedSlot) pendingRestoreSlot = -1;
+    }
+
+    static int restorationSlot(int ownedSlot, int actualSlot, int clientSlot) {
+        return Inventory.isHotbarSlot(ownedSlot) && actualSlot == ownedSlot && Inventory.isHotbarSlot(clientSlot) ? clientSlot : -1;
+    }
+
+    public void withSilentTool(BlockState state, Runnable action) {
+        withSilentSlot(findBestHotbarSlot(state), action);
+    }
+
     public void sendSequencedUpdateSlot(int slot) {
-        if (mc.gameMode == null || mc.level == null || slot < 0) return;
-        ((ClientPlayerInteractionManagerTHMAccessor) mc.gameMode)
-            .thm$sendSequencedPacket(mc.level, seq -> new ServerboundSetCarriedItemPacket(slot));
+        if (getServerSlot() != slot) setSlotForced(slot);
     }
 
     public int findBestHotbarSlot(BlockState state) {
         if (mc.player == null) return -1;
-        int   best      = -1;
-        float bestSpeed = -1;
+        int best = getServerSlot();
+        int preferred = best;
+        float bestSpeed = miningToolScore(mc.player.getInventory().getItem(best), state);
         for (int i = 0; i < 9; i++) {
-            float s = mc.player.getInventory().getItem(i).getDestroySpeed(state);
-            if (s > bestSpeed) { bestSpeed = s; best = i; }
+            if (i == preferred) continue;
+            float score = miningToolScore(mc.player.getInventory().getItem(i), state);
+            if (score > bestSpeed) { bestSpeed = score; best = i; }
         }
         return best;
+    }
+
+    private static float miningToolScore(ItemStack stack, BlockState state) {
+        return miningToolSpeed(stack, state) / (state.requiresCorrectToolForDrops() && !stack.isCorrectToolForDrops(state) ? 100 : 30);
+    }
+
+    public static float miningToolSpeed(ItemStack stack, BlockState state) {
+        float speed = stack.getDestroySpeed(state);
+        if (speed <= 1) return speed;
+        int efficiency = meteordevelopment.meteorclient.utils.Utils.getEnchantmentLevel(stack, Enchantments.EFFICIENCY);
+        return speed > 1 && efficiency > 0 ? speed + efficiency * efficiency + 1 : speed;
     }
 
     public enum VelocityMode {

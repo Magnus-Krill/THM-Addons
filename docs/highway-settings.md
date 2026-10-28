@@ -348,9 +348,13 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 
 ### THM-HighwayBuilder: Debugging
 
+`Toggle block rate debug` starts or stops a local chat update every second in both control screens. `block-rate-mode` selects BPS or average blocks per client tick; both show the actual BPS against the 30 BPS benchmark. Rates cover one real second, exclude restock and enclosure work, and read zero while the builder is off. Packet placement attempts count only after the block appears, once per position. The Highway HUD shows `Dug` and `Paved` in BPS; use `show-dig-rate` and `show-place-rate` to hide either line.
+
 | Setting | Default / Range / Options | Visible when | Behavior |
 | --- | --- | --- | --- |
 | `debug` | `false` | Always | Writes state transitions and movement input to `logs/thm/<start-time>/highwaybuilder-debug.log`. |
+| `block-rate-debug` | `false` | Always | Prints Dug/Paved rates to local chat every second. |
+| `block-rate-mode` | `BPS`; `BPS`, `BlocksPerTick` | Always | Selects the chat rate units. |
 | `forward-scheduler-debug` | `false` | `legacy-mode` is off | Logs active row, queue, boundary, and actionability details for the forward scheduler. |
 | `statistics-debug` | `false` | Always | Logs detailed stats validation decisions for mine/place work. |
 | `restock-debug-log` | `false` | Always | Writes blockade/restock diagnostics to `logs/thm/<start-time>/highwaybuilder-restock-debug.log` and EChest place/rebreak timing to `logs/thm/<start-time>/highwaybuilder-echest-debug.log`. |

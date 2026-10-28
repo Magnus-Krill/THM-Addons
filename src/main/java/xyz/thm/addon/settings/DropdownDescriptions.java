@@ -9,6 +9,7 @@ package xyz.thm.addon.settings;
 import meteordevelopment.meteorclient.gui.widgets.input.WDropdown;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.utils.entity.SortPriority;
+import meteordevelopment.meteorclient.utils.misc.ListMode;
 import meteordevelopment.meteorclient.utils.world.Dimension;
 import xyz.thm.addon.utils.kitbot.KitbotKitCatalog;
 
@@ -24,6 +25,10 @@ public final class DropdownDescriptions {
                 case Lines -> "Draw outlines only.";
                 case Sides -> "Draw filled faces only.";
                 case Both -> "Draw filled faces and outlines.";
+            };
+            case ListMode mode -> switch (mode) {
+                case Whitelist -> "Use only listed blocks.";
+                case Blacklist -> "Avoid listed blocks.";
             };
             case SortPriority priority -> switch (priority) {
                 case LowestDistance -> "Target nearest players first.";

@@ -67,3 +67,4 @@ src/main/java/xyz/thm/addon/mixin/TitleScreenFastestRouteButtonMixin.java
 logs/
 UPDATER_SERVER.md
 src/main/java/xyz/thm/addon/modules/BlockTeleport.java
+clientsSkidiing/SpeedMine.java

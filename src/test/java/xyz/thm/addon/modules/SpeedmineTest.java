@@ -23,6 +23,72 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class SpeedmineTest {
     @Test
+    void renderReadsDoNotAdvanceMining() {
+        var progress = new Speedmine.MiningProgress(1000, 0.1f);
+        double initial = progress.fraction(0.7);
+        for (int frame = 0; frame < 1000; frame++) assertEquals(initial, progress.fraction(0.7));
+        progress.advance(1050, 20, 0.1f, false);
+        assertEquals(0.2 / 0.7, progress.fraction(0.7), 1e-7);
+    }
+
+    @Test
+    void speedChangesOnlyAffectNewMiningWork() {
+        var progress = new Speedmine.MiningProgress(0, 0);
+        progress.advance(100, 20, 0.1f, false);
+        progress.advance(200, 20, 0.01f, false);
+        assertEquals(0.22, progress.fraction(1), 1e-7, "Fatigue must not erase previously earned work.");
+        progress.advance(250, 20, 0.5f, false);
+        assertEquals(0.72, progress.fraction(1), 1e-7, "A faster tool must not multiply the whole mining history.");
+    }
+
+    @Test
+    void pausedMiningDoesNotCatchUpOnResume() {
+        var progress = new Speedmine.MiningProgress(0, 0.1f);
+        progress.advance(1000, 20, 0.1f, true);
+        assertEquals(0.1, progress.fraction(1), 1e-7);
+        progress.advance(1050, 20, 0.1f, false);
+        assertEquals(0.2, progress.fraction(1), 1e-7);
+    }
+
+    @Test
+    void miningSurvivesTpsChangesAndClockJitter() {
+        var progress = new Speedmine.MiningProgress(0, 0);
+        progress.advance(100, 20, 0.1f, false);
+        progress.advance(200, 10, 0.1f, false);
+        progress.advance(150, 10, 0.1f, false);
+        progress.advance(250, 10, 0.1f, false);
+        assertEquals(0.35, progress.fraction(1), 1e-7);
+        progress.advance(300, 0, 0.1f, false);
+        assertEquals(0.35, progress.fraction(1), 1e-7);
+    }
+
+    @Test
+    void primaryThresholdDoesNotPrematurelyCompleteDelayedSecondary() {
+        var progress = new Speedmine.MiningProgress(0, 0.7f);
+        assertEquals(1, progress.fraction(0.7), 1e-6);
+        assertTrue(progress.fraction(1) < 1);
+        progress.advance(50, 20, 0.3f, false);
+        assertEquals(1, progress.fraction(1));
+    }
+
+    @Test
+    void repeatedStrongAttemptsCannotPostponeRecoveryForever() {
+        BlockPos target = new BlockPos(1, 64, 0), other = target.east();
+        var first = new Speedmine.PendingBreak(target, 2, true, false, 2000);
+        var second = new Speedmine.PendingBreak(other, 5, true, true, 5000);
+        assertEquals(2000, Speedmine.pendingDeadline(List.of(first, second), target, 30000));
+        assertEquals(1500, Speedmine.pendingDeadline(List.of(first, second), target, 1500));
+        assertEquals(5000, Speedmine.pendingDeadline(List.of(first, second), other, 30000));
+        assertEquals(30000, Speedmine.pendingDeadline(List.of(first, second), other.east(), 30000));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"1,20,0,2000", "0.01,20,0,6000", "0.01,10,0,11000", "1,20,5000,11050", "0,20,0,30000", "1,0,0,30000", "0.001,5,5000,30000"})
+    void confirmationTimeoutIncludesServerSpeedAndRoundTrip(float delta, float tps, int latency, long expected) {
+        assertEquals(expected, Speedmine.confirmationWaitMillis(delta, tps, latency), 1);
+    }
+
+    @Test
     void bedrockSwingCheckUsesPacketTypesFromTheLimiter() {
         var blocked = Set.of(GamePacketTypes.SERVERBOUND_SWING);
         assertTrue(Speedmine.miningPacketBlocked(60, blocked, GamePacketTypes.SERVERBOUND_SWING));

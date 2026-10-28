@@ -144,6 +144,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntPredicate;
 import java.util.function.IntToDoubleFunction;
+import java.util.function.LongConsumer;
+import java.util.function.LongPredicate;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.function.BooleanSupplier;
@@ -1341,6 +1343,30 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
+    public enum BlockRateMode implements DescribedOption {
+        BPS, BlocksPerTick;
+
+        @Override
+        public String description() {
+            return this == BPS ? "Average blocks per real second." : "Average blocks per client tick.";
+        }
+    }
+
+    private final Setting<Boolean> blockRateDebug = sgDebugging.add(new BoolSetting.Builder()
+        .name("block-rate-debug")
+        .description("Prints Dug/Paved rates once per second.")
+        .defaultValue(false)
+        .onChanged(value -> this.blockRateSample = null)
+        .build()
+    );
+
+    private final Setting<BlockRateMode> blockRateMode = sgDebugging.add(new EnumSetting.Builder<BlockRateMode>()
+        .name("block-rate-mode")
+        .description("Units for the block rate chat output.")
+        .defaultValue(BlockRateMode.BPS)
+        .build()
+    );
+
     private final Setting<Boolean> sessionSummary = sgDebugging.add(new BoolSetting.Builder()
         .name("session-summary")
         .description("Prints session stats in chat when the builder turns off.")
@@ -1865,9 +1891,53 @@ public class HighwayBuilderTHM extends Module {
     private Boolean speedmineAutoRebreakSnapshot;
 
     private int placedTotal;
-    private int placeRateSampleTotal;
-    private long placeRateSampleTick = Long.MIN_VALUE;
-    private double measuredPlacesPerSecond;
+    private BlockRateSample blockRateSample;
+    private final PendingBlockPlacements pendingBlockPlacements = new PendingBlockPlacements();
+
+    record BlockRateSample(long timeNanos, int tick, int broken, int placed,
+                           double dugPerSecond, double pavedPerSecond, double dugPerTick, double pavedPerTick) {
+        BlockRateSample sample(long now, int currentTick, int currentBroken, int currentPlaced) {
+            if (now < timeNanos || currentTick < tick || currentBroken < broken || currentPlaced < placed) {
+                return new BlockRateSample(now, currentTick, currentBroken, currentPlaced, 0, 0, 0, 0);
+            }
+            long elapsed = now - timeNanos;
+            if (elapsed < 1_000_000_000L) return this;
+            double seconds = elapsed / 1_000_000_000.0;
+            int ticks = currentTick - tick;
+            return new BlockRateSample(now, currentTick, currentBroken, currentPlaced,
+                (currentBroken - broken) / seconds, (currentPlaced - placed) / seconds,
+                ticks > 0 ? (currentBroken - broken) / (double) ticks : 0,
+                ticks > 0 ? (currentPlaced - placed) / (double) ticks : 0);
+        }
+    }
+
+    static final class PendingBlockPlacements {
+        private final Long2LongOpenHashMap sentAt = new Long2LongOpenHashMap();
+
+        void sent(long pos, long now) {
+            sentAt.putIfAbsent(pos, now);
+        }
+
+        void confirm(long now, LongPredicate loaded, LongPredicate placed, LongConsumer count) {
+            var it = sentAt.long2LongEntrySet().fastIterator();
+            while (it.hasNext()) {
+                var entry = it.next();
+                long pos = entry.getLongKey();
+                if (!loaded.test(pos)) {
+                    it.remove();
+                } else if (placed.test(pos)) {
+                    it.remove();
+                    count.accept(pos);
+                } else if (now - entry.getLongValue() >= 5_000_000_000L) {
+                    it.remove();
+                }
+            }
+        }
+
+        void clear() {
+            sentAt.clear();
+        }
+    }
     private int tpsThrottleLastSampleAge = Integer.MIN_VALUE;
     private double tpsThrottleSampledTps = TPS_THROTTLE_NORMAL;
     private double tpsThrottleAdjustedBlocksPerTick = 1.0;
@@ -3076,6 +3146,7 @@ public class HighwayBuilderTHM extends Module {
     }
     @Override
     public void onDeactivate() {
+        pendingBlockPlacements.clear();
         checkStatsContinuity();
         flushChokedPackets();
         packetChoke.clear();
@@ -5202,6 +5273,18 @@ public class HighwayBuilderTHM extends Module {
     private void onTick(TickEvent.Pre event) {
         tickPacketChoke();
         if (mc.player == null || mc.level == null) return;
+        long rateNow = System.nanoTime();
+        pendingBlockPlacements.confirm(rateNow,
+            key -> mc.level.hasChunk(BlockPos.getX(key) >> 4, BlockPos.getZ(key) >> 4),
+            key -> !mc.level.getBlockState(BlockPos.of(key)).canBeReplaced(),
+            key -> recordPlacedForwardPosition(BlockPos.of(key)));
+        if (blockRateSample == null) {
+            blockRateSample = new BlockRateSample(rateNow, mc.player.tickCount, blocksBroken, blocksPlaced, 0, 0, 0, 0);
+        } else {
+            BlockRateSample previous = blockRateSample;
+            blockRateSample = previous.sample(rateNow, mc.player.tickCount, blocksBroken, blocksPlaced);
+            if (blockRateSample != previous && blockRateDebug.get()) printBlockRates();
+        }
         kitbotLastActiveAtMs = System.currentTimeMillis();
         safetyPlacedThisTick = false;
 
@@ -7553,8 +7636,8 @@ public class HighwayBuilderTHM extends Module {
         recentPlacements.clear();
         revertedBlockUpdates.clear();
         pendingRubberbands.set(0);
-        placeRateSampleTick = Long.MIN_VALUE;
-        measuredPlacesPerSecond = 0.0;
+        blockRateSample = null;
+        pendingBlockPlacements.clear();
     }
 
     private void resetSessionSummary() {
@@ -7581,15 +7664,6 @@ public class HighwayBuilderTHM extends Module {
 
     private void tickAdaptivePlacement() {
         long now = mc.level.getGameTime();
-        if (placeRateSampleTick == Long.MIN_VALUE || now < placeRateSampleTick) {
-            placeRateSampleTick = now;
-            placeRateSampleTotal = placedTotal;
-        } else if (now - placeRateSampleTick >= 100) {
-            measuredPlacesPerSecond = (placedTotal - placeRateSampleTotal) * 20.0 / (now - placeRateSampleTick);
-            placeRateSampleTick = now;
-            placeRateSampleTotal = placedTotal;
-        }
-
         if (!adaptivePlacements.get()) return;
 
         int rubberbands = pendingRubberbands.getAndSet(0);
@@ -7617,6 +7691,9 @@ public class HighwayBuilderTHM extends Module {
     @Override
     public WWidget getWidget(GuiTheme theme) {
         WVerticalList controls = theme.verticalList();
+        WButton rates = controls.add(theme.button("Toggle block rate debug")).expandX().widget();
+        rates.tooltip = "Starts or stops one chat update per second.";
+        rates.action = this::toggleBlockRateDebug;
         WButton pause = controls.add(theme.button("Pause / Continue builder")).expandX().widget();
         pause.tooltip = "Pause building, return to the saved position, or cancel a return.";
         pause.action = () -> {
@@ -7671,9 +7748,29 @@ public class HighwayBuilderTHM extends Module {
         return effectivePlacementsPerTickActionRate();
     }
 
-    /** Real placements per second over the last 5s. */
+    /** Counted highway blocks per second over the last real second. */
     public double getMeasuredPlacesPerSecond() {
-        return measuredPlacesPerSecond;
+        return isActive() && blockRateSample != null ? blockRateSample.pavedPerSecond() : 0.0;
+    }
+
+    public double getMeasuredBreaksPerSecond() {
+        return isActive() && blockRateSample != null ? blockRateSample.dugPerSecond() : 0.0;
+    }
+
+    public void toggleBlockRateDebug() {
+        blockRateDebug.set(!blockRateDebug.get());
+        info("Block rate debug %s.", blockRateDebug.get() ? "on" : "off");
+    }
+
+    private void printBlockRates() {
+        if (blockRateMode.get() == BlockRateMode.BlocksPerTick) {
+            info("Dug: %.2f blocks/tick (%.1f/30 BPS) | Paved: %.2f blocks/tick (%.1f/30 BPS).",
+                blockRateSample.dugPerTick(), getMeasuredBreaksPerSecond(),
+                blockRateSample.pavedPerTick(), getMeasuredPlacesPerSecond());
+        } else {
+            info("Dug: %.1f/30 BPS | Paved: %.1f/30 BPS.",
+                getMeasuredBreaksPerSecond(), getMeasuredPlacesPerSecond());
+        }
     }
 
     /** Current place-rate cap in blocks/s, or -1 when unlimited (packet build). */
@@ -11575,6 +11672,12 @@ public class HighwayBuilderTHM extends Module {
 
     private boolean recordPlacedForwardPosition(BlockPos pos) {
         BlockPos immutablePos = pos.immutable();
+        if (countedPlacedForwardPositions.contains(immutablePos)) return false;
+        // Packet Build does not predict blocks, so air here is still an unconfirmed attempt.
+        if (packetBuild.get() && mc.level.getBlockState(immutablePos).canBeReplaced()) {
+            pendingBlockPlacements.sent(immutablePos.asLong(), System.nanoTime());
+            return false;
+        }
         if (countedPlacedForwardPositions.add(immutablePos)) {
             blocksPlaced++;
             statsSessionDirty = true;
@@ -18735,7 +18838,7 @@ public class HighwayBuilderTHM extends Module {
                     }
 
                     boolean worldChanged = !b.mc.level.getBlockState(targetPos).equals(stateBefore);
-                    if (worldChanged) {
+                    if (worldChanged || b.packetBuild.get()) {
                         BlockPos countedPos = targetPos.immutable();
                         boolean eligible = b.shouldCountLegacyPlacedPosition(this, countedPos);
                         boolean alreadyCounted = b.countedPlacedForwardPositions.contains(countedPos);

@@ -76,7 +76,6 @@
     "meteor.PacketListSettingMixin",
     "meteor.PopChamsGhostMixin",
     "meteor.PopChamsMixin",
-    "meteor.ScaffoldMixin",
     "meteor.SpeedMixin",
     "meteor.ThmHeaderClickMixin",
     "meteor.ThmMeteorHeaderMixin",

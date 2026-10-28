@@ -19,10 +19,78 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.Comparator;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class HighwayBuilderTHMTest {
+    @Test
+    void blockRatesUseElapsedSecondsAndCountedWork() {
+        var sample = new HighwayBuilderTHM.BlockRateSample(1_000_000_000L, 100, 100, 200, 0, 0, 0, 0);
+        assertSame(sample, sample.sample(1_999_999_999L, 119, 130, 230));
+
+        sample = sample.sample(2_000_000_000L, 120, 130, 230);
+        assertEquals(30.0, sample.dugPerSecond());
+        assertEquals(30.0, sample.pavedPerSecond());
+        assertEquals(1.5, sample.dugPerTick());
+        assertEquals(1.5, sample.pavedPerTick());
+
+        sample = sample.sample(4_000_000_000L, 130, 150, 270);
+        assertEquals(10.0, sample.dugPerSecond());
+        assertEquals(20.0, sample.pavedPerSecond());
+        assertEquals(2.0, sample.dugPerTick());
+        assertEquals(4.0, sample.pavedPerTick());
+    }
+
+    @Test
+    void idleBlockRateWindowDropsBothRatesToZero() {
+        var sample = new HighwayBuilderTHM.BlockRateSample(0, 0, 100, 200, 10, 2, 0.5, 0.1);
+        sample = sample.sample(1_000_000_000L, 20, 100, 200);
+        assertEquals(0.0, sample.dugPerSecond());
+        assertEquals(0.0, sample.pavedPerSecond());
+        assertEquals(0.0, sample.dugPerTick());
+        assertEquals(0.0, sample.pavedPerTick());
+    }
+
+    @Test
+    void resettingStatisticsStartsANewBlockRateWindow() {
+        var sample = new HighwayBuilderTHM.BlockRateSample(0, 100, 100, 200, 10, 2, 0.5, 0.1);
+        sample = sample.sample(1_000_000_000L, 0, 0, 0);
+        assertEquals(0.0, sample.dugPerSecond());
+        assertEquals(0.0, sample.pavedPerSecond());
+        assertSame(sample, sample.sample(1_500_000_000L, 10, 20, 5));
+
+        sample = sample.sample(2_000_000_000L, 20, 20, 5);
+        assertEquals(20.0, sample.dugPerSecond());
+        assertEquals(5.0, sample.pavedPerSecond());
+    }
+
+    @Test
+    void packetPlacementAttemptsCountOnlyOnceAfterTheBlockAppears() {
+        var pending = new HighwayBuilderTHM.PendingBlockPlacements();
+        var counted = new ArrayList<Long>();
+        for (int i = 0; i < 100; i++) pending.sent(42, i);
+        pending.confirm(100, key -> true, key -> false, counted::add);
+        assertTrue(counted.isEmpty());
+
+        pending.confirm(200, key -> true, key -> true, counted::add);
+        pending.confirm(300, key -> true, key -> true, counted::add);
+        assertEquals(List.of(42L), counted);
+    }
+
+    @Test
+    void rejectedAndUnloadedPacketPlacementsExpireWithoutCounting() {
+        var pending = new HighwayBuilderTHM.PendingBlockPlacements();
+        var counted = new ArrayList<Long>();
+        pending.sent(1, 0);
+        pending.sent(2, 0);
+        pending.confirm(1_000_000_000L, key -> key != 2, key -> false, counted::add);
+        pending.confirm(5_000_000_000L, key -> true, key -> key == 2, counted::add);
+        pending.confirm(6_000_000_000L, key -> true, key -> true, counted::add);
+        assertTrue(counted.isEmpty());
+    }
+
     @Test
     void apiProfileModeIsOptionalForLegacyCompatibility() {
         assertEquals(":pave", HighwayBuilderTHM.apiModeSuffix(THMSystem.Mode.HighwayBuilding));

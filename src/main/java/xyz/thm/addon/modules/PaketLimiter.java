@@ -72,7 +72,7 @@ public class PaketLimiter extends Module {
     );
     public final Setting<Set<PacketType<? extends Packet<?>>>> alwaysBlock = sgGeneral.add(new PacketListSetting.Builder()
         .name("always-block")
-        .description("C2S packets that are always cancelled, even if in bypass.")
+        .description("C2S packets to cancel; hotbar slot changes are always allowed.")
         .defaultValue(new ObjectOpenHashSet<PacketType<? extends Packet<?>>>(Set.of(
             net.minecraft.network.protocol.game.GamePacketTypes.SERVERBOUND_SWING,
             net.minecraft.network.protocol.game.GamePacketTypes.SERVERBOUND_CLIENT_TICK_END
@@ -110,6 +110,8 @@ public class PaketLimiter extends Module {
     private void onSendPacket(PacketEvent.Send event) {
         HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
         if (builder != null && builder.isChokeHoldingOrFlushing(event.connection)) return;
+        // Slot changes must reach the server, including a silent swap's restoration.
+        if (event.packet instanceof net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket) return;
         int max = limit.get();
         if (max == 0) return;
         if (alwaysBlock.get().contains(event.packet.type())) {
