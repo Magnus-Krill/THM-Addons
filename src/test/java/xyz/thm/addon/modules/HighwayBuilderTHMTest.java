@@ -107,15 +107,15 @@ class HighwayBuilderTHMTest {
         inBackup = inBackup.observe(new Vec3(10, 65, 10), "test", "minecraft:overworld", GameType.ADVENTURE);
         assertSame(continuity, inBackup);
         assertTrue(inBackup.observe(mainPosition, "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
-        assertFalse(inBackup.observe(mainPosition.add(1000, 0, 0), "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
+        assertTrue(inBackup.observe(mainPosition.add(1000, 0, 0), "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
     }
 
     @Test
-    void backupAndUnknownGameModesDoNotRestoreInvalidStatistics() {
+    void savedInvalidationIsIgnoredWhileMovementChecksAreDisabled() {
         var invalid = new HighwayBuilderTHM.StatsContinuity(Vec3.ZERO, "test", "minecraft:the_nether", false);
         assertSame(invalid, invalid.observe(new Vec3(1000, 65, 1000), "test", "minecraft:overworld", GameType.ADVENTURE));
         assertSame(invalid, invalid.observe(Vec3.ZERO, "test", "minecraft:the_nether", null));
-        assertFalse(invalid.observe(Vec3.ZERO, "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
+        assertTrue(invalid.observe(Vec3.ZERO, "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
     }
 
     @Test
@@ -128,42 +128,43 @@ class HighwayBuilderTHMTest {
     }
 
     @Test
-    void teleportInvalidationSurvivesReturningToTheOldPosition() {
+    void teleportsNoLongerInvalidateStatistics() {
         var continuity = new HighwayBuilderTHM.StatsContinuity(Vec3.ZERO, "test", "minecraft:the_nether", true);
         continuity = continuity.observe(new Vec3(10000, 0, 0), "test", "minecraft:the_nether", GameType.SURVIVAL);
-        assertFalse(continuity.valid());
+        assertTrue(continuity.valid());
         continuity = continuity.observe(Vec3.ZERO, "test", "minecraft:the_nether", GameType.SURVIVAL);
-        assertFalse(continuity.valid());
-        assertFalse(continuity.observe(new Vec3(1, 0, 0), "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
+        assertTrue(continuity.valid());
+        assertTrue(continuity.observe(new Vec3(1, 0, 0), "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
     }
 
     @Test
-    void statisticsJumpLimitIncludesHeightAndDiagonalDistance() {
+    void largeVerticalAndDiagonalMovesNoLongerInvalidateStatistics() {
         var continuity = new HighwayBuilderTHM.StatsContinuity(Vec3.ZERO, "test", "minecraft:the_nether", true);
         assertTrue(continuity.observe(new Vec3(64, 0, 0), "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
-        assertFalse(continuity.observe(new Vec3(64.01, 0, 0), "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
-        assertFalse(continuity.observe(new Vec3(0, 65, 0), "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
-        assertFalse(continuity.observe(new Vec3(46, 0, 46), "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
+        assertTrue(continuity.observe(new Vec3(64.01, 0, 0), "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
+        assertTrue(continuity.observe(new Vec3(0, 65, 0), "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
+        assertTrue(continuity.observe(new Vec3(46, 0, 46), "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
     }
 
     @Test
-    void savedStatisticsCannotCrossWorldsOrDimensionsAtMatchingCoordinates() {
+    void worldAndDimensionChangesNoLongerInvalidateStatistics() {
         var continuity = new HighwayBuilderTHM.StatsContinuity(Vec3.ZERO, "test", "minecraft:the_nether", true);
-        assertFalse(continuity.observe(Vec3.ZERO, "other", "minecraft:the_nether", GameType.SURVIVAL).valid());
-        assertFalse(continuity.observe(Vec3.ZERO, "test", "minecraft:overworld", GameType.SURVIVAL).valid());
+        assertTrue(continuity.observe(Vec3.ZERO, "other", "minecraft:the_nether", GameType.SURVIVAL).valid());
+        assertTrue(continuity.observe(Vec3.ZERO, "test", "minecraft:overworld", GameType.SURVIVAL).valid());
     }
 
     @Test
-    void restoredInvalidStatisticsAndUnknownCoordinatesStayInvalid() {
+    void savedInvalidationIsClearedAndNonFiniteSamplesAreRejected() {
         var restored = new HighwayBuilderTHM.StatsContinuity(Vec3.ZERO, "test", "minecraft:the_nether", false);
-        assertFalse(restored.observe(Vec3.ZERO, "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
+        assertTrue(restored.observe(Vec3.ZERO, "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
+        assertFalse(restored.observe(new Vec3(Double.NaN, 0, 0), "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
         var unknown = new HighwayBuilderTHM.StatsContinuity(new Vec3(Double.NaN, 0, 0), "test", "minecraft:the_nether", true);
         assertFalse(unknown.valid());
-        assertFalse(unknown.observe(Vec3.ZERO, "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
+        assertTrue(unknown.observe(Vec3.ZERO, "test", "minecraft:the_nether", GameType.SURVIVAL).valid());
     }
 
     @Test
-    void encryptedArtifactPayloadRetainsTheLastPositionAndInvalidation() {
+    void encryptedArtifactRetainsPositionAndIgnoresSavedInvalidation() {
         var continuity = new HighwayBuilderTHM.StatsContinuity(new Vec3(-100.5, 120, 22.5), "world|one\n two", "minecraft:the_nether", false);
         StringBuilder payload = new StringBuilder();
         continuity.write(payload);
@@ -174,7 +175,9 @@ class HighwayBuilderTHMTest {
         }
         var restored = HighwayBuilderTHM.StatsContinuity.read(meta);
         assertEquals(continuity, restored);
-        assertFalse(restored.observe(continuity.position(), continuity.world(), continuity.dimension(), GameType.SURVIVAL).valid());
+        assertTrue(restored.observe(continuity.position(), continuity.world(), continuity.dimension(), GameType.SURVIVAL).valid());
+        meta.put("continuityValid", "false");
+        assertTrue(HighwayBuilderTHM.StatsContinuity.read(meta).valid());
         assertNull(HighwayBuilderTHM.StatsContinuity.read(Map.of()));
         meta.remove("continuityX");
         assertFalse(HighwayBuilderTHM.StatsContinuity.read(meta).valid());

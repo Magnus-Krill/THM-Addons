@@ -2646,15 +2646,17 @@ public class HighwayBuilderTHM extends Module {
 
     record StatsContinuity(Vec3 position, String world, String dimension, boolean valid) {
         StatsContinuity {
-            valid &= Double.isFinite(position.x) && Double.isFinite(position.y) && Double.isFinite(position.z)
+            // Saved invalidation is ignored while movement checks are disabled.
+            valid = Double.isFinite(position.x) && Double.isFinite(position.y) && Double.isFinite(position.z)
                 && !world.isBlank() && !dimension.isBlank();
         }
 
         StatsContinuity observe(Vec3 current, String currentWorld, String currentDimension, GameType gameMode) {
             if (gameMode == null || gameMode == GameType.ADVENTURE) return this;
-            boolean continuous = world.equals(currentWorld) && dimension.equals(currentDimension)
-                && position.distanceToSqr(current) <= 64.0 * 64.0;
-            return new StatsContinuity(current, currentWorld, currentDimension, valid && continuous);
+            // boolean continuous = world.equals(currentWorld) && dimension.equals(currentDimension)
+            //     && position.distanceToSqr(current) <= 64.0 * 64.0;
+            // return new StatsContinuity(current, currentWorld, currentDimension, valid && continuous);
+            return new StatsContinuity(current, currentWorld, currentDimension, true);
         }
 
         void write(StringBuilder out) {
@@ -11050,7 +11052,7 @@ public class HighwayBuilderTHM extends Module {
             new Vec3(snapshot.startX(), snapshot.startY(), snapshot.startZ()),
             snapshot.blocksBroken(),
             snapshot.blocksPlaced(),
-            snapshot.continuity() != null && snapshot.continuity().valid()
+            snapshot.continuity() == null || snapshot.continuity().valid()
         );
     }
 
@@ -11181,7 +11183,7 @@ public class HighwayBuilderTHM extends Module {
         if (snapshot == null || report == null || mc == null || mc.player == null) return snapshot;
 
         StatsArtifactSnapshot working = snapshot;
-        if (snapshot.continuity() == null || !snapshot.continuity().valid()) {
+        if (snapshot.continuity() != null && !snapshot.continuity().valid()) {
             statsCacheDebug("external statistics skipped reason=invalid-continuity session={}", shortSessionId(snapshot.sessionId()));
             return snapshot;
         }

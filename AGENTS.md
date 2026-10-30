@@ -159,7 +159,7 @@ Meteor Scaffold is unmodified. The budget reserves complete placement transactio
 
 **Highway pause:** Manual pause checkpoints stats and fully deactivates the builder. An independent return listener uses Baritone before reactivation; failures retain the pause. Return positions last for the client session and require the original world and dimension.
 
-**Highway statistics:** Persist movement continuity and sticky invalidation in every stats artifact. Jumps over 64 blocks and world/dimension changes invalidate distance and external submissions, including while paused. Adventure-mode backup/lobby visits preserve the last main-server checkpoint, including on cache restore; distance uses that checkpoint until main-server checks resume.
+**Highway statistics:** Movement/world-change invalidation is commented out. Ignore saved invalidation flags and allow legacy artifacts without continuity metadata. Keep finite-coordinate validation and the adventure-lobby checkpoint behavior.
 
 **Highway block rates:** `BlockRateSample` measures counted Dug/Paved work each monotonic-clock second and averages actual client ticks. Both control screens toggle `block-rate-debug`; `block-rate-mode` selects BPS or blocks/tick. Packet placements count only after the block appears; repeated sends share one expiring confirmation.
 

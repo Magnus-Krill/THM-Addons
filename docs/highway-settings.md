@@ -78,14 +78,10 @@ leave the builder paused for another attempt. Statistics use the existing disk c
 the return position lasts until the client closes. The classic settings screen also has a
 **Pause / Continue builder** button.
 
-Statistics become invalid after a movement jump over 64 blocks or a world/dimension change,
-including while paused. Returning afterwards does not restore validity. The last position and
-validity are saved with the stats checkpoint and checked on resume. Invalid sessions keep local
-block counts but report no distance and send no statistics to the API or webhook. Older saved
-sessions without a continuity checkpoint also remain ineligible for submission.
-Adventure-mode backup/lobby visits leave the last main-server position unchanged, including on
-cache restore. Distance uses that saved position while away. On returning to Survival, the
-64-block check resumes against the saved main-server position.
+Movement jumps and world/dimension changes no longer invalidate statistics. Saved invalidation
+flags are ignored, and older sessions without continuity metadata can submit again. Coordinates
+must still be finite. Adventure-mode backup/lobby visits preserve the last main-server position;
+distance uses that checkpoint until Survival resumes.
 
 Container restocking accepts replaceable blocks at the shulker/EChest position. If a solid block
 obstructs it, recovery keeps mining that block before tearing down the enclosure and retrying
