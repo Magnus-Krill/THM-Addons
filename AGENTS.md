@@ -157,6 +157,10 @@ Meteor Scaffold is unmodified. The budget reserves complete placement transactio
 
 **Meteor Offhand:** `OffhandMixin` adds `held-item-filter`: Off, Only when holding, or Only when not holding. `held-items` supplies the whitelist/blocklist. Filtering includes Offhand's totem swaps and releases its lock when blocked. `ModuleMixin` migrates the old toggle.
 
+**Meteor AutoFish:** `AutoFishMixin` adds default-off `random-rotate` and `random-move` after fish reels.
+Wait for the bobber to disappear, step back and return, look away and back, then permit recasting.
+Movement uses collision-checked sub-block steps and cancels for manual input, world changes, or timeout.
+
 **Highway pause:** Manual pause checkpoints stats and fully deactivates the builder. An independent return listener uses Baritone before reactivation; failures retain the pause. Return positions last for the client session and require the original world and dimension.
 
 **Highway statistics:** Movement/world-change invalidation is commented out. Ignore saved invalidation flags and allow legacy artifacts without continuity metadata. Keep finite-coordinate validation and the adventure-lobby checkpoint behavior.

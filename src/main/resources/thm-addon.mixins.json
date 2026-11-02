@@ -50,6 +50,7 @@
     "accessor.WSectionAccessor",
     "meteor.AnchorAuraMixin",
     "meteor.AutoEatMixin",
+    "meteor.AutoFishMixin",
     "meteor.AutoGapMixin",
     "meteor.AutoLogMixin",
     "meteor.AutoWebMixin",
