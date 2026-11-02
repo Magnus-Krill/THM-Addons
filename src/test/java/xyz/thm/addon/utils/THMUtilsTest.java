@@ -12,7 +12,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Set;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class THMUtilsTest {
     private static final Set<String> DOMAINS = Set.of("6b6t.org", "6b6t.cc", "6b6t.me");

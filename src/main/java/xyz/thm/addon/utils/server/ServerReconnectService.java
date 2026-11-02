@@ -18,8 +18,8 @@ import meteordevelopment.meteorclient.systems.modules.misc.AutoReconnect;
 import meteordevelopment.meteorclient.systems.modules.movement.speed.Speed;
 import meteordevelopment.meteorclient.systems.modules.world.Timer;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.network.chat.Component;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
@@ -27,11 +27,7 @@ import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.system.THMSystem;
 import xyz.thm.addon.utils.server.ServerStatusHandler.ServerState;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static meteordevelopment.meteorclient.MeteorClient.mc;

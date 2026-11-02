@@ -14,7 +14,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static xyz.thm.addon.utils.server.ServerReconnectService.ReconnectStage.*;
 import static xyz.thm.addon.utils.server.ServerStatusHandler.ServerState;
 

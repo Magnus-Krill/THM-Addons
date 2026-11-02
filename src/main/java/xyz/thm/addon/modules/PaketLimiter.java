@@ -49,7 +49,7 @@ public class PaketLimiter extends Module {
     public final Setting<Boolean> allowBursts = sgGeneral.add(new BoolSetting.Builder()
         .name("allow-bursts")
         .description("Let one tick exceed the packet limit, at most once every 20 ticks.")
-        .defaultValue(false)
+        .defaultValue(true)
         .build()
     );
 

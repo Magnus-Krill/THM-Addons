@@ -14,10 +14,10 @@ import meteordevelopment.meteorclient.systems.hud.HudRenderer;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import xyz.thm.addon.THMAddon;
-import xyz.thm.addon.utils.server.OnlinePlayers;
 import xyz.thm.addon.settings.StringMultiSelect;
 import xyz.thm.addon.system.THMSystem;
 import xyz.thm.addon.utils.ThmMembers;
+import xyz.thm.addon.utils.server.OnlinePlayers;
 
 import java.util.*;
 

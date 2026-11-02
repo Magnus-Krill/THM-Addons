@@ -8,10 +8,11 @@ package xyz.thm.addon.mixin;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
-import net.minecraft.client.Screenshot;
 import net.minecraft.client.Minecraft;
-import org.lwjgl.glfw.GLFWNativeWin32;
+import net.minecraft.client.Screenshot;
 import net.minecraft.network.chat.Component;
+import org.lwjgl.glfw.GLFWNativeWin32;
+import org.lwjgl.system.Platform;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -20,7 +21,6 @@ import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.system.THMSystem;
 import xyz.thm.addon.utils.THMUtils;
 import xyz.thm.addon.utils.WindowsClipboard;
-import org.lwjgl.system.Platform;
 
 import javax.imageio.ImageIO;
 import java.awt.*;

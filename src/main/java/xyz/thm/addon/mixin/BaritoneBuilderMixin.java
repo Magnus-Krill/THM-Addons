@@ -6,8 +6,8 @@
 
 package xyz.thm.addon.mixin;
 
-import baritone.api.process.IBuilderProcess;
 import baritone.api.BaritoneAPI;
+import baritone.api.process.IBuilderProcess;
 import baritone.api.process.PathingCommand;
 import baritone.api.schematic.ISchematic;
 import net.minecraft.core.Vec3i;
@@ -23,7 +23,6 @@ import xyz.thm.addon.modules.BetterBaritoneBuild;
 
 import java.lang.reflect.Field;
 import java.util.Map;
-import java.util.List;
 import java.util.Set;
 
 @Pseudo

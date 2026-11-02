@@ -6,12 +6,7 @@
 
 package xyz.thm.addon.utils.server;
 
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
-import java.util.Locale;
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.*;
 
 /** Bounded observations of clocks already sent by the server. */
 public final class ServerTelemetry {

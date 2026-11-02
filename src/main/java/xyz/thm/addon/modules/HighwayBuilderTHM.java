@@ -89,10 +89,10 @@ import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.player.ChatVisiblity;
 import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.ChatVisiblity;
 import net.minecraft.world.entity.player.Input;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.ContainerInput;
@@ -143,13 +143,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.IntPredicate;
-import java.util.function.IntToDoubleFunction;
-import java.util.function.LongConsumer;
-import java.util.function.LongPredicate;
-import java.util.function.Predicate;
-import java.util.function.Supplier;
-import java.util.function.BooleanSupplier;
+import java.util.function.*;
 import java.util.regex.Pattern;
 
 import static xyz.thm.addon.utils.APIUtils.*;
@@ -744,8 +738,8 @@ public class HighwayBuilderTHM extends Module {
         .name("highway-speed")
         .description("Forward and backward HighwayBuilder speed.")
         .defaultValue(5.0)
-        .range(1.0, 6.0)
-        .sliderRange(1.0, 6.0)
+        .range(1.0, 8.0)
+        .sliderRange(1.0, 8.0)
         .visible(useThmSpeed::get)
         .build()
     );
@@ -1215,15 +1209,14 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
-    public final Setting<Boolean> packetBudget = sgExperimental.add(new BoolSetting.Builder()
+    public final Setting<Boolean> packetBudget = sgGeneral.add(new BoolSetting.Builder()
         .name("packet-budget")
         .description("Caps mining and placing so the tick stays under the server's packet limit.")
-        .defaultValue(false)
-        .visible(enableExperimental::get)
+        .defaultValue(true)
         .build()
     );
 
-    private final Setting<Integer> packetBudgetLimit = sgExperimental.add(new IntSetting.Builder()
+    private final Setting<Integer> packetBudgetLimit = sgGeneral.add(new IntSetting.Builder()
         .name("packets-per-tick")
         .description("Packets one tick may send. Keep it below the server's limit.")
         .defaultValue(23)
@@ -2919,7 +2912,7 @@ public class HighwayBuilderTHM extends Module {
                 width.set(5);
                 height.set(3);
                 // Mutable: Meteor's block-list GUI adds straight into the setting's live list.
-                blocksToPlace.set(new ArrayList<>(List.of(Blocks.OBSIDIAN)));
+                blocksToPlace.set(new ArrayList<>(List.of(Blocks.OBSIDIAN,Blocks.CRYING_OBSIDIAN,Blocks.NETHERITE_BLOCK)));
                 mineAboveRailings.set(true);
                 railings.set(true);
                 floor.set(Floor.Replace);
@@ -2927,8 +2920,8 @@ public class HighwayBuilderTHM extends Module {
                 echestBreakMode.set(EChestBreakMode.OnPlace);
                 predictiveEChestReplace.set(true);
                 if (THMUtils.isBaritoneInstalled()) manageThmHwyMonitor.set(true);
-                kitbotEChestRestockKit.set(KitbotEChestRestockKit.Highway);
-                kitbotPickaxeRestockKit.set(KitbotPickaxeRestockKit.Highway);
+                kitbotEChestRestockKit.set(KitbotEChestRestockKit.Echest);
+                kitbotPickaxeRestockKit.set(KitbotPickaxeRestockKit.Pickaxe);
 
                 // Proven paving setup.
                 useThmSpeed.set(true);
@@ -2953,6 +2946,8 @@ public class HighwayBuilderTHM extends Module {
                 restockSecondarySourceOrder.set(RestockSecondarySourceOrder.KitBotThenEnderChest);
                 kitbotUpdateOnFinish.set(false);
                 kitbotPeriodicUpdate.set(false);
+                packetBuild.set(true);
+                packetBudget.set(true);
             }
             case HighwayDigging -> {
                 width.set(5);
@@ -2966,6 +2961,14 @@ public class HighwayBuilderTHM extends Module {
                 predictiveEChestReplace.set(true);
                 if (THMUtils.isBaritoneInstalled()) manageThmHwyMonitor.set(true);
                 kitbotPickaxeRestockKit.set(KitbotPickaxeRestockKit.Pickaxe);
+                useThmSpeed.set(true);
+                highwaySpeed.set(6.0);
+                blocksPerTick.set(19.0);
+                mineLookahead.set(true);
+                instamineBypass.set(true);
+                alwaysUseThmSpeedmine.set(false);
+                savePickaxes.set(0);
+                speedmine.set(true);
             }
         }
     }
@@ -7696,9 +7699,9 @@ public class HighwayBuilderTHM extends Module {
     @Override
     public WWidget getWidget(GuiTheme theme) {
         WVerticalList controls = theme.verticalList();
-        WButton rates = controls.add(theme.button("Toggle block rate debug")).expandX().widget();
-        rates.tooltip = "Starts or stops one chat update per second.";
-        rates.action = this::toggleBlockRateDebug;
+//        WButton rates = controls.add(theme.button("Toggle block rate debug")).expandX().widget();
+//        rates.tooltip = "Starts or stops one chat update per second.";
+//        rates.action = this::toggleBlockRateDebug;
         WButton pause = controls.add(theme.button("Pause / Continue builder")).expandX().widget();
         pause.tooltip = "Pause building, return to the saved position, or cancel a return.";
         pause.action = () -> {

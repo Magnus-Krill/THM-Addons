@@ -7,15 +7,15 @@
 package xyz.thm.addon.utils.server;
 
 import net.minecraft.client.multiplayer.chat.GuiMessageTag;
+import net.minecraft.world.level.GameType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import net.minecraft.world.level.GameType;
-import xyz.thm.addon.utils.server.ServerStatusHandler.ServerState;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
+import xyz.thm.addon.utils.server.ServerStatusHandler.ServerState;
 
 import static org.junit.jupiter.api.Assertions.*;
 

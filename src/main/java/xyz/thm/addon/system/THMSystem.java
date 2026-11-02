@@ -18,11 +18,7 @@ import xyz.thm.addon.modules.HighwayBuilderTHM;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.settings.StringMultiSelect;
 import xyz.thm.addon.shaders.ShaderManager;
-import xyz.thm.addon.utils.APIUtils;
-import xyz.thm.addon.utils.AccountUtils;
-import xyz.thm.addon.utils.CapeManager;
-import xyz.thm.addon.utils.ThmMembers;
-import xyz.thm.addon.utils.TrustedHttp;
+import xyz.thm.addon.utils.*;
 import xyz.thm.addon.utils.kitbot.KitbotChatRouter;
 import xyz.thm.addon.utils.kitbot.KitbotKitCatalog;
 

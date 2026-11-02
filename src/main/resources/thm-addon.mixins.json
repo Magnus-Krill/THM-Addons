@@ -6,8 +6,8 @@
     "defaultRequire": 1
   },
   "mixins": [
-    "BaritoneWorkerMixin",
     "BaritoneBuilderMixin",
+    "BaritoneWorkerMixin",
     "BlockedServersMixin",
     "ButtonWidgetStyleMixin",
     "ChatInputSuggestorMixin",
@@ -95,9 +95,9 @@
     "InventoryScreenMixin",
     "KeyboardMixin",
     "LevelLoadingScreenMixin",
+    "PlayerAirMiningMixin",
     "PlayerListHudMixin",
     "PlayerListMapMixin",
-    "accessor.ClientLevelPredictionAccessor",
-    "PlayerAirMiningMixin"
+    "accessor.ClientLevelPredictionAccessor"
   ]
 }

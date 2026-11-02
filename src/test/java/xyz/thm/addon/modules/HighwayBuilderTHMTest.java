@@ -6,21 +6,14 @@
 
 package xyz.thm.addon.modules;
 
+import meteordevelopment.meteorclient.utils.misc.HorizontalDirection;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.phys.Vec3;
-import meteordevelopment.meteorclient.utils.misc.HorizontalDirection;
 import org.junit.jupiter.api.Test;
 import xyz.thm.addon.system.THMSystem;
 
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
-import java.util.Comparator;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 

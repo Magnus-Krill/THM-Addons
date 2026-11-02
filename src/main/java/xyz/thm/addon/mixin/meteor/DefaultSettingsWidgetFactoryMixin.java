@@ -18,8 +18,8 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import xyz.thm.addon.settings.DropdownDescriptions;
 import xyz.thm.addon.settings.DescribedDropdown;
+import xyz.thm.addon.settings.DropdownDescriptions;
 import xyz.thm.addon.utils.kitbot.KitbotKitCatalog;
 
 @Mixin(value = DefaultSettingsWidgetFactory.class, remap = false)
