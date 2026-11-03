@@ -153,9 +153,9 @@ public class HighwayBuilderScreen extends WindowScreen {
             else module.pauseBuilder();
             updateStatus();
         };
-        WButton rates = controls.add(theme.button("Toggle block rate debug")).expandX().widget();
-        rates.tooltip = "Starts or stops one chat update per second.";
-        rates.action = module::toggleBlockRateDebug;
+//        WButton rates = controls.add(theme.button("Toggle block rate debug")).expandX().widget();
+//        rates.tooltip = "Starts or stops one chat update per second.";
+//        rates.action = module::toggleBlockRateDebug;
         updateStatus();
 
         WHorizontalList profiles = add(theme.horizontalList()).expandX().widget();

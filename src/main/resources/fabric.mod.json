@@ -24,9 +24,7 @@
     ]
   },
   "mixins": [
-    "thm-addon.mixins.json",
-    "thm-addon.sodium.mixins.json",
-    "thm-addon.xaero.mixins.json"
+    "thm-addon.mixins.json"
   ],
   "custom": {
     "meteor-client:color": "0,255,255",

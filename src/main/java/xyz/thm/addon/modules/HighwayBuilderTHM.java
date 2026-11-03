@@ -2930,7 +2930,6 @@ public class HighwayBuilderTHM extends Module {
                 savePickaxes.set(0);
                 placeRange.set(5.4);
                 placementsPerTick.set(1.0);
-                breakSpeedMultiplier.set(1.465);
                 foodRestock.set(true);
                 foodTypes.get().selected().clear();
                 foodTypes.get().selected().add(Items.ENCHANTED_GOLDEN_APPLE);
@@ -2944,10 +2943,12 @@ public class HighwayBuilderTHM extends Module {
                 kitbotPickaxeRestock.set(false);
                 kitbotPickaxeRestockAmount.set(1);
                 restockSecondarySourceOrder.set(RestockSecondarySourceOrder.KitBotThenEnderChest);
-                kitbotUpdateOnFinish.set(false);
-                kitbotPeriodicUpdate.set(false);
+                kitbotUpdateOnFinish.set(true);
+                kitbotPeriodicUpdate.set(true);
                 packetBuild.set(true);
                 packetBudget.set(true);
+                useBreakSpeedMultiplier.set(false);
+                breakSpeedMultiplier.set(1.465);
             }
             case HighwayDigging -> {
                 width.set(5);
@@ -7531,7 +7532,7 @@ public class HighwayBuilderTHM extends Module {
 
     /** Mining sends start+stop per block, placing one use-on-block; a swing follows each unless it is filtered. */
     private void applyPacketBudget() {
-        if (!experimental(packetBudget)) return;
+        //if (!experimental(packetBudget)) return; //Because its not experimental anymore
 
         PacketBudget.Plan plan = packetBudgetPlan(mineActionsThisTick, placeActionsThisTick);
 
