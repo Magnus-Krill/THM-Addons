@@ -10,11 +10,13 @@ import it.unimi.dsi.fastutil.ints.IntList;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.misc.HorizontalDirection;
 import meteordevelopment.meteorclient.utils.player.PlayerUtils;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.world.Dimension;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.util.Mth;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.utils.RenderUtilsTHM;
@@ -75,14 +77,14 @@ public class AxisViewer extends Module {
     private final Setting<Boolean> netherRing = sgNether.add(new BoolSetting.Builder()
         .name("Render Ring Highway")
         .description("Draw ring highways")
-        .defaultValue(false)
+        .defaultValue(true)
         .build()
     );
 
     private final Setting<Boolean> netherDiamond = sgNether.add(new BoolSetting.Builder()
         .name("Render Diamond Highway")
         .description("Draw diamond highways")
-        .defaultValue(false)
+        .defaultValue(true)
         .build()
     );
 
@@ -259,56 +261,125 @@ public class AxisViewer extends Module {
         maxZ = event.offsetZ + radius;
         double offset = highwayCenterMode.get() ? 0.5 : 0.0;
 
-        if (axisType.cardinals() || cardinals) {
-            drawLine(event, -30_000_000, offset, 30_000_000, offset, y, lineColor);
-            drawLine(event, offset, -30_000_000, offset, 30_000_000, y, lineColor);
-        }
-        if (axisType.diagonals() || diagonals) {
-            drawLine(event, -30_000_000 + offset, -30_000_000 + offset,
-                30_000_000 + offset, 30_000_000 + offset, y, lineColor);
-            drawLine(event, -30_000_000, 30_000_000 + 2 * offset,
-                30_000_000, -30_000_000 + 2 * offset, y, lineColor);
-        }
-        if (dimension != Dimension.Nether) return;
+        boolean nether = dimension == Dimension.Nether;
+        visitHighwaySegments(offset, axisType.cardinals() || cardinals, axisType.diagonals() || diagonals,
+            nether && netherRing.get(), nether && netherDiamond.get(), nether && netherGrid.get(), nether && netherExtensions.get(),
+            (x1, z1, x2, z2) -> drawLine(event, x1, z1, x2, z2, y, lineColor));
+    }
 
-        if (netherRing.get()) {
+    @FunctionalInterface
+    interface HighwaySegmentConsumer {
+        void accept(double x1, double z1, double x2, double z2);
+    }
+
+    private static void visitHighwaySegments(double offset, boolean cardinals, boolean diagonals, boolean ring,
+                                             boolean diamond, boolean grid, boolean extensions, HighwaySegmentConsumer segments) {
+        if (cardinals) {
+            segments.accept(-30_000_000, offset, 30_000_000, offset);
+            segments.accept(offset, -30_000_000, offset, 30_000_000);
+        }
+        if (diagonals) {
+            segments.accept(-30_000_000 + offset, -30_000_000 + offset,
+                30_000_000 + offset, 30_000_000 + offset);
+            segments.accept(-30_000_000, 30_000_000 + 2 * offset,
+                30_000_000, -30_000_000 + 2 * offset);
+        }
+        if (ring) {
             for (int i = 0; i < RING_ROADS.size(); i++) {
                 double r = RING_ROADS.getInt(i);
                 double low = -r + offset, high = r + offset;
-                drawLine(event, low, low, high, low, y, lineColor);
-                drawLine(event, low, high, high, high, y, lineColor);
-                drawLine(event, low, low, low, high, y, lineColor);
-                drawLine(event, high, low, high, high, y, lineColor);
+                segments.accept(low, low, high, low);
+                segments.accept(low, high, high, high);
+                segments.accept(low, low, low, high);
+                segments.accept(high, low, high, high);
             }
         }
-        if (netherDiamond.get()) {
+        if (diamond) {
             for (int i = 0; i < DIAMONDS.size(); i++) {
                 double d = DIAMONDS.getInt(i);
-                drawLine(event, d + offset, offset, offset, d + offset, y, lineColor);
-                drawLine(event, offset, d + offset, -d + offset, offset, y, lineColor);
-                drawLine(event, -d + offset, offset, offset, -d + offset, y, lineColor);
-                drawLine(event, offset, -d + offset, d + offset, offset, y, lineColor);
+                segments.accept(d + offset, offset, offset, d + offset);
+                segments.accept(offset, d + offset, -d + offset, offset);
+                segments.accept(-d + offset, offset, offset, -d + offset);
+                segments.accept(offset, -d + offset, d + offset, offset);
             }
         }
-        if (netherGrid.get()) {
+        visitGridSegments(offset, grid, extensions, segments);
+    }
+
+    static void visitGridSegments(double offset, boolean grid, boolean extensions, HighwaySegmentConsumer segments) {
+        if (grid) {
             for (int coordinate = -GRID_RADIUS; coordinate < GRID_RADIUS; coordinate += GRID_STEP) {
                 if (coordinate == 0) continue;
-                drawLine(event, coordinate + offset, -GRID_RADIUS + offset,
-                    coordinate + offset, GRID_RADIUS + offset, y, lineColor);
-                drawLine(event, -GRID_RADIUS + offset, coordinate + offset,
-                    GRID_RADIUS + offset, coordinate + offset, y, lineColor);
+                segments.accept(coordinate + offset, -GRID_RADIUS + offset,
+                    coordinate + offset, GRID_RADIUS + offset);
+                segments.accept(-GRID_RADIUS + offset, coordinate + offset,
+                    GRID_RADIUS + offset, coordinate + offset);
             }
         }
-        if (netherExtensions.get()) {
+        if (extensions) {
             for (int side = -1; side <= 1; side += 2) {
                 for (int direction = -1; direction <= 1; direction += 2) {
                     double start = direction * GRID_RADIUS + offset;
                     double end = direction * EXTENSION_RADIUS + offset;
                     double fixed = side * GRID_RADIUS + offset;
-                    drawLine(event, start, fixed, end, fixed, y, lineColor);
-                    drawLine(event, fixed, start, fixed, end, y, lineColor);
+                    segments.accept(start, fixed, end, fixed);
+                    segments.accept(fixed, start, fixed, end);
                 }
             }
+        }
+    }
+
+    record StartAlignment(int x, int z, HorizontalDirection direction) {}
+
+    static StartAlignment nearestStartAlignment(double x, double z, float yaw, boolean nether, boolean allowDiagonal) {
+        if (!Double.isFinite(x) || !Double.isFinite(z) || !Float.isFinite(yaw)) return null;
+        var search = new HighwayAlignmentSearch(x, z, yaw);
+        visitHighwaySegments(0.5, true, allowDiagonal, nether, nether && allowDiagonal, nether, nether, search);
+        return search.best;
+    }
+
+    private static final class HighwayAlignmentSearch implements HighwaySegmentConsumer {
+        private final double x, z;
+        private final float yaw;
+        private double bestDistance = Double.POSITIVE_INFINITY;
+        private float bestYawDifference = Float.POSITIVE_INFINITY;
+        private StartAlignment best;
+
+        private HighwayAlignmentSearch(double x, double z, float yaw) {
+            this.x = x;
+            this.z = z;
+            this.yaw = yaw;
+        }
+
+        @Override
+        public void accept(double x1, double z1, double x2, double z2) {
+            double dx = x2 - x1, dz = z2 - z1;
+            double projection = ((x - x1) * dx + (z - z1) * dz) / (dx * dx + dz * dz);
+            double from = dx != 0 ? x1 : z1;
+            double to = dx != 0 ? x2 : z2;
+            // Round along one axis so both coordinates stay on the same diagonal.
+            double firstCenter = Math.ceil(Math.min(from, to) - 0.5) + 0.5;
+            double lastCenter = Math.floor(Math.max(from, to) - 0.5) + 0.5;
+            double center = Mth.clamp(Math.floor(from + projection * (to - from)) + 0.5, firstCenter, lastCenter);
+            double along = (center - from) / (to - from);
+            int goalX = Mth.floor(x1 + dx * along);
+            int goalZ = Mth.floor(z1 + dz * along);
+            double offsetX = x - (goalX + 0.5), offsetZ = z - (goalZ + 0.5);
+            double distance = offsetX * offsetX + offsetZ * offsetZ;
+            if (distance > bestDistance) return;
+
+            HorizontalDirection forward = HorizontalDirection.get((float) Math.toDegrees(Math.atan2(-dx, dz)));
+            HorizontalDirection backward = forward.opposite();
+            float forwardTurn = Math.abs(Mth.wrapDegrees(yaw - forward.yaw));
+            float backwardTurn = Math.abs(Mth.wrapDegrees(yaw - backward.yaw));
+            boolean atStart = center == (from < to ? firstCenter : lastCenter);
+            boolean atEnd = center == (from < to ? lastCenter : firstCenter);
+            boolean useForward = atStart || !atEnd && forwardTurn <= backwardTurn;
+            float turn = useForward ? forwardTurn : backwardTurn;
+            if (distance == bestDistance && turn >= bestYawDifference) return;
+            bestDistance = distance;
+            bestYawDifference = turn;
+            best = new StartAlignment(goalX, goalZ, useForward ? forward : backward);
         }
     }
 

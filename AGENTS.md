@@ -113,8 +113,7 @@ startup, so `THMHwyMonitor` and `HighwayTools` are registered without a separate
 **Package layout** (`src/main/java/xyz/thm/addon/`):
 - `modules/` — one class per Meteor `Module` (highway, PvP, utility, etc.). Follow the existing
   pattern: `SettingGroup`s + `Setting<T>` builders from `meteordevelopment.meteorclient.settings`,
-  `@EventHandler` methods for Meteor/Fabric events. `ModuleManager.java` here is a helper, not a
-  registry — actual registration happens in `THMAddon.onInitialize()`.
+  `@EventHandler` methods for Meteor/Fabric events. Register modules in `THMAddon.onInitialize()`.
 - `mixin/` — split by target: `meteor/` mixins patch Meteor Client's own classes (to extend modules
   Meteor doesn't expose hooks for), `sodium/`/`xaero/` patch those respective mods, `accessor/`
   holds `@Mixin` accessor interfaces for otherwise-private vanilla/Meteor fields, and the rest
@@ -146,6 +145,8 @@ Highway", `THMAddon.PVP` = "THM PVP") via `onRegisterCategories()`. `THMTab` is 
 addon-specific settings screen — don't confuse the two when adding a new module's config surface.
 
 **Highway restock inventory:** HighwayBuilder owns supply slots 5-9 through `Manage-hotbar`. Trash limits include hotbar stacks. Offhand refills preserve reserved hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
+
+**Highway autosetup:** HighwayBuilder configures and enables Speed Mine, Reach, Velocity, and KillAura on startup and resume. It also enables Criticals with its existing settings. KillAura setup leaves addon settings such as Smart Timing alone.
 
 **THMScaffold:** Replaces the legacy `scaffold-THM` module. `modules/THMScaffold` owns settings and
 its optional packet budget in one source file. Radius controls the build area; fallback support searches use the player's block reach
@@ -182,6 +183,7 @@ Enable before starting a build to attach its schematic wrapper; keep an axe in t
 
 **Axis Viewer:** Nether highways include XaeroPlus rings, diamonds, the 50k grid, and 125k extensions.
 Clip lines to the render camera's horizontal render distance before calling `RenderUtilsTHM`; reuse clipping scratch storage.
+HighwayBuilder's default-on `align-first` uses the same segments at startup and preserves resume directions.
 
 **Online player names:** `utils/server/OnlinePlayers.getNames()` merges known profiles with fresh
 `/msg ` completion names for HUDs, friend sync, and KitBot. Requests are shared and demand-driven
@@ -198,6 +200,10 @@ No Fabric payload registration is needed. `BlockedServersMixin` bypasses Mojang'
 not proof of OS/process uptime; epoch/random IDs remain unavailable. World age is separate.
 `plugins`, `commands`, and `channels` read exposed metadata with pagination; namespaces are hints,
 not a complete installed-plugin list. Do not send discovery commands or payload probes.
+
+**Channel Logger:** Observe the client-side Netty packet codecs to preserve unknown payload bytes.
+Copy payloads before asynchronous logging and keep the packet buffer's indices and reference count untouched.
+Log to `logs/thm-channels/` with a separate file per connection and apply redaction before file or chat output.
 
 **Crystal Aura:** `modules/CrystalAura` ports Lambda's opportunity scoring and prediction modes. Its visible title is THMcrystal aura; `thmcrystal-aura` keeps Meteor's registry intact. Async work stays bounded and runs world operations on the client thread. Source and adaptations: `docs/crystal-aura-lambda-port.md`.
 

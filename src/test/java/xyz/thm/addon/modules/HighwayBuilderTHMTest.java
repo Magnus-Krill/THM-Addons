@@ -19,6 +19,19 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class HighwayBuilderTHMTest {
     @Test
+    void eChestKitbotOrdersCheckTheBankOnlyInEnderChestFirstMode() {
+        var bankFirst = HighwayBuilderTHM.RestockSecondarySourceOrder.EnderChestThenKitBot;
+        var kitbotFirst = HighwayBuilderTHM.RestockSecondarySourceOrder.KitBotThenEnderChest;
+        assertNull(HighwayBuilderTHM.eChestKitbotOrderBlockReason(false, bankFirst, false));
+        assertNotNull(HighwayBuilderTHM.eChestKitbotOrderBlockReason(true, bankFirst, false));
+        assertNotNull(HighwayBuilderTHM.eChestKitbotOrderBlockReason(false, bankFirst, true));
+        assertNotNull(HighwayBuilderTHM.eChestKitbotOrderBlockReason(false, bankFirst, null));
+        assertNull(HighwayBuilderTHM.eChestKitbotOrderBlockReason(false, kitbotFirst, true));
+        assertNull(HighwayBuilderTHM.eChestKitbotOrderBlockReason(false, kitbotFirst, null));
+        assertNotNull(HighwayBuilderTHM.eChestKitbotOrderBlockReason(true, kitbotFirst, null));
+    }
+
+    @Test
     void blockRatesUseElapsedSecondsAndCountedWork() {
         var sample = new HighwayBuilderTHM.BlockRateSample(1_000_000_000L, 100, 100, 200, 0, 0, 0, 0);
         assertSame(sample, sample.sample(1_999_999_999L, 119, 130, 230));
@@ -247,30 +260,17 @@ class HighwayBuilderTHMTest {
     }
 
     @Test
-    void offhandMiningLeavesTheChestReserveOutsideTheConsumableHand() {
-        int source = 64;
-        int otherChests = 4;
-        int offhand = 0;
-        int reserve = 11;
-        int keep = HighwayBuilderTHM.offhandSupplyReserve(otherChests, reserve, true);
-        while (source > keep) {
-            source--;
-            offhand++;
-        }
-        assertEquals(7, source);
-        assertEquals(reserve, source + otherChests);
-        assertEquals(57, offhand);
-        // Even consuming every packet-only placement leaves the inventory reserve intact.
-        offhand = 0;
-        assertEquals(reserve, source + otherChests + offhand);
+    void offhandMiningRefillsWithTheStackSurplusAboveTheReserve() {
+        assertEquals(57, HighwayBuilderTHM.offhandChestRefillCount(64, 68, 11, true));
+        assertEquals(53, HighwayBuilderTHM.offhandChestRefillCount(64, 64, 11, false));
+        assertEquals(0, HighwayBuilderTHM.offhandChestRefillCount(8, 11, 11, false));
     }
 
     @Test
     void offhandRefillKeepsOneItemInManagedSlotsWhenChestReserveIsElsewhere() {
-        assertEquals(1, HighwayBuilderTHM.offhandSupplyReserve(64, 11, true));
-        assertEquals(1, HighwayBuilderTHM.offhandSupplyReserve(0, 0, true));
-        assertEquals(0, HighwayBuilderTHM.offhandSupplyReserve(64, 11, false));
-        assertEquals(64, HighwayBuilderTHM.offhandSupplyReserve(0, 64, false));
+        assertEquals(63, HighwayBuilderTHM.offhandChestRefillCount(64, 128, 11, true));
+        assertEquals(64, HighwayBuilderTHM.offhandChestRefillCount(64, 128, 11, false));
+        assertEquals(0, HighwayBuilderTHM.offhandChestRefillCount(1, 65, 11, true));
     }
 
     @Test

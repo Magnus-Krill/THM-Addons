@@ -89,6 +89,8 @@
   ],
   "client": [
     "AnarchyJoinMixin",
+    "ChannelPayloadDecoderMixin",
+    "ChannelPayloadEncoderMixin",
     "ClientChunkCacheSurroundMixin",
     "ClientConnectionChokeMixin",
     "ClientLevelBlockUpdateMixin",

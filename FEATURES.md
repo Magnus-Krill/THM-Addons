@@ -34,7 +34,6 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `auto-fish` — Meteor AutoFish with optional post-catch random look-around and short backward/return movement before recasting.
 - `offhand` — Meteor Offhand with main-hand item whitelist and blocklist modes for swaps.
 - `offhand-manager` — Automatically manages your offhand (optimized for highway work).
-- `module-manager` — Tracks module toggle ownership and restores managed modules after reconnect.
 - `chest-tracker` — Track items in containers.
 - `paket-limiter` — Limits outgoing packets per tick with a bypass list.
 - `AntiDrop` — Stops you from dropping certain items.
@@ -42,6 +41,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `THM Stash mover` — Keeps named kit-pair deposit storage topped off with full shulker kits.
 - `friends-sync` — Runs commands when friends or THM members join. `%player%` is replaced with their name.
 - `packet-logger-thm` — Logs selected packets to replay-grade JSONL files.
+- `channel-logger` — Logs custom payloads in both directions to per-connection text files and previews decoded values in chat.
 - `auto-ignore` — Auto-ignores Spambots and fake KitBots.
 - `Kitbot-frontend` — Send kitbot commands (`$update`, `$goto`, `$kit`).
 - `discord-notifs` — Sends notifications to a Discord webhook.

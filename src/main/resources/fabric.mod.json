@@ -5,12 +5,12 @@
   "name": "THM Addon",
   "description": "The Addon by THM for Meteor Client",
   "authors": [
-    "Leonn170709",
+    "Magnus-Krill",
     "DaReapsta"
   ],
   "contact": {
-    "repo": "https://github.com/Leonn170709/THM-Addons",
-    "issues": "https://github.com/Leonn170709/THM-Addons/issues",
+    "repo": "https://github.com/Magnus-Krill/THM-Addons",
+    "issues": "https://github.com/Magnus-Krill/THM-Addons/issues",
     "discord": "https://discord.gg/thm"
   },
   "icon": "assets/icon/icon.png",

@@ -44,20 +44,22 @@ After that first seed, each profile loads its own saved values rather than reapp
 
 The tabbed HighwayBuilder screen can also save the current settings as a named custom preset. Each preset is stored as `<Name>.json` under `meteor-client/thm/highway-builder-presets`, loaded when HighwayBuilder is registered during Minecraft startup, and applied from the **Custom preset** selector with its **Apply** button. Imported files are size- and depth-limited and may contain only known HighwayBuilder groups and settings.
 
-Restock and KitBot enclosures use Netherrack. With `offhand-build`, it is temporarily moved into the offhand and the previous item is restored afterwards; otherwise it is moved to the hotbar and placed with the normal main-hand swap. Enclosure blocks are placed normally, one at a time, even when Packet Build is enabled.
+Restock and KitBot enclosures use Netherrack first, then any suitable full block, including protected Obsidian. Shulkers and falling blocks are excluded. With `offhand-build`, the builder uses the offhand and restores any item it swapped out. Enclosure blocks are placed normally, one at a time, even when Packet Build is enabled.
 
 TPS safety enclosures also use Netherrack. After TPS recovers, the builder removes its enclosure blocks on all four sides before moving forward. Existing nearby blocks are left alone.
 
-With `Manage-hotbar` enabled, HighwayBuilder keeps food in slot 5, trash blocks in slot 6, ender chests in slot 7, a usable pickaxe in slot 8, and configured placement blocks in slot 9. It refills empty supply slots from inventory and pauses sorting during restocks, open containers, and item use. Offhand refills use spare inventory stacks first and leave at least one item in reserved hotbar slots.
+With `Manage-hotbar` enabled, HighwayBuilder keeps food in slot 5, trash blocks in slot 6, ender chests in slot 7, a usable pickaxe in slot 8, and configured placement blocks in slot 9. It refills empty supply slots from inventory and pauses sorting during restocks, open containers, and item use. Offhand block refills use spare inventory stacks first. Refills leave at least one item in reserved hotbar slots.
 
 `keep-trash-block-stacks` counts hotbar and main-inventory stacks together. A limit of `1` keeps one trash block stack across both. Protected items remain excluded from trash cleanup.
 
 Carried shulkers are checked before external restock sources. Exhausting loose ender chests does not hide ender chests still inside shulkers; `search-shulkers` and `mine-ender-chests` must be enabled to use them for obsidian.
 
+KitBot orders for ender chests or obsidian always check your inventory first. `EnderChestThenKitBot` also checks the ender chest bank before ordering. `KitBotThenEnderChest` skips the bank for these orders, including after a failed order.
+
 Restock cleanup keeps the held tool when another tool has the same mining score. Offhand and packet-build loadouts let the restock state control the main hand while containers are being removed.
 
 Offhand restocks keep their supplies through recovery instead of refilling with obsidian. Chest,
-totem and tool swaps work with a full inventory, including `minimum-empty-slots` set to `0`. EChest mining keeps the configured reserve outside the offhand so predictive replacement cannot consume it. If there is no room to separate an existing offhand stack, normal placement respects the reserve and predictive replacement waits.
+totem and tool swaps work with a full inventory, including `minimum-empty-slots` set to `0`. EChest mining refills the offhand with the largest available stack while keeping the configured reserve in inventory. If there is no room to separate an existing offhand stack, normal placement respects the reserve and predictive replacement waits.
 
 Single EChest restocks use the same standing height as the enclosure and clear solid blocks above the lid before opening.
 
@@ -100,8 +102,11 @@ only a server-state change advances reconnect. Manual joins do not start portal 
 
 ### Basic Highway Shape
 
+On a fresh start, `align-first` walks to the nearest mapped Axis Viewer line at your current height and follows the direction closest to your facing. It needs a clear walk of at most 32 blocks. Resume paths handle their own direction.
+
 | Setting | Default / Range | What to change it for |
 | --- | --- | --- |
+| `align-first` | `true` | Lines up with a mapped highway before building. |
 | `width` | `5`, range `1-7` | Highway floor width. |
 | `height` | `3`, range `2-5` | Vertical clearance to mine. |
 | `floor` | `Replace`; options `Replace`, `PlaceMissing` | Use `Replace` for normal rebuilding; use `PlaceMissing` when you only want missing floor blocks filled. |
@@ -122,7 +127,7 @@ only a server-state change advances reconnect. Manual joins do not start portal 
 | `manage-thm-highway-monitor` | `true`; shown only when Baritone is installed | Lets HighwayBuilder toggle/manage THM Highway Monitor. |
 | `fall-save-air-place` | `false`; shown when `manage-thm-highway-monitor` is on | Places safety blocks while descending at least 0.25 below the managed paving or digging level with support missing. |
 | `fall-save-distance` | `3`, range `3-5`; shown when fall-save is on | How far below the hitbox fall-save can place. |
-| `autosetup-modules` | `true` | Configures Meteor Speed Mine, Reach, Velocity, and HighwayBuilder place range for highway work. |
+| `autosetup-modules` | `true` | Configures and enables Meteor Speed Mine, Reach, Velocity, and KillAura, enables Criticals, and sets HighwayBuilder place range. |
 | `toggle-perspective` | `true` | Switches to third person while active, then restores the old camera. |
 | `toggle-hud` | `true` | Toggles the highway HUD integration. |
 
@@ -230,6 +235,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 
 | Setting | Default / Range / Options | Visible when | Behavior |
 | --- | --- | --- | --- |
+| `align-first` | `true` | Always | Walks to the nearest mapped highway before a fresh build. |
 | `width` | `5`, range `1-7` | Always | Sets the highway floor width. |
 | `height` | `3`, range `2-5` | Always | Sets the vertical tunnel clearance. |
 | `floor` | `Replace`; options `Replace`, `PlaceMissing` | Always | `Replace` rebuilds floor blocks; `PlaceMissing` only fills gaps. |
@@ -247,7 +253,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `manage-thm-highway-monitor` | `true` when Baritone is installed | Baritone is installed | Lets HighwayBuilder enable and manage THM Highway Monitor while active. |
 | `fall-save-air-place` | `false` | `manage-thm-highway-monitor` is on | Places one safety block per tick while the player remains below the managed operating level, is still descending by position and velocity, and has no direct support. Turning monitor management off also turns fall-save off. |
 | `fall-save-distance` | `3`, range `3-5` | Monitor management and `fall-save-air-place` are on | Vertical distance below the hitbox used by fall-save placement. |
-| `autosetup-modules` | `true` | Always | Automatically configures Meteor Speed Mine, Reach, Velocity, and HighwayBuilder place range for highway work. |
+| `autosetup-modules` | `true` | Always | Configures and enables Meteor Speed Mine, Reach, Velocity, and KillAura, enables Criticals, and sets HighwayBuilder place range. |
 | `packet-mode` | `false` | Always | Enables Packet Build and Packet Borer, leaving already-enabled pieces alone. |
 | `check-behind` | `true` | Always | Repairs missing floor or railings behind the player, every row within `place-range` (Forward scheduler; legacy mode checks one row). |
 | `ghost-block-check` | `false` | `enable-experimental` and `check-behind` are on | Before moving into the next row, has the server confirm the floor/railings of the row behind (one use-on-block packet per two blocks, needs an empty hand, pickaxe or totem). A ghost block turns into a hole client-side and is re-placed first. Forward scheduler only. |

@@ -163,6 +163,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         Modules.get().add(new Nuker());
         Modules.get().add(new PaketLimiter());
         Modules.get().add(new PacketLoggerTHM());
+        Modules.get().add(new ChannelLogger());
         Modules.get().add(new UnfocusedFpsLimiter());
         Modules.get().add(new AntiConcrete());
         Modules.get().add(new AntiConcreteDetection());
@@ -190,7 +191,6 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         Modules.get().add(new KitbotFrontend());
         Modules.get().add(new THMStashMover());
         Modules.get().add(new Loadouts());
-        Modules.get().add(new ModuleManager());
         Modules.get().add(new NotebotStealer());
         SongDecoders.registerDecoder("notebot", new FutureSongDecoder());
         FutureSongDecoder.importFutureSongs();

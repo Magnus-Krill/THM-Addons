@@ -43,7 +43,7 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
 public class HighwayBuilderScreen extends WindowScreen {
     private static final String BASICS = "Basics", ALL = "All";
     private static final String[] BASIC_SETTINGS = {
-        "width", "height", "floor", "railings", "blocks-to-place",
+        "align-first", "width", "height", "floor", "railings", "blocks-to-place",
         "blocks-per-tick", "adaptive-mining", "placements-per-tick", "adaptive-placements", "packet-build",
         "check-behind", "pause-on-lag", "use-thm-speed",
         "food-restock", "mine-ender-chests", "save-ender-chests"

@@ -6,11 +6,42 @@
 
 package xyz.thm.addon.modules;
 
+import meteordevelopment.meteorclient.utils.misc.HorizontalDirection;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class AxisViewerTest {
+    @Test
+    void startupAlignmentPicksABlockCenterAndFollowsThePlayersFacing() {
+        assertEquals(new AxisViewer.StartAlignment(0, 90, HorizontalDirection.North),
+            AxisViewer.nearestStartAlignment(2.8, 90.1, 175, false, true));
+        assertEquals(new AxisViewer.StartAlignment(-101, -101, HorizontalDirection.NorthWest),
+            AxisViewer.nearestStartAlignment(-101.3, -100.6, 133, false, true));
+        assertEquals(new AxisViewer.StartAlignment(0, 0, HorizontalDirection.SouthWest),
+            AxisViewer.nearestStartAlignment(0.5, 0.5, 45, false, true));
+        assertEquals(new AxisViewer.StartAlignment(0, 0, HorizontalDirection.South),
+            AxisViewer.nearestStartAlignment(0.5, 0.5, 25, false, false));
+    }
+
+    @Test
+    void startupAlignmentIncludesNetherRingsDiamondsGridAndExtensions() {
+        assertEquals(new AxisViewer.StartAlignment(200, 86, HorizontalDirection.North),
+            AxisViewer.nearestStartAlignment(201.5, 86.2, 180, true, true));
+        assertEquals(new AxisViewer.StartAlignment(400, 600, HorizontalDirection.SouthWest),
+            AxisViewer.nearestStartAlignment(400.8, 601.4, 48, true, true));
+        assertEquals(new AxisViewer.StartAlignment(5000, 42123, HorizontalDirection.South),
+            AxisViewer.nearestStartAlignment(5001.4, 42123.3, 0, true, true));
+        assertEquals(new AxisViewer.StartAlignment(90000, 50000, HorizontalDirection.East),
+            AxisViewer.nearestStartAlignment(90000.4, 50001.2, -90, true, true));
+
+        var edge = AxisViewer.nearestStartAlignment(125008.0, 50000.7, -90, true, true);
+        assertEquals(125000, edge.x());
+        assertEquals(50000, edge.z());
+        assertNotEquals(HorizontalDirection.East, edge.direction());
+        assertNotEquals(50000, AxisViewer.nearestStartAlignment(90000.4, 50001.2, -90, false, true).z());
+    }
+
     @Test
     void rewardEligibilityIncludesEveryRingAndDiamondInAllQuadrants() {
         for (int radius : AxisViewer.RING_ROADS) {
