@@ -13,7 +13,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `THM Highway Monitor` — Monitors alignment and recovers HighwayBuilder from drift, with reconnect or chunk-refresh recovery. Requires Baritone.
 - `Highway-Tools` — Highway utilities: axis walker, highway teleporter, boundary finder, and highway checker. Requires Baritone.
 - `axis-viewer` — Displays world axes and Nether highways, including XaeroPlus rings, diamonds, the 50k grid, and 125k extensions.
-- `scaffold-THM` — Scaffolds blocks under you.
+- `THMScaffold` — Scaffold with a horizontal radius, player-reach support searches, support-first air-place, optional confirmation waits for packet retries, silent swaps, an internal packet budget, gap filling, lookahead, tower, safe movement, and height locking.
 - `auto-portal` — For the Base Hunter who has places to be.
 - `Fly-Bypass` — Fly using packets.
 - `no-fall`: Meteor NoFall with NoGround mode, mace support, and optional reset packets on disable.
@@ -23,16 +23,17 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 ## Mining and Building
 - `better-baritone-build` — Index opened storage, fetch missing build materials with Baritone, and manage block replacement/acceptance rules, dirt/grass equivalence, and log stripping in a custom screen.
 - `tunnel-miner` — Mines a tunnel block-by-block to target XZ coordinates at the same Y.
-- `Speedmine`: Packet mining with early packet rebreaks and client-world fallback, Off/Strict/Strong/Bypass modes, a rebreak-rate monitor, tool swap timing, TPS sync, client prediction, and optional multitasking while using items. Auto Mine can independently continue bedrock mining while eating with `bedrock-while-eating` (off by default). Optional `debug-auto-mine` reports targets and idle reasons in chat. Strong retries completed targets without an air confirmation. Active and automatic mining continue with the inventory open. Optional Air Miner removes the airborne speed penalty and claims ground around mining actions, with a speed cap and opt-in gliding.
+- `Speedmine`: Packet mining with early packet rebreaks and client-world fallback, Off/Strict/Strong/Bypass modes, a server-confirmed rebreak-rate monitor, tool swap timing, TPS sync, client prediction, tick-based mining progress with smooth rendering, and optional multitasking while using items. Auto Mine can independently continue bedrock mining while eating with `bedrock-while-eating` (off by default). Optional `debug-auto-mine` reports targets and idle reasons in chat. Strong retries completed targets without an air confirmation. Active and automatic mining continue with the inventory open. Optional Air Miner removes the airborne speed penalty and claims ground around mining actions, with a speed cap and opt-in gliding.
 - `BlockCounter` — Counts the selected blocks.
 - `Better-echest-farmer` — Better echest farmer that uses instant rebreak exploit.
 - `sign-render` — Renders sign text through walls with advanced clustering.
 - `nuker` — Nuker with many additions.
+- `block-marker` — Renders selected block types nearby; left- or right-click a match to hide it.
 
 ## Inventory and Utility
+- `auto-fish` — Meteor AutoFish with optional post-catch random look-around and short backward/return movement before recasting.
+- `offhand` — Meteor Offhand with main-hand item whitelist and blocklist modes for swaps.
 - `offhand-manager` — Automatically manages your offhand (optimized for highway work).
-- `hotbar-manager` — Automatically move items to your hotbar.
-- `module-manager` — Tracks module toggle ownership and restores managed modules after reconnect.
 - `chest-tracker` — Track items in containers.
 - `paket-limiter` — Limits outgoing packets per tick with a bypass list.
 - `AntiDrop` — Stops you from dropping certain items.
@@ -40,6 +41,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `THM Stash mover` — Keeps named kit-pair deposit storage topped off with full shulker kits.
 - `friends-sync` — Runs commands when friends or THM members join. `%player%` is replaced with their name.
 - `packet-logger-thm` — Logs selected packets to replay-grade JSONL files.
+- `channel-logger` — Logs custom payloads in both directions to per-connection text files and previews decoded values in chat.
 - `auto-ignore` — Auto-ignores Spambots and fake KitBots.
 - `Kitbot-frontend` — Send kitbot commands (`$update`, `$goto`, `$kit`).
 - `discord-notifs` — Sends notifications to a Discord webhook.
@@ -65,7 +67,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 ## HUD Widgets
 - `online-friends` — Displays online friends from your friend list.
 - `Dubs Count` — Displays how many dubs are in render distance.
-- `Highway-hud` — View your stats while paving: distance, blocks, place rate, restock ETA.
+- `Highway-hud` — View highway distance, block counts, Dug/Paved rates, and restock ETA.
 - `THM-welcomer` — Advanced Welcomer.
 - `crystal-metrics` — ThunderHack style monitor.
 - `THM Member Hud` — Shows all online THM members and ranks.

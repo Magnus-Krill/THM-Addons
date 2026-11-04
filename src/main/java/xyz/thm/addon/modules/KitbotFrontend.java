@@ -20,6 +20,7 @@ import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.utils.kitbot.KitbotAvailabilityTracker;
 import xyz.thm.addon.utils.kitbot.KitbotChatCommandParser;
+import xyz.thm.addon.utils.kitbot.KitbotKitCatalog;
 
 import java.util.Locale;
 import java.util.concurrent.CopyOnWriteArraySet;
@@ -59,10 +60,11 @@ public class KitbotFrontend extends Module {
         .build()
     );
 
-    private final Setting<KitName> kitName = sgGeneral.add(new EnumSetting.Builder<KitName>()
+    private final Setting<String> kitName = sgGeneral.add(new ProvidedStringSetting.Builder()
         .name("kit")
         .description("Kit to order.")
-        .defaultValue(KitName.Pvp)
+        .defaultValue("pvp")
+        .supplier(KitbotKitCatalog.NAMES)
         .visible(() -> mode.get() == Mode.Kit)
         .build()
     );
@@ -86,10 +88,11 @@ public class KitbotFrontend extends Module {
         .build()
     );
 
-    private final Setting<KitName> sendKit = sgGeneral.add(new EnumSetting.Builder<KitName>()
+    private final Setting<String> sendKit = sgGeneral.add(new ProvidedStringSetting.Builder()
         .name("send-kit")
         .description("Kit used for $send.")
-        .defaultValue(KitName.Pvp)
+        .defaultValue("pvp")
+        .supplier(KitbotKitCatalog.NAMES)
         .visible(() -> mode.get() == Mode.Send)
         .build()
     );
@@ -251,12 +254,15 @@ public class KitbotFrontend extends Module {
         return switch (mode.get()) {
             case Goto -> ManagedRequest.directional(KitbotChatCommandParser.CommandType.Goto, Mode.Goto, gotoDirection.get(), autoTp.get());
             case Update -> ManagedRequest.directional(KitbotChatCommandParser.CommandType.Update, Mode.Update, updateDirection.get(), autoTp.get());
-            case Kit -> ManagedRequest.kitRequest(Mode.Kit, kitName.get() == null ? "" : kitName.get().label, kitAmount.get(), autoTp.get());
+            case Kit -> {
+                KitbotKitCatalog.Kit kit = KitbotKitCatalog.find(kitName.get());
+                yield kit == null ? null : ManagedRequest.kitRequest(Mode.Kit, kit.name(), kitAmount.get(), autoTp.get());
+            }
             case Send -> {
                 String player = safeString(sendPlayer.get());
-                String kit = sendKit.get() == null ? "" : sendKit.get().label;
-                if (player.isEmpty() || kit.isEmpty()) yield null;
-                yield ManagedRequest.sendRequest(player, kit, sendAmount.get());
+                KitbotKitCatalog.Kit kit = KitbotKitCatalog.find(sendKit.get());
+                if (player.isEmpty() || kit == null) yield null;
+                yield ManagedRequest.sendRequest(player, kit.name(), sendAmount.get());
             }
             case Token -> ManagedRequest.simple(KitbotChatCommandParser.CommandType.Token, Mode.Token);
             case Claim -> ManagedRequest.simple(KitbotChatCommandParser.CommandType.Claim, Mode.Claim);
@@ -268,8 +274,8 @@ public class KitbotFrontend extends Module {
         return switch (request.mode()) {
             case Goto -> ManagedRequest.directional(KitbotChatCommandParser.CommandType.Goto, Mode.Goto, request.direction(), autoTransport);
             case Update -> ManagedRequest.directional(KitbotChatCommandParser.CommandType.Update, Mode.Update, request.direction(), autoTransport);
-            case Kit -> ManagedRequest.kitRequest(Mode.Kit, request.kit() == null ? "" : request.kit().label, request.amount(), autoTransport);
-            case Send -> ManagedRequest.sendRequest(request.playerName(), request.kit() == null ? "" : request.kit().label, request.amount());
+            case Kit -> ManagedRequest.kitRequest(Mode.Kit, request.kit() == null ? "" : request.kit().name(), request.amount(), autoTransport);
+            case Send -> ManagedRequest.sendRequest(request.playerName(), request.kit() == null ? "" : request.kit().name(), request.amount());
             case Token -> ManagedRequest.simple(KitbotChatCommandParser.CommandType.Token, Mode.Token);
             case Claim -> ManagedRequest.simple(KitbotChatCommandParser.CommandType.Claim, Mode.Claim);
         };
@@ -1020,30 +1026,15 @@ public class KitbotFrontend extends Module {
     }
 
     public enum KitName implements DescribedOption {
-        Refill("Refill", 1),
-        Pvp("PvP", 0.5),
-        Echest("Echest", 0.2),
-        Pickaxe("Pickaxe", 1),
-        Highway("Highway", 0.2),
-        Lights("Lights", 1),
-        Travel("Travel", 1.5),
-        Grief("Grief", 1.5),
-        Redstone("Redstone", 1),
-        Exp("Exp", 1),
-        Logs("Logs", 1),
-        Mapart("Mapart", 1.5),
-        Stash("Stash", 1),
-        Bricks("Bricks", 1),
-        Gapples("Gapples", 1),
-        Concrete("Concrete", 1),
-        Totems("Totems", 5);
+        Echest("Echest"),
+        Pickaxe("Pickaxe"),
+        Highway("Highway"),
+        Gapples("Gapples");
 
         public final String label;
-        public final double tokens;
 
-        KitName(String label, double tokens) {
+        KitName(String label) {
             this.label = label;
-            this.tokens = tokens;
         }
 
         @Override
@@ -1051,50 +1042,13 @@ public class KitbotFrontend extends Module {
             return label;
         }
 
-        public String describe() {
-            return String.format(Locale.ROOT, "%s (%.1f tokens)", label, tokens);
-        }
-
-        public static KitName fromString(String value) {
-            if (value == null) return null;
-            String normalized = value.trim().toLowerCase(Locale.ROOT);
-            for (KitName kit : values()) {
-                if (kit.label.toLowerCase(Locale.ROOT).equals(normalized) || kit.name().equalsIgnoreCase(normalized)) {
-                    return kit;
-                }
-            }
-            return null;
-        }
-
-        public static String list() {
-            StringBuilder sb = new StringBuilder();
-            for (KitName kit : values()) {
-                if (sb.length() > 0) sb.append(", ");
-                sb.append(kit.describe());
-            }
-            return sb.toString();
-        }
-
         @Override
         public String description() {
             return switch (this) {
-                case Refill -> "Use a refill kit.";
-                case Pvp -> "Use a PvP kit.";
                 case Echest -> "Use an ender-chest kit.";
                 case Pickaxe -> "Use a pickaxe kit.";
                 case Highway -> "Use a highway-building kit.";
-                case Lights -> "Use a lighting kit.";
-                case Travel -> "Use a travel kit.";
-                case Grief -> "Use a griefing kit.";
-                case Redstone -> "Use a redstone kit.";
-                case Exp -> "Use an experience kit.";
-                case Logs -> "Use a log kit.";
-                case Mapart -> "Use a map-art kit.";
-                case Stash -> "Use a stash kit.";
-                case Bricks -> "Use a brick kit.";
                 case Gapples -> "Use a golden-apple kit.";
-                case Concrete -> "Use a concrete kit.";
-                case Totems -> "Use a totem kit.";
             };
         }
     }

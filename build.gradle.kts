@@ -4,6 +4,7 @@
  * By using this code you agree to the license terms and to keep your repo public.
  */
 
+import java.net.URI
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.Properties
@@ -52,9 +53,9 @@ dependencies {
     runtimeOnly(libs.baritone)
 
     // Inspect optional mixin targets without loading these mods into the dev client.
-    testRuntimeOnly("maven.modrinth:sodium:mc26.2-0.9.2-fabric")
-    testRuntimeOnly("maven.modrinth:xaeros-minimap:fabric-26.2-26.5.1")
-    testRuntimeOnly("maven.modrinth:xaeros-world-map:fabric-26.2-1.46.1")
+    testRuntimeOnly(libs.sodium)
+    testRuntimeOnly(libs.xaeros.minimap)
+    testRuntimeOnly(libs.xaeros.world.map)
 
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)
@@ -94,6 +95,7 @@ val generateApiEndpoints = tasks.register("generateApiEndpoints") {
             "capeList" to req("api.cape"),
             "capePost" to req("api.capePost"),
             "capeIndex" to req("api.capeIndex"),
+            "kits" to props.getProperty("api.kits", URI(req("api.memberHud")).resolve("/kits").toString()),
             "updater" to props.getProperty("api.updater", "").trim(),
         )
         for ((name, url) in urls) {
@@ -149,6 +151,7 @@ val generateApiEndpoints = tasks.register("generateApiEndpoints") {
             |    private static final String CAPE_LIST = "${encrypted["capeList"]}";
             |    private static final String CAPE_POST = "${encrypted["capePost"]}";
             |    private static final String CAPE_INDEX = "${encrypted["capeIndex"]}";
+            |    private static final String KITS = "${encrypted["kits"]}";
             |    private static final String UPDATER = "${encrypted["updater"]}";
             |    private static final String UPDATER_PUBLIC_KEY = "$updaterKey";
             |
@@ -161,6 +164,7 @@ val generateApiEndpoints = tasks.register("generateApiEndpoints") {
             |    static String capeListUrl() { return decrypt(CAPE_LIST); }
             |    static String capePostUrl() { return decrypt(CAPE_POST); }
             |    static String capeIndexUrl() { return decrypt(CAPE_INDEX); }
+            |    static String kitsUrl() { return decrypt(KITS); }
             |    static String updaterUrl() { return decrypt(UPDATER); }
             |    static String updaterPublicKey() { return UPDATER_PUBLIC_KEY; }
             |
@@ -244,6 +248,8 @@ tasks {
         val propertyMap = mapOf(
             "version" to project.version,
             "mc_version" to libs.versions.minecraft.get(),
+            "fabric_loader_version" to libs.versions.fabric.loader.get(),
+            "fabric_api_version" to libs.versions.fabric.api.get(),
             "gh_hash" to (System.getenv("GITHUB_SHA") ?: run {
                 val process = ProcessBuilder("git", "rev-parse", "HEAD")
                     .directory(rootDir)

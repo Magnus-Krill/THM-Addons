@@ -17,8 +17,10 @@ THM Addons is a Meteor Client addon focused on highway automation, travel utilit
 
 ## Requirements
 - Minecraft `26.2`
-- Fabric Loader `0.19.5`
+- Fabric Loader `0.20.1`
+- Fabric API `0.161.0+26.2`
 - Meteor Client `26.2-SNAPSHOT`
+- Meteor Baritone `26.2-SNAPSHOT`
 - Java `25`
 
 ## Installation

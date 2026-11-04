@@ -6,11 +6,77 @@
 
 package xyz.thm.addon.modules;
 
+import meteordevelopment.meteorclient.utils.misc.HorizontalDirection;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class AxisViewerTest {
+    @Test
+    void startupAlignmentPicksABlockCenterAndFollowsThePlayersFacing() {
+        assertEquals(new AxisViewer.StartAlignment(0, 90, HorizontalDirection.North),
+            AxisViewer.nearestStartAlignment(2.8, 90.1, 175, false, true));
+        assertEquals(new AxisViewer.StartAlignment(-101, -101, HorizontalDirection.NorthWest),
+            AxisViewer.nearestStartAlignment(-101.3, -100.6, 133, false, true));
+        assertEquals(new AxisViewer.StartAlignment(0, 0, HorizontalDirection.SouthWest),
+            AxisViewer.nearestStartAlignment(0.5, 0.5, 45, false, true));
+        assertEquals(new AxisViewer.StartAlignment(0, 0, HorizontalDirection.South),
+            AxisViewer.nearestStartAlignment(0.5, 0.5, 25, false, false));
+    }
+
+    @Test
+    void startupAlignmentIncludesNetherRingsDiamondsGridAndExtensions() {
+        assertEquals(new AxisViewer.StartAlignment(200, 86, HorizontalDirection.North),
+            AxisViewer.nearestStartAlignment(201.5, 86.2, 180, true, true));
+        assertEquals(new AxisViewer.StartAlignment(400, 600, HorizontalDirection.SouthWest),
+            AxisViewer.nearestStartAlignment(400.8, 601.4, 48, true, true));
+        assertEquals(new AxisViewer.StartAlignment(5000, 42123, HorizontalDirection.South),
+            AxisViewer.nearestStartAlignment(5001.4, 42123.3, 0, true, true));
+        assertEquals(new AxisViewer.StartAlignment(90000, 50000, HorizontalDirection.East),
+            AxisViewer.nearestStartAlignment(90000.4, 50001.2, -90, true, true));
+
+        var edge = AxisViewer.nearestStartAlignment(125008.0, 50000.7, -90, true, true);
+        assertEquals(125000, edge.x());
+        assertEquals(50000, edge.z());
+        assertNotEquals(HorizontalDirection.East, edge.direction());
+        assertNotEquals(50000, AxisViewer.nearestStartAlignment(90000.4, 50001.2, -90, false, true).z());
+    }
+
+    @Test
+    void rewardEligibilityIncludesEveryRingAndDiamondInAllQuadrants() {
+        for (int radius : AxisViewer.RING_ROADS) {
+            for (int sign : new int[] {-1, 1}) {
+                assertTrue(AxisViewer.isOnHighway(sign * radius + 0.5, radius * 0.37 + 0.5, true));
+                assertTrue(AxisViewer.isOnHighway(radius * 0.37 + 0.5, sign * radius + 0.5, true));
+            }
+        }
+        for (int radius : AxisViewer.DIAMONDS) {
+            for (int sx : new int[] {-1, 1}) {
+                for (int sz : new int[] {-1, 1}) {
+                    assertTrue(AxisViewer.isOnHighway(sx * radius * 0.37 + 0.5, sz * radius * 0.63 + 0.5, true));
+                }
+            }
+        }
+    }
+
+    @Test
+    void rewardEligibilityIncludesAxesGridAndExtensionsButNotUnmappedTerrain() {
+        assertTrue(AxisViewer.isOnHighway(0.5, 1234567.5, false));
+        assertTrue(AxisViewer.isOnHighway(-1234566.5, 1234567.5, false));
+        assertTrue(AxisViewer.isOnHighway(5000.5, 42123.5, true));
+        assertTrue(AxisViewer.isOnHighway(-42122.5, -4999.5, true));
+        assertTrue(AxisViewer.isOnHighway(50000.5, 124999.5, true));
+        assertTrue(AxisViewer.isOnHighway(-124998.5, -49999.5, true));
+        assertTrue(AxisViewer.isOnHighway(62504.5, 23123.5, true), "allow the highway's width");
+        assertFalse(AxisViewer.isOnHighway(62506.5, 23123.5, true));
+        assertFalse(AxisViewer.isOnHighway(54321.5, 12345.5, true));
+        assertFalse(AxisViewer.isOnHighway(5000.5, 51123.5, true), "grid roads stop at 50k");
+        assertFalse(AxisViewer.isOnHighway(50000.5, 125006.5, true), "extensions stop at 125k");
+        assertFalse(AxisViewer.isOnHighway(62500.5, 23123.5, false), "rings are Nether-only");
+        assertFalse(AxisViewer.isOnHighway(Double.NaN, 0.5, true));
+        assertFalse(AxisViewer.isOnHighway(Double.POSITIVE_INFINITY, 0.5, true));
+    }
+
     @Test
     void highwayRadiiCoverXaeroPlusAndKeepExistingThmDiamonds() {
         assertArrayEquals(new int[] {

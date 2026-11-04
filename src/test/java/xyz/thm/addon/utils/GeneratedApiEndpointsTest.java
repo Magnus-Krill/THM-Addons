@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.io.Reader;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -46,5 +47,7 @@ class GeneratedApiEndpointsTest {
             assertTrue(url.startsWith("https://"), e.getKey() + " is not https");
             assertTrue(url.equals(props.getProperty(e.getKey())), e.getKey() + " decrypts to the wrong value");
         }
+        String kits = props.getProperty("api.kits", URI.create(props.getProperty("api.memberHud")).resolve("/kits").toString());
+        assertTrue(kits.equals(GeneratedApiEndpoints.kitsUrl()), "api.kits decrypts to the wrong value");
     }
 }

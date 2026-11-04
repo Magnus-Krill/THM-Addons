@@ -6,8 +6,8 @@
     "defaultRequire": 1
   },
   "mixins": [
-    "BaritoneWorkerMixin",
     "BaritoneBuilderMixin",
+    "BaritoneWorkerMixin",
     "BlockedServersMixin",
     "ButtonWidgetStyleMixin",
     "ChatInputSuggestorMixin",
@@ -50,6 +50,7 @@
     "accessor.WSectionAccessor",
     "meteor.AnchorAuraMixin",
     "meteor.AutoEatMixin",
+    "meteor.AutoFishMixin",
     "meteor.AutoGapMixin",
     "meteor.AutoLogMixin",
     "meteor.AutoWebMixin",
@@ -76,7 +77,6 @@
     "meteor.PacketListSettingMixin",
     "meteor.PopChamsGhostMixin",
     "meteor.PopChamsMixin",
-    "meteor.ScaffoldMixin",
     "meteor.SpeedMixin",
     "meteor.ThmHeaderClickMixin",
     "meteor.ThmMeteorHeaderMixin",
@@ -89,15 +89,17 @@
   ],
   "client": [
     "AnarchyJoinMixin",
+    "ChannelPayloadDecoderMixin",
+    "ChannelPayloadEncoderMixin",
     "ClientChunkCacheSurroundMixin",
     "ClientConnectionChokeMixin",
     "ClientLevelBlockUpdateMixin",
     "InventoryScreenMixin",
     "KeyboardMixin",
     "LevelLoadingScreenMixin",
+    "PlayerAirMiningMixin",
     "PlayerListHudMixin",
     "PlayerListMapMixin",
-    "accessor.ClientLevelPredictionAccessor",
-    "PlayerAirMiningMixin"
+    "accessor.ClientLevelPredictionAccessor"
   ]
 }

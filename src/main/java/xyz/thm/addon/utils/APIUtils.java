@@ -115,6 +115,10 @@ public class APIUtils {
         return canRequest() ? TrustedHttp.getString(url, TrustedHttp.Kind.API, TrustedHttp.MAX_JSON_BYTES) : null;
     }
 
+    public static TrustedHttp.Response fetchKitCatalog(String token, String etag) {
+        return TrustedHttp.getConditional(GeneratedApiEndpoints.kitsUrl(), token, etag, TrustedHttp.MAX_JSON_BYTES);
+    }
+
     private static void apiPost(String name, String url, String json) {
         if (canRequest()) THMUtils.async(name, () -> TrustedHttp.postJson(url, json, TrustedHttp.Kind.API, apiToken()));
     }
@@ -126,11 +130,11 @@ public class APIUtils {
     }
 
     public static void sendStatus(String message) {
-        apiPost("status", GeneratedApiEndpoints.statusUrl(), jsonContent(message));
+        apiPost("status", GeneratedApiEndpoints.statusUrl(), jsonContent(message + ":v" + THMAddon.VERSION));
     }
 
     public static void sendStatistics(String message) {
-        apiPost("statistics", GeneratedApiEndpoints.highwayUrl(), jsonContent(message));
+        apiPost("statistics", GeneratedApiEndpoints.highwayUrl(), jsonContent(message + ":v" + THMAddon.VERSION));
     }
 
     // Discord webhook URL, supplied by the player at runtime - never attach our API token to it.

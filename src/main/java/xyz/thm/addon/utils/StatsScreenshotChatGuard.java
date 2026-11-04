@@ -22,6 +22,7 @@ import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.mixin.accessor.ChatHudAccessor;
 
 import java.util.*;
+import java.util.function.BooleanSupplier;
 
 public final class StatsScreenshotChatGuard {
     private static final int MAX_BUFFERED_MESSAGES = 1_000;
@@ -31,6 +32,7 @@ public final class StatsScreenshotChatGuard {
 
     private final LinkedHashMap<Long, Long> captureDeadlines = new LinkedHashMap<>();
     private final ArrayDeque<BufferedMessage> bufferedMessages = new ArrayDeque<>();
+    private final ArrayDeque<PendingScreenshot> pendingScreenshots = new ArrayDeque<>();
 
     private long nextCaptureToken = 1L;
     private int droppedMessages;
@@ -60,6 +62,27 @@ public final class StatsScreenshotChatGuard {
         if (captureDeadlines.isEmpty()) replayBufferedMessages();
     }
 
+    public void captureAfterRender(long token, boolean disconnect, BooleanSupplier ready, Runnable capture, Runnable abort) {
+        if (pendingScreenshots.size() >= 16) {
+            abort.run();
+            return;
+        }
+        long deadline = System.currentTimeMillis() + (disconnect ? 30_000L : CAPTURE_WATCHDOG_MS);
+        if (captureDeadlines.containsKey(token)) captureDeadlines.put(token, deadline);
+        pendingScreenshots.addLast(new PendingScreenshot(disconnect, deadline, ready, capture, abort));
+    }
+
+    public static void afterGuiRender() {
+        StatsScreenshotChatGuard guard = INSTANCE;
+        if (guard == null) return;
+        long now = System.currentTimeMillis();
+        for (int count = guard.pendingScreenshots.size(); count > 0; count--) {
+            PendingScreenshot pending = guard.pendingScreenshots.pollFirst();
+            if (pending == null) break;
+            if (!pending.afterRender(now)) guard.pendingScreenshots.addLast(pending);
+        }
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     private void onReceiveMessage(ReceiveMessageEvent event) {
         if (captureDeadlines.isEmpty() || event.isCancelled()) return;
@@ -76,9 +99,10 @@ public final class StatsScreenshotChatGuard {
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
+        long now = System.currentTimeMillis();
+        pendingScreenshots.removeIf(pending -> pending.expire(now));
         if (captureDeadlines.isEmpty()) return;
 
-        long now = System.currentTimeMillis();
         boolean expired = false;
         Iterator<Map.Entry<Long, Long>> iterator = captureDeadlines.entrySet().iterator();
         while (iterator.hasNext()) {
@@ -94,6 +118,11 @@ public final class StatsScreenshotChatGuard {
 
     @EventHandler
     private void onGameLeft(GameLeftEvent event) {
+        pendingScreenshots.removeIf(pending -> {
+            if (pending.disconnect) return false;
+            pending.cancel();
+            return true;
+        });
         captureDeadlines.clear();
         bufferedMessages.clear();
         droppedMessages = 0;
@@ -146,5 +175,46 @@ public final class StatsScreenshotChatGuard {
     }
 
     private record BufferedMessage(Component message, GuiMessageTag indicator) {
+    }
+
+    static final class PendingScreenshot {
+        private final boolean disconnect;
+        private final long deadline;
+        private final BooleanSupplier ready;
+        private final Runnable capture, abort;
+        private int renderedFrames;
+        private boolean done;
+
+        PendingScreenshot(boolean disconnect, long deadline, BooleanSupplier ready, Runnable capture, Runnable abort) {
+            this.disconnect = disconnect;
+            this.deadline = deadline;
+            this.ready = ready;
+            this.capture = capture;
+            this.abort = abort;
+        }
+
+        boolean afterRender(long now) {
+            if (expire(now)) return true;
+            if (!ready.getAsBoolean()) {
+                renderedFrames = 0;
+                return false;
+            }
+            // The first frame may have extracted its GUI before the stats were queued.
+            if (++renderedFrames < 2) return false;
+            done = true;
+            capture.run();
+            return true;
+        }
+
+        boolean expire(long now) {
+            if (!done && now >= deadline) cancel();
+            return done;
+        }
+
+        void cancel() {
+            if (done) return;
+            done = true;
+            abort.run();
+        }
     }
 }

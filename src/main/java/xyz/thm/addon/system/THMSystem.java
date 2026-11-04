@@ -18,12 +18,9 @@ import xyz.thm.addon.modules.HighwayBuilderTHM;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.settings.StringMultiSelect;
 import xyz.thm.addon.shaders.ShaderManager;
-import xyz.thm.addon.utils.APIUtils;
-import xyz.thm.addon.utils.AccountUtils;
-import xyz.thm.addon.utils.CapeManager;
-import xyz.thm.addon.utils.ThmMembers;
-import xyz.thm.addon.utils.TrustedHttp;
+import xyz.thm.addon.utils.*;
 import xyz.thm.addon.utils.kitbot.KitbotChatRouter;
+import xyz.thm.addon.utils.kitbot.KitbotKitCatalog;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -216,11 +213,19 @@ public class THMSystem extends System<THMSystem> {
         .build()
     );
 
+    // Worker threads read snapshots instead of Meteor's mutable settings.
+    private volatile String apiTokenSnapshot = "";
+    private volatile String crackedPasswordSnapshot = "";
+
     // API Token Settings
     private final Setting<String> apiToken = sgPrefix.add(new StringSetting.Builder()
         .name("api-token")
         .description("Your personal API token (UUID) - get one from the Discord bot's player panel.")
         .defaultValue("")
+        .onChanged(token -> {
+            apiTokenSnapshot = token.trim();
+            KitbotKitCatalog.getKits();
+        })
         .build()
     );
 
@@ -228,6 +233,7 @@ public class THMSystem extends System<THMSystem> {
         .name("cracked-password")
         .description("Password used for cracked-account reconnect /login.")
         .defaultValue("")
+        .onChanged(password -> crackedPasswordSnapshot = password)
         .visible(AccountUtils::isCurrentAccountCracked)
         .build()
     );
@@ -316,7 +322,7 @@ public class THMSystem extends System<THMSystem> {
     }
 
     public String getApiToken() {
-        return apiToken.get().trim();
+        return apiTokenSnapshot;
     }
 
     /** The API only accepts UUID tokens, so blank/malformed values count as "no token set". */
@@ -325,7 +331,7 @@ public class THMSystem extends System<THMSystem> {
     }
 
     public String getCrackedPassword() {
-        return crackedPassword.get();
+        return crackedPasswordSnapshot;
     }
 
     public void applyProfile() {

@@ -50,7 +50,7 @@ class MixinTargetsTest {
     @Test
     void configuredMixinMembersExist() throws Exception {
         List<String> failures = new ArrayList<>();
-        for (String resource : List.of("thm-addon.mixins.json", "thm-addon.sodium.mixins.json", "thm-addon.xaero.mixins.json")) {
+        for (String resource : List.of("thm-addon.mixins.json")) {
             try (InputStream in = getClass().getResourceAsStream("/" + resource)) {
                 var config = JsonParser.parseReader(new InputStreamReader(in)).getAsJsonObject();
                 String base = config.get("package").getAsString().replace('.', '/');

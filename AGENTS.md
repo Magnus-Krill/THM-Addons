@@ -15,7 +15,7 @@ travel, PvP, and QoL modules. It's not a standalone mod: it registers modules/HU
 Meteor Client via `MeteorAddon`, and several modules require Baritone to be present.
 
 The released 1.21.11 source is preserved on branch `1.21.11`. Branch `26.2` uses Mojang names,
-Java 25, Fabric Loader 0.19.5, Fabric API 0.161.0+26.2, and Meteor 26.2-SNAPSHOT. The code port
+Java 25, Fabric Loader 0.20.1, Fabric API 0.161.0+26.2, and Meteor 26.2-SNAPSHOT. The code port
 builds and passes automated checks. In-game feature parity and both graphics backends still need verification before publishing.
 
 ## Code comments & setting descriptions
@@ -29,6 +29,8 @@ why, or which other settings it interacts with. If it needs more than one senten
 
 ## Build & run
 
+The wrapper uses Gradle 9.8.2 with Loom 1.19.3. Dependency versions live in `gradle/libs.versions.toml`.
+
 - `./gradlew build` — full build, jar lands in `build/libs`.
 - `./gradlew checkBuildRules` — standalone block-state checks for Baritone build rules; initializes vanilla registries without starting a client.
 - `./gradlew checkShaders` — OpenGL/Vulkan compiler and linker tests for backgrounds, blur, and
@@ -37,7 +39,7 @@ why, or which other settings it interacts with. If it needs more than one senten
   No GPU or client is started.
 - `./gradlew runClient` — launch a dev client with the addon loaded (via Fabric Loom). Autonomous
   client tests, including creating and joining local test worlds, are allowed for this repository.
-- `./gradlew test` — JUnit 5 unit tests in `src/test/java` (also run by `build`). They run without
+- `./gradlew test` — JUnit 6 unit tests in `src/test/java` (also run by `build`). They run without
   a game instance: only test code that doesn't need Minecraft's bootstrap/registries (vanilla value
   classes like `BlockPos` are fine). Pull testable logic out of modules into `utils/` classes
   (e.g. `AdaptiveRate`, `GhostBlockProbe`) instead of testing a `Module`. Check runtime behavior
@@ -67,6 +69,11 @@ existing Bearer API token, with membership enforced by the server.
 `TrustedHttp` skips API traffic before DNS or connection setup unless the current token is a full UUID.
 `APIUtils` allows member and other API requests from any server while in a world with a valid token; do not restore the 6b6t address gate. Deferred member fetching must remain eligible until a request can actually start.
 Queued requests use the current configured token; the server still validates ownership and membership.
+`THMSystem` publishes credential changes through volatile snapshots for worker reads.
+
+Highway status and PoW append the loaded addon version through `APIUtils`. PoW also reports
+Axis Viewer's mapped-network eligibility, independent of render toggles; manual pause preserves
+the build position's eligibility. Keep this separate from the main-axis flag and KitBot `$update` guards.
 
 Every outbound request — API calls and player-configured webhooks alike — goes through
 `TrustedHttp`, not raw `HttpURLConnection`: it rejects non-http(s) schemes, resolves the hostname
@@ -106,8 +113,7 @@ startup, so `THMHwyMonitor` and `HighwayTools` are registered without a separate
 **Package layout** (`src/main/java/xyz/thm/addon/`):
 - `modules/` — one class per Meteor `Module` (highway, PvP, utility, etc.). Follow the existing
   pattern: `SettingGroup`s + `Setting<T>` builders from `meteordevelopment.meteorclient.settings`,
-  `@EventHandler` methods for Meteor/Fabric events. `ModuleManager.java` here is a helper, not a
-  registry — actual registration happens in `THMAddon.onInitialize()`.
+  `@EventHandler` methods for Meteor/Fabric events. Register modules in `THMAddon.onInitialize()`.
 - `mixin/` — split by target: `meteor/` mixins patch Meteor Client's own classes (to extend modules
   Meteor doesn't expose hooks for), `sodium/`/`xaero/` patch those respective mods, `accessor/`
   holds `@Mixin` accessor interfaces for otherwise-private vanilla/Meteor fields, and the rest
@@ -138,7 +144,37 @@ startup, so `THMHwyMonitor` and `HighwayTools` are registered without a separate
 Highway", `THMAddon.PVP` = "THM PVP") via `onRegisterCategories()`. `THMTab` is a separate,
 addon-specific settings screen — don't confuse the two when adding a new module's config surface.
 
-**Highway restock inventory:** Offhand refills preserve managed hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
+**Highway restock inventory:** HighwayBuilder owns supply slots 5-9 through `Manage-hotbar`. Trash limits include hotbar stacks. Offhand refills preserve reserved hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
+
+**Highway autosetup:** HighwayBuilder configures and enables Speed Mine, Reach, Velocity, and KillAura on startup and resume. It also enables Criticals with its existing settings. KillAura setup leaves addon settings such as Smart Timing alone.
+
+**THMScaffold:** Replaces the legacy `scaffold-THM` module. `modules/THMScaffold` owns settings and
+its optional packet budget in one source file. Radius controls the build area; fallback support searches use the player's block reach
+on the placement plane. Air-place uses existing faces first and horizontal faces for direct clicks.
+Packet-place-once controls confirmation waits; disabling it retries each tick within the placement
+and packet budgets. Successful sends keep their per-tick reservation across radius and lookahead.
+Meteor Scaffold is unmodified. The budget reserves complete placement transactions;
+`PaketLimiter` always allows hotbar slot changes to preserve swap recovery.
+
+**Meteor Offhand:** `OffhandMixin` adds `held-item-filter`: Off, Only when holding, or Only when not holding. `held-items` supplies the whitelist/blocklist. Filtering includes Offhand's totem swaps and releases its lock when blocked. `ModuleMixin` migrates the old toggle.
+
+**Meteor AutoFish:** `AutoFishMixin` adds default-off `random-rotate` and `random-move` after fish reels.
+Wait for the bobber to disappear, step back and return, look away and back, then permit recasting.
+Movement uses collision-checked sub-block steps and cancels for manual input, world changes, or timeout.
+
+**Highway pause:** Manual pause checkpoints stats and fully deactivates the builder. An independent return listener uses Baritone before reactivation; failures retain the pause. Return positions last for the client session and require the original world and dimension.
+
+**Highway statistics:** Movement/world-change invalidation is commented out. Ignore saved invalidation flags and allow legacy artifacts without continuity metadata. Keep finite-coordinate validation and the adventure-lobby checkpoint behavior.
+
+**Highway block rates:** `BlockRateSample` measures counted Dug/Paved work each monotonic-clock second and averages actual client ticks. Both control screens toggle `block-rate-debug`; `block-rate-mode` selects BPS or blocks/tick. Packet placements count only after the block appears; repeated sends share one expiring confirmation.
+
+**Reconnect lobby portals:** Only armed reconnects walk to portals. Adventure Overworld is the main lobby; Adventure End is backup/transfer unless trusted cracked-auth evidence applies. Choose the nearest loaded portal from lobby entry and advance only on server-state changes.
+
+**Stats screenshots:** Capture after `Minecraft.renderFrame` draws the GUI. Disconnect proof must match the expected reason/stats and complete two visible frames; keep disconnect captures alive across `GameLeftEvent`.
+
+**Screenshot clipboard:** Windows writes CF_DIB directly through Minecraft’s bundled JNA, using the game window as owner and retrying clipboard locks. Keep Linux clipboard tools Linux-only and preserve AWT errors if their fallback also fails.
+
+**Highway status and PoW:** Append `:pave` for HighwayBuilding or `:dig` for HighwayDigging to status and PoW payloads, including off-main PoW. None omits the suffix. Send status on startup, profile changes and every five minutes. Kitbot validates the selected mode's block-to-distance floor; legacy PoW uses fresh status confirmation or estimation.
 
 **Better Baritone Build:** `BetterBaritoneBuild` indexes opened chests, barrels, and placed shulkers per world/dimension.
 `BaritoneBuilderMixin` captures missing materials directly; a temporary process fetches them without cancelling the build.
@@ -147,6 +183,7 @@ Enable before starting a build to attach its schematic wrapper; keep an axe in t
 
 **Axis Viewer:** Nether highways include XaeroPlus rings, diamonds, the 50k grid, and 125k extensions.
 Clip lines to the render camera's horizontal render distance before calling `RenderUtilsTHM`; reuse clipping scratch storage.
+HighwayBuilder's default-on `align-first` uses the same segments at startup and preserves resume directions.
 
 **Online player names:** `utils/server/OnlinePlayers.getNames()` merges known profiles with fresh
 `/msg ` completion names for HUDs, friend sync, and KitBot. Requests are shared and demand-driven
@@ -164,6 +201,10 @@ not proof of OS/process uptime; epoch/random IDs remain unavailable. World age i
 `plugins`, `commands`, and `channels` read exposed metadata with pagination; namespaces are hints,
 not a complete installed-plugin list. Do not send discovery commands or payload probes.
 
+**Channel Logger:** Observe the client-side Netty packet codecs to preserve unknown payload bytes.
+Copy payloads before asynchronous logging and keep the packet buffer's indices and reference count untouched.
+Log to `logs/thm-channels/` with a separate file per connection and apply redaction before file or chat output.
+
 **Crystal Aura:** `modules/CrystalAura` ports Lambda's opportunity scoring and prediction modes. Its visible title is THMcrystal aura; `thmcrystal-aura` keeps Meteor's registry intact. Async work stays bounded and runs world operations on the client thread. Source and adaptations: `docs/crystal-aura-lambda-port.md`.
 
 **Chunk refresh recovery:** `THMHwyMonitor` uses Baritone backsteps and `ChunkResync` to lower and restore the reported view distance. Resume requires server unload/reload evidence; never delete local chunks to force a resend. Vanilla clamps the server-side radius to 2.
@@ -176,6 +217,11 @@ target without an air confirmation; other pending normal breaks still keep valid
 
 **Speedmine Air Miner:** Public 26.2 only. The optional Air Miner group defaults off and claims ground around START/STOP mining packets, once per client tick. `PlayerAirMiningMixin` removes the local airborne mining penalty; Speedmine's custom progress uses the same eligibility. Claims expire and restore only on their original connection. Keep gliding opt-in and retain the speed cap. Source and manual checks: `docs/quiettee-air-miner.md`.
 
+**Speedmine timing:** Credit START and predict air only after `PacketEvent.Sent`, inside the action's
+prediction sequence. Accumulate damage once per tick; rendering extrapolates the cached rate for at
+most one tick without changing work. The rebreak monitor counts matching server air updates after a
+confirmed initial break. Strong has no additional per-tick attempt cap.
+
 **Surround:** `modules/Surround` replaces SurroundPlus, retaining the `surround-plus` registry name
 and showing as Surround. Both triggers repair client-world air; `onPacket` also preplaces on break effects
 and server updates, skipping batch delay and queued rotation while keeping the tick limit. Predictions expire;
@@ -185,6 +231,12 @@ Only Advanced starts collapsed; later layout changes remain saved.
 **Dropdown tooltips:** Enum choices implement `settings/DescribedOption` for per-option descriptions.
 Keep descriptions to one short sentence. Use `DropdownDescriptions.configure` for string menus.
 `DropdownTooltipMixin` gives open menus tooltip priority over covered settings.
+
+**Kitbot kits:** `KitbotKitCatalog` supplies chat parsing, suggestions, and frontend dropdowns from
+the authenticated `/kits` catalog. Cache JSON and ETags per token hash under `thm/kitbot-kits`;
+refresh on demand after six hours, retry failures after five minutes, and clear rejected tokens.
+Keep requests in `TrustedHttp` and the endpoint in the generated vault (`api.kits`). Kit menus
+update while open; existing saved kit strings remain readable. Restock keeps its fixed kit choices.
 
 **Main-menu diagnostics:** `[THM/Init]` logs addon registration stages; `[THM/Menu]` logs screen and shader hooks. Menu setup runs after outer `Screen.init`, resize, and widget rebuild, since other clients can cancel inner `TitleScreen.init`. Keep setup idempotent and render logging limited to first use or state changes.
 

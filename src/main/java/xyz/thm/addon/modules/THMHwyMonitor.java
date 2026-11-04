@@ -37,6 +37,7 @@ import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
@@ -419,7 +420,6 @@ public class THMHwyMonitor extends Module {
     public void prepareForAutoLogTerminalLogout(String reason) {
         String safeReason = reason == null || reason.isBlank() ? "unknown" : reason;
         abortActiveRecoveryForNonRestartHardFail();
-        clearHighwayBuilderReconnectModuleRestoreSnapshot("autolog-terminal-logout:" + safeReason);
         clearRestartAutomationState("autolog-terminal-logout:" + safeReason, true, true);
         clearRestartDisconnectEvidence();
         unresolvedMainServerDisconnectCandidate = false;
@@ -619,7 +619,7 @@ public class THMHwyMonitor extends Module {
     public static HorizontalDirection inferClosestWorkingDirection(double playerX, double playerZ, float yaw, boolean trueCenterMode) {
         if (Float.isNaN(yaw)) return null;
         SegmentProjection projection = selectBestSegmentProjection(
-            collectSegmentProjections(playerX, playerZ, true, true, true, true, trueCenterMode),
+            collectSegmentProjections(playerX, playerZ, true, true, true, true, trueCenterMode, false),
             null,
             "",
             yaw,
@@ -763,7 +763,6 @@ public class THMHwyMonitor extends Module {
         if (reconnectOwner == ReconnectOwner.HighwayBuilder && cycleId > 0L) {
             schedulePendingAbortRestore(cycleId, "reconnect-failure:" + reason.name());
         }
-        clearHighwayBuilderReconnectModuleRestoreSnapshot("reconnect-failure:" + reason.name());
         clearRestartRecoveryState("failure:" + reason.name(), false, true);
         tryPendingAbortRestore("reconnect-failure:" + reason.name());
         warning("Reconnect failed (%s): %s", reason.name(), detail == null ? "" : detail);
@@ -793,11 +792,6 @@ public class THMHwyMonitor extends Module {
         if (clearCycleBinding) activeReconnectCycleId = 0L;
         if (disarmService) reconnectService().disarmReconnect("THMHwyMonitor clearStashMoverReconnectState: " + reason);
         info("StashMover reconnect handling cleared: %s", reason);
-    }
-
-    private void clearHighwayBuilderReconnectModuleRestoreSnapshot(String reason) {
-        ModuleManager manager = getModuleManager();
-        if (manager != null) manager.clearReconnectModuleRestoreSnapshot(reason);
     }
 
     private void clearDelayedMainServerResumeState() {
@@ -1014,7 +1008,6 @@ public class THMHwyMonitor extends Module {
             schedulePendingAbortRestore(activeReconnectCycleId, "non-restart-hard-fail:" + source);
         }
         abortActiveRecoveryForNonRestartHardFail();
-        clearHighwayBuilderReconnectModuleRestoreSnapshot("non-restart-hard-fail:" + source);
         clearRestartAutomationState("non-restart-hard-fail:" + source, true, true);
         clearRestartDisconnectEvidence();
         unresolvedMainServerDisconnectCandidate = false;
@@ -1153,12 +1146,6 @@ public class THMHwyMonitor extends Module {
             return false;
         }
 
-        ModuleManager manager = getModuleManager();
-        if (manager != null && manager.isActive() && !manager.prepareForMonitorReconnectPause(cycleId, source)) {
-            failDisconnectPreparation(builder, cycleId, source, "Unable to freeze Module Manager reconnect snapshot.");
-            return false;
-        }
-
         builder.disableForMonitorRealignPause();
         if (builder.isActive()) {
             failDisconnectPreparation(builder, cycleId, source, "HighwayBuilder did not disable for reconnect pause.");
@@ -1176,7 +1163,6 @@ public class THMHwyMonitor extends Module {
             builder.disableForMonitorRealignPause();
         }
 
-        clearHighwayBuilderReconnectModuleRestoreSnapshot("disconnect-preparation-failed:" + source);
         clearRestartAutomationState("disconnect-preparation-failed:" + source, true, true);
         tryPendingAbortRestore("disconnect-preparation-failed:" + source);
         warning("%s Reconnect automation was disarmed without issuing another disconnect.", detail);
@@ -1338,7 +1324,6 @@ public class THMHwyMonitor extends Module {
     private void clearRestartAutomationState(String reason, boolean disarmService, boolean clearCycleBinding) {
         boolean hadState = hasRestartAutomationState();
         resetReconnectAutomationState(clearCycleBinding);
-        clearHighwayBuilderReconnectModuleRestoreSnapshot("clear-restart-automation:" + reason);
         if (disarmService) reconnectService().disarmReconnect("THMHwyMonitor clearRestartAutomationState: " + reason);
 
         if (!hadState) return;
@@ -1351,12 +1336,6 @@ public class THMHwyMonitor extends Module {
 
         if (!builder.prepareForMonitorReconnectPause(activeReconnectCycleId)) {
             enterReconnectSafetyStop("Unable to establish reconnect baseline before restart pause.");
-            return;
-        }
-
-        ModuleManager manager = getModuleManager();
-        if (manager != null && manager.isActive() && !manager.prepareForMonitorReconnectPause(activeReconnectCycleId, source)) {
-            enterReconnectSafetyStop("Unable to freeze Module Manager reconnect snapshot before restart pause.");
             return;
         }
 
@@ -1575,7 +1554,7 @@ public class THMHwyMonitor extends Module {
     }
 
     private RecoveryTarget computeCurrentRecoveryTarget(float recoveryDirectionYaw, int recoveryGoalY) {
-        if (mc == null || mc.player == null) return null;
+        if (mc == null || mc.player == null || mc.level == null) return null;
         HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
         HorizontalDirection resolvedDirection = resolveWorkingDirectionForAlignment(builder, recoveryDirectionYaw);
         String preferredDirection = normalizeDirection(directionCode(resolvedDirection));
@@ -1587,6 +1566,7 @@ public class THMHwyMonitor extends Module {
             recoveryDirectionYaw,
             recoveryGoalY,
             trueCenterMode.get(),
+            mc.level.dimension() == Level.NETHER,
             trackedSegment,
             preferredDirection
         );
@@ -1603,6 +1583,7 @@ public class THMHwyMonitor extends Module {
                 recoveryDirectionYaw,
                 recoveryGoalY,
                 trueCenterMode.get(),
+                mc.level.dimension() == Level.NETHER,
                 trackedSegment,
                 preferredDirection
             );
@@ -2443,13 +2424,6 @@ public class THMHwyMonitor extends Module {
             return false;
         }
 
-        ModuleManager manager = getModuleManager();
-        if (manager != null && manager.isActive() && !manager.prepareForMonitorReconnectPause(cycleId, "forward-" + triggerLabel)) {
-            warning("Forward %s recovery aborted: unable to freeze Module Manager reconnect snapshot.", triggerLabel);
-            abortRubberbandGhostblockReconnectAttempt("module-manager-baseline-failed", true);
-            return false;
-        }
-
         if (!builder.checkpointStatsForMonitorReconnectPause("forward-" + triggerLabel + "-pre-disconnect")) {
             warning("Forward %s recovery aborted: unable to checkpoint HighwayBuilder stats before disconnect.", triggerLabel);
             abortRubberbandGhostblockReconnectAttempt("stats-checkpoint-failed", true);
@@ -2568,14 +2542,6 @@ public class THMHwyMonitor extends Module {
         return ServerStatusHandler.getInstance().getCommittedState();
     }
 
-    private ModuleManager getModuleManager() {
-        try {
-            return Modules.get().get(ModuleManager.class);
-        } catch (Throwable ignored) {
-            return null;
-        }
-    }
-
     private boolean isHighwayRecoveryAllowedOnCurrentServer() {
         return getCommittedServerState() == ServerState.MAIN_SERVER;
     }
@@ -2672,13 +2638,14 @@ public class THMHwyMonitor extends Module {
 
     private HorizontalDirection resolveWorkingDirectionForAlignment(HighwayBuilderTHM builder, float fallbackYaw) {
         HorizontalDirection builderDirection = builder == null ? null : builder.getWorkingDirection();
-        if (mc == null || mc.player == null) return builderDirection;
+        if (mc == null || mc.player == null || mc.level == null) return builderDirection;
 
         String preferredDirection = normalizeDirection(directionCode(builderDirection));
         if (preferredDirection.isEmpty()) preferredDirection = normalizeDirection(trackedDirection);
 
         SegmentProjection projection = selectBestSegmentProjection(
-            collectSegmentProjections(mc.player.getX(), mc.player.getZ(), true, true, true, true, trueCenterMode.get()),
+            collectSegmentProjections(mc.player.getX(), mc.player.getZ(), true, true, true, true, trueCenterMode.get(),
+                mc.level.dimension() == Level.NETHER),
             trackedSegment,
             preferredDirection,
             fallbackYaw,
@@ -3178,7 +3145,7 @@ public class THMHwyMonitor extends Module {
     public AlignmentResult IsAlignedResult(double playerX, double playerZ, float playerYaw, boolean cardinal, boolean diagonal, boolean ring, boolean diamond, boolean trueCenterMode) {
         double centerOffset = trueCenterMode ? 0.5 : 0.0;
         SegmentProjection bestProjection = selectBestSegmentProjection(
-            collectSegmentProjections(playerX, playerZ, cardinal, diagonal, ring, diamond, trueCenterMode),
+            collectSegmentProjections(playerX, playerZ, cardinal, diagonal, ring, diamond, trueCenterMode, false),
             null,
             "",
             playerYaw,
@@ -3207,10 +3174,11 @@ public class THMHwyMonitor extends Module {
         float playerYaw,
         int recoveryGoalY,
         boolean trueCenterMode,
+        boolean netherGrid,
         HighwaySegment preferredSegment,
         String preferredDirection
     ) {
-        List<SegmentProjection> candidates = collectSegmentProjections(playerX, playerZ, true, true, true, true, trueCenterMode);
+        List<SegmentProjection> candidates = collectSegmentProjections(playerX, playerZ, true, true, true, true, trueCenterMode, netherGrid);
         SegmentProjection projection = preferredSegment != null
             ? findProjectionForSegment(candidates, preferredSegment)
             : selectBestSegmentProjection(candidates, null, preferredDirection, playerYaw, WORKING_LINE_TOLERANCE);
@@ -3263,7 +3231,8 @@ public class THMHwyMonitor extends Module {
         boolean diagonal,
         boolean ring,
         boolean diamond,
-        boolean trueCenterMode
+        boolean trueCenterMode,
+        boolean netherGrid
     ) {
         List<SegmentProjection> projections = new ArrayList<>();
         double centerOffset = trueCenterMode ? 0.5 : 0.0;
@@ -3312,6 +3281,17 @@ public class THMHwyMonitor extends Module {
                 addSegmentProjection(projections, "Diamond", d, "NW", x3, z3, x4, z4, playerX, playerZ);
                 addSegmentProjection(projections, "Diamond", d, "NE", x4, z4, x1, z1, playerX, playerZ);
             }
+        }
+
+        if (netherGrid) {
+            AxisViewer.visitGridSegments(centerOffset, true, true, (x1, z1, x2, z2) -> {
+                boolean northSouth = x1 == x2;
+                int fixed = (int) (northSouth ? x1 - centerOffset : z1 - centerOffset);
+                double start = northSouth ? z1 : x1;
+                double end = northSouth ? z2 : x2;
+                String label = (northSouth ? "NS" : "EW") + (start > centerOffset ? "+" : end < centerOffset ? "-" : "");
+                addSegmentProjection(projections, "Grid", fixed, label, x1, z1, x2, z2, playerX, playerZ);
+            });
         }
 
         return projections;
@@ -3484,6 +3464,7 @@ public class THMHwyMonitor extends Module {
         }
 
         return switch (segment.highway()) {
+            case "Grid" -> segment.segmentLabel().startsWith("NS") ? new String[] {"N", "S"} : new String[] {"E", "W"};
             case "Ring" -> switch (segment.segmentLabel()) {
                 case "N", "S" -> new String[] {"E", "W"};
                 case "E", "W" -> new String[] {"N", "S"};
@@ -3675,17 +3656,8 @@ public class THMHwyMonitor extends Module {
             return false;
         }
 
-        ModuleManager manager = getModuleManager();
-        if (manager != null && manager.isActive()) {
-            ModuleManager.ReconnectRestoreOutcome restoreOutcome = manager.restoreReconnectManagedModules(activeReconnectCycleId);
-            if (restoreOutcome == ModuleManager.ReconnectRestoreOutcome.CriticalFailure) {
-                enterReconnectSafetyStop("Critical managed module failed to restore after reconnect.");
-                return false;
-            }
-        }
-
-        if (!builder.completeReconnectResumeAfterManagedModules(activeReconnectCycleId)) {
-            enterReconnectSafetyStop("HighwayBuilder refused reconnect finalization after managed module restore.");
+        if (!builder.completeReconnectResume(activeReconnectCycleId)) {
+            enterReconnectSafetyStop("HighwayBuilder refused reconnect finalization.");
             return false;
         }
 
@@ -3795,7 +3767,7 @@ public class THMHwyMonitor extends Module {
     }
 
     private SegmentProjection resolveReconnectLineFromCurrentPosition(String preferredDirection) {
-        if (mc == null || mc.player == null) return null;
+        if (mc == null || mc.player == null || mc.level == null) return null;
 
         String resolvedPreferredDirection = normalizeDirection(preferredDirection);
         if (resolvedPreferredDirection.isEmpty()) {
@@ -3813,7 +3785,8 @@ public class THMHwyMonitor extends Module {
                 true,
                 true,
                 true,
-                trueCenterMode.get()
+                trueCenterMode.get(),
+                mc.level.dimension() == Level.NETHER
             ),
             trackedSegment,
             resolvedPreferredDirection,
@@ -3901,7 +3874,6 @@ public class THMHwyMonitor extends Module {
         if (builder != null) {
             builder.disableForReconnectSafetyStop();
         }
-        clearHighwayBuilderReconnectModuleRestoreSnapshot("reconnect-safety-stop");
 
         if (restartScreenshotsEnabled() && !postRejoinTerminalScreenshotTaken) {
             postRejoinTerminalScreenshotTaken = true;
@@ -3917,7 +3889,7 @@ public class THMHwyMonitor extends Module {
             mc.getConnection().getConnection().disconnect(disconnectPresentation.text());
             if (builder != null) {
                 builder.scheduleRetiredStatsDisconnectScreenshot(
-                    disconnectPresentation.retiredSessionId(),
+                    disconnectPresentation,
                     "reconnect-safety-stop"
                 );
             }
@@ -3935,7 +3907,7 @@ public class THMHwyMonitor extends Module {
             ));
             if (builder != null) {
                 builder.scheduleRetiredStatsDisconnectScreenshot(
-                    disconnectPresentation.retiredSessionId(),
+                    disconnectPresentation,
                     "reconnect-safety-stop-no-live-connection"
                 );
             }

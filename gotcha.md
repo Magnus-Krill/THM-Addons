@@ -20,7 +20,7 @@
 
 - TPS safety walls must use Netherrack independently of paving material. Track only placed safety targets and remove them on all four sides after recovery, before Forward moves. Normal highway mining alone leaves the lateral walls behind.
 
-- `Manage-hotbar` controls whether HighwayBuilder enables HotbarManager; an independently active manager still reserves its slots. Restocking uses configured slots directly and pauses the manager's sorting to keep offhand swap slots stable. Offhand EChest placement checks the actual hand, handles exhausted supply, and pauses its watchdog while a safety totem is required.
+- `Manage-hotbar` lets HighwayBuilder maintain its own supply slots; sorting pauses during restocks, open containers, and item use. Offhand EChest placement checks the actual hand, handles exhausted supply, and pauses its watchdog while a safety totem is required.
 
 - Keep the held mining tool on equal AutoTool scores. Choosing the first inventory match every tick can swap two equal pickaxes back and forth through the same managed slot, resetting container mining. Restock states own main-hand selection; generic offhand/packet-build loadouts must not replace their cleanup tool.
 

@@ -61,6 +61,12 @@ public class HighwayHud extends HudElement {
         .defaultValue(true)
         .build()
     );
+    private final Setting<Boolean> showDigRate = sgGeneral.add(new BoolSetting.Builder()
+        .name("show-dig-rate")
+        .description("Displays highway blocks dug per second.")
+        .defaultValue(true)
+        .build()
+    );
     private final Setting<Boolean> showRestockEta = sgGeneral.add(new BoolSetting.Builder()
         .name("show-restock-eta")
         .description("Time until obsidian and ender chests run out at the current place rate.")
@@ -93,9 +99,10 @@ public class HighwayHud extends HudElement {
         if (showDistance.get())  l.add(new String[]{"Distance travelled", String.valueOf(lastDistance)});
         if (showBroken.get())   l.add(new String[]{"Blocks broken", String.valueOf(mod.blocksBroken)});
         if (showPlaced.get())   l.add(new String[]{"Blocks placed", String.valueOf(mod.blocksPlaced)});
+        if (showDigRate.get()) l.add(new String[]{"Dug", String.format(Locale.ROOT, "%.1f/s", mod.getMeasuredBreaksPerSecond())});
         if (showPlaceRate.get()) {
             double target = mod.getTargetPlacesPerSecond();
-            l.add(new String[]{"Place rate", String.format(Locale.ROOT, "%.1f/s (cap %s)", mod.getMeasuredPlacesPerSecond(), target < 0 ? "none" : String.format(Locale.ROOT, "%.0f/s", target))});
+            l.add(new String[]{"Paved", String.format(Locale.ROOT, "%.1f/s (cap %s)", mod.getMeasuredPlacesPerSecond(), target < 0 ? "none" : String.format(Locale.ROOT, "%.0f/s", target))});
         }
         if (showDirection.get())l.add(new String[]{"Direction", dir});
         if (showRefill.get())   l.add(new String[]{"Distance till restock", String.valueOf(distanceTillRestock)});

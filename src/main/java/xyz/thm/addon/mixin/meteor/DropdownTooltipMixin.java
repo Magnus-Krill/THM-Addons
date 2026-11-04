@@ -26,6 +26,7 @@ import xyz.thm.addon.settings.DropdownDescriptions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 @Mixin(value = WDropdown.class, remap = false)
 public abstract class DropdownTooltipMixin extends WPressable implements DescribedDropdown {
@@ -33,6 +34,13 @@ public abstract class DropdownTooltipMixin extends WPressable implements Describ
     @Shadow protected Object value;
     @Unique private final List<WWidget> thm$options = new ArrayList<>();
     @Unique private Function<Object, String> thm$descriptions = DropdownDescriptions::description;
+    @Unique private Supplier<String[]> thm$valuesSupplier;
+
+    @Unique
+    @Override
+    public void thm$setValuesSupplier(Supplier<String[]> supplier) {
+        thm$valuesSupplier = supplier;
+    }
 
     @Unique
     @Override
@@ -57,6 +65,14 @@ public abstract class DropdownTooltipMixin extends WPressable implements Describ
 
     @Inject(method = "render", at = @At("HEAD"))
     private void thm$describeSelection(GuiRenderer renderer, double mouseX, double mouseY, double delta, CallbackInfoReturnable<Boolean> cir) {
+        if (thm$valuesSupplier != null) {
+            String[] latest = thm$valuesSupplier.get();
+            if (values != latest) {
+                values = latest;
+                ((WDropdown<?>) (Object) this).init();
+                invalidate();
+            }
+        }
         String description = thm$descriptions.apply(value);
         if (description != null) tooltip = description;
     }

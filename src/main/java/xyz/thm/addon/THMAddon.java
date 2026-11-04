@@ -35,6 +35,7 @@ import xyz.thm.addon.system.THMTab;
 import xyz.thm.addon.utils.*;
 import xyz.thm.addon.utils.kitbot.KitbotAvailabilityTracker;
 import xyz.thm.addon.utils.kitbot.KitbotChatRouter;
+import xyz.thm.addon.utils.kitbot.KitbotKitCatalog;
 import xyz.thm.addon.utils.server.OnlinePlayers;
 import xyz.thm.addon.utils.server.ServerReconnectService;
 import xyz.thm.addon.utils.server.ServerStatusHandler;
@@ -140,6 +141,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         OnlinePlayers.initialize();
         KitbotAvailabilityTracker.getInstance();
         KitbotChatRouter.getInstance();
+        KitbotKitCatalog.getKits();
         StatsScreenshotChatGuard.getInstance();
         ThmMembers.initialize();
         CapeManager.initialize();
@@ -157,11 +159,11 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         Modules.get().add(new AxisViewer());
         Modules.get().add(new DiscordNotifs());
         Modules.get().add(new AntiDrop());
-        Modules.get().add(new ScaffoldTHM());
+        Modules.get().add(new THMScaffold());
         Modules.get().add(new Nuker());
         Modules.get().add(new PaketLimiter());
         Modules.get().add(new PacketLoggerTHM());
-        Modules.get().add(new HotbarManager());
+        Modules.get().add(new ChannelLogger());
         Modules.get().add(new UnfocusedFpsLimiter());
         Modules.get().add(new AntiConcrete());
         Modules.get().add(new AntiConcreteDetection());
@@ -189,7 +191,6 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         Modules.get().add(new KitbotFrontend());
         Modules.get().add(new THMStashMover());
         Modules.get().add(new Loadouts());
-        Modules.get().add(new ModuleManager());
         Modules.get().add(new NotebotStealer());
         SongDecoders.registerDecoder("notebot", new FutureSongDecoder());
         FutureSongDecoder.importFutureSongs();
