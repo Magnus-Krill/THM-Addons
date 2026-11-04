@@ -25,6 +25,8 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
 
 import static meteordevelopment.meteorclient.MeteorClient.mc;
 public class PlacementUtils {
@@ -267,47 +269,55 @@ public class PlacementUtils {
      *                 Use true (default) for PvP modules that need the hand restored after each place.
      */
     public static boolean placeBlockPacket(BlockPos pos, FindItemResult item, boolean rotate, int rotateTicks, boolean airPlace, boolean swapBack) {
-        if (!BlockUtils.canPlace(pos) || !mc.level.getWorldBorder().isWithinBounds(pos)) return false;
-
         Direction side = getPlaceSide(pos);
         if (side == null && !airPlace) return false;
+        return placeBlockPacket(pos, item, rotate, rotateTicks, swapBack, packetPlacementHit(pos, side), packet -> {
+            mc.player.connection.send(packet);
+            return true;
+        });
+    }
+
+    public static BlockHitResult packetPlacementHit(BlockPos pos, Direction side) {
         BlockPos neighbour = side == null ? pos : pos.relative(side);
         Direction hitSide = side == null ? Direction.UP : side.getOpposite();
         Vec3 hitPos = Vec3.atCenterOf(pos);
         if (side != null) {
             hitPos = hitPos.add(side.getStepX() * 0.5, side.getStepY() * 0.5, side.getStepZ() * 0.5);
         }
+        return new BlockHitResult(hitPos, hitSide, neighbour, false);
+    }
 
+    public static boolean placeBlockPacket(BlockPos pos, FindItemResult item, boolean rotate, int rotateTicks, boolean swapBack,
+                                           BlockHitResult hit, Predicate<ServerboundUseItemOnPacket> send) {
+        if (!BlockUtils.canPlace(pos) || !mc.level.getWorldBorder().isWithinBounds(pos)) return false;
         InteractionHand hand = item.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
-        Vec3 finalHitPos = hitPos;
-        Direction finalHitSide = hitSide;
-        BlockPos finalNeighbour = neighbour;
-
-        Runnable place = () -> {
+        var player = mc.player;
+        var level = mc.level;
+        BooleanSupplier place = () -> {
+            if (mc.player != player || mc.level != level) return false;
             boolean swapped = false;
             if (item.isHotbar()) {
                 if (swapBack) {
                     InvUtils.swap(item.slot(), true);
                     swapped = true;
-                } else if (Minecraft.getInstance().player.getInventory().getSelectedSlot() != item.slot()) {
+                } else if (player.getInventory().getSelectedSlot() != item.slot()) {
                     InvUtils.swap(item.slot(), false);
                 }
             }
 
-            Minecraft.getInstance().player.connection.send(
-                new ServerboundUseItemOnPacket(hand, new BlockHitResult(finalHitPos, finalHitSide, finalNeighbour, false), 0)
-            );
-            Minecraft.getInstance().player.connection.send(new ServerboundSwingPacket(hand));
-
-            if (swapped) InvUtils.swapBack();
+            try {
+                if (!send.test(new ServerboundUseItemOnPacket(hand, hit, 0))) return false;
+                player.connection.send(new ServerboundSwingPacket(hand));
+                return true;
+            } finally {
+                if (swapped) InvUtils.swapBack();
+            }
         };
 
         if (rotate) {
-            Rotations.rotate(Rotations.getYaw(hitPos), Rotations.getPitch(hitPos), rotateTicks, place);
-        } else {
-            place.run();
+            Rotations.rotate(Rotations.getYaw(hit.getLocation()), Rotations.getPitch(hit.getLocation()), rotateTicks, place::getAsBoolean);
+            return true;
         }
-
-        return true;
+        return place.getAsBoolean();
     }
 }

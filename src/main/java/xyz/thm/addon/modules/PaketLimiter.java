@@ -17,6 +17,7 @@ import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketType;
+import net.minecraft.network.protocol.game.GamePacketTypes;
 import xyz.thm.addon.THMAddon;
 
 import java.util.Set;
@@ -100,6 +101,11 @@ public class PaketLimiter extends Module {
         if (!isActive()) toggle();
     }
 
+    boolean alwaysBlocks(PacketType<?> type) {
+        return isActive() && limit.get() != 0 && type != GamePacketTypes.SERVERBOUND_SET_CARRIED_ITEM
+            && alwaysBlock.get().contains(type);
+    }
+
     @EventHandler
     private void onTick(TickEvent.Post event) {
         sentThisTick = 0;
@@ -114,7 +120,7 @@ public class PaketLimiter extends Module {
         if (event.packet instanceof net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket) return;
         int max = limit.get();
         if (max == 0) return;
-        if (alwaysBlock.get().contains(event.packet.type())) {
+        if (alwaysBlocks(event.packet.type())) {
             event.cancel();
             return;
         }

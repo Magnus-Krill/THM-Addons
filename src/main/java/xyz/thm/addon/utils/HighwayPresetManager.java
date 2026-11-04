@@ -111,7 +111,8 @@ public final class HighwayPresetManager {
             JsonObject settingsJson = root.getAsJsonObject("settings");
             boolean migrated = moveLegacySetting(settingsJson, "mine-lookahead", "Digging");
             migrated |= moveLegacySetting(settingsJson, "predictive-echest-replace", "Ender Chests");
-            if (validateModuleSettings) validateModuleSettings(settingsJson);
+            migrated |= moveLegacySetting(settingsJson, "packet-budget", "General");
+            validateSettings(settingsJson, validateModuleSettings);
             Tag settings = JsonOps.INSTANCE.convertTo(NbtOps.INSTANCE, settingsJson);
             if (!(settings instanceof CompoundTag compound)) throw new IOException("Settings must be an object.");
             return new DecodedPreset(compound, migrated);
@@ -244,8 +245,8 @@ public final class HighwayPresetManager {
         }
     }
 
-    private static void validateModuleSettings(JsonObject settings) throws IOException {
-        if (module == null) throw new IOException("HighwayBuilder is not registered.");
+    private static void validateSettings(JsonObject settings, boolean validateModuleSettings) throws IOException {
+        if (validateModuleSettings && module == null) throw new IOException("HighwayBuilder is not registered.");
         if (settings.size() > 1 || (settings.size() == 1 && !settings.has("groups"))) {
             throw new IOException("Unknown settings fields.");
         }
@@ -258,13 +259,16 @@ public final class HighwayPresetManager {
             JsonObject groupJson = groupElement.getAsJsonObject();
             rejectUnknownKeys(groupJson, Set.of("name", "sectionExpanded", "settings"), "group");
             String groupName = requiredString(groupJson, "name", "group");
-            SettingGroup group = module.settings.getGroup(groupName);
-            if (group == null) throw new IOException("Unknown settings group: " + groupName);
+            SettingGroup group = validateModuleSettings ? module.settings.getGroup(groupName) : null;
+            if (validateModuleSettings && group == null) throw new IOException("Unknown settings group: " + groupName);
             if (!seenGroups.add(groupName)) throw new IOException("Duplicate settings group: " + groupName);
-            if (groupJson.has("sectionExpanded")
-                && (!groupJson.get("sectionExpanded").isJsonPrimitive()
-                || !groupJson.getAsJsonPrimitive("sectionExpanded").isBoolean())) {
-                throw new IOException("Invalid group expansion value.");
+            if (groupJson.has("sectionExpanded")) {
+                // Meteor stores this boolean as an NBT byte, which becomes 0 or 1 in JSON.
+                if (!(groupJson.get("sectionExpanded") instanceof JsonPrimitive expanded)
+                    || !(expanded.isBoolean() || expanded.isNumber()
+                    && ("0".equals(expanded.getAsString()) || "1".equals(expanded.getAsString())))) {
+                    throw new IOException("Invalid group expansion value.");
+                }
             }
             if (!groupJson.has("settings")) continue;
             if (!groupJson.get("settings").isJsonArray()) throw new IOException("Group settings must be an array.");
@@ -274,7 +278,7 @@ public final class HighwayPresetManager {
                 if (!settingElement.isJsonObject()) throw new IOException("Preset setting must be an object.");
                 JsonObject settingJson = settingElement.getAsJsonObject();
                 String settingName = requiredString(settingJson, "name", "setting");
-                if (group.get(settingName) == null) throw new IOException("Unknown setting: " + settingName);
+                if (group != null && group.get(settingName) == null) throw new IOException("Unknown setting: " + settingName);
                 if (!seenSettings.add(settingName)) throw new IOException("Duplicate setting: " + settingName);
             }
         }

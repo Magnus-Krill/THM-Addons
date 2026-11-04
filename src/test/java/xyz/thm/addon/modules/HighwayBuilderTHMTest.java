@@ -7,7 +7,10 @@
 package xyz.thm.addon.modules;
 
 import meteordevelopment.meteorclient.utils.misc.HorizontalDirection;
+import meteordevelopment.meteorclient.utils.player.SlotUtils;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.network.protocol.game.GamePacketTypes;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.Test;
@@ -18,6 +21,50 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class HighwayBuilderTHMTest {
+    @Test
+    void diggingBudgetOnlyChargesForSwingsThatCanBeSent() {
+        var alwaysBlocked = Set.of(GamePacketTypes.SERVERBOUND_SWING, GamePacketTypes.SERVERBOUND_CLIENT_TICK_END);
+        assertEquals(6, HighwayBuilderTHM.packetBudgetPlan(23, true, false, 20, 0, type -> false).mine());
+        assertEquals(10, HighwayBuilderTHM.packetBudgetPlan(23, true, false, 20, 0, alwaysBlocked::contains).mine());
+    }
+
+    @Test
+    void offhandLoadoutUsesTheTwoPacketsOtherwiseReservedForSilentSwaps() {
+        var alwaysBlocked = Set.of(GamePacketTypes.SERVERBOUND_SWING);
+        assertEquals(11, HighwayBuilderTHM.packetBudgetPlan(23, false, true, 20, 0, alwaysBlocked::contains).mine());
+        assertEquals(22, HighwayBuilderTHM.packetBudgetPlan(23, true, false, 0, 25, alwaysBlocked::contains).place());
+        assertEquals(20, HighwayBuilderTHM.packetBudgetPlan(23, false, true, 0, 25, alwaysBlocked::contains).place());
+    }
+
+    @Test
+    void packetBudgetExcludesBlockedDigAndPlacePackets() {
+        var alwaysBlocked = Set.of(GamePacketTypes.SERVERBOUND_PLAYER_ACTION, GamePacketTypes.SERVERBOUND_USE_ITEM_ON);
+        var plan = HighwayBuilderTHM.packetBudgetPlan(7, false, false, 2, 3, alwaysBlocked::contains);
+        assertEquals(2, plan.mine());
+        assertEquals(3, plan.place());
+    }
+
+    @Test
+    void packetAirPlaceClicksTheTargetOnTheNearestHorizontalFace() {
+        BlockPos target = new BlockPos(5, 120, -2);
+        var west = HighwayBuilderTHM.packetAirPlaceHit(target, new Vec3(1, 126, -1.5));
+        assertEquals(target, west.getBlockPos());
+        assertEquals(Direction.WEST, west.getDirection());
+        assertEquals(new Vec3(5, 120.5, -1.5), west.getLocation());
+        var south = HighwayBuilderTHM.packetAirPlaceHit(target, new Vec3(6, 126, 4));
+        assertEquals(target, south.getBlockPos());
+        assertEquals(Direction.SOUTH, south.getDirection());
+        assertEquals(new Vec3(5.5, 120.5, -1), south.getLocation());
+    }
+
+    @Test
+    void restockShulkerSourcesIncludeTheOffhandAndExcludeArmorSlots() {
+        assertTrue(HighwayBuilderTHM.isRestockShulkerSourceSlot(SlotUtils.OFFHAND, 36));
+        assertTrue(HighwayBuilderTHM.isRestockShulkerSourceSlot(35, 36));
+        assertFalse(HighwayBuilderTHM.isRestockShulkerSourceSlot(36, 36));
+        assertFalse(HighwayBuilderTHM.isRestockShulkerSourceSlot(-1, 36));
+    }
+
     @Test
     void eChestKitbotOrdersCheckTheBankOnlyInEnderChestFirstMode() {
         var bankFirst = HighwayBuilderTHM.RestockSecondarySourceOrder.EnderChestThenKitBot;
@@ -261,16 +308,16 @@ class HighwayBuilderTHMTest {
 
     @Test
     void offhandMiningRefillsWithTheStackSurplusAboveTheReserve() {
-        assertEquals(57, HighwayBuilderTHM.offhandChestRefillCount(64, 68, 11, true));
-        assertEquals(53, HighwayBuilderTHM.offhandChestRefillCount(64, 64, 11, false));
-        assertEquals(0, HighwayBuilderTHM.offhandChestRefillCount(8, 11, 11, false));
+        assertEquals(57, HighwayBuilderTHM.offhandChestRefillCount(64, 68, 11, 64));
+        assertEquals(53, HighwayBuilderTHM.offhandChestRefillCount(64, 64, 11, 64));
+        assertEquals(0, HighwayBuilderTHM.offhandChestRefillCount(8, 11, 11, 64));
     }
 
     @Test
-    void offhandRefillKeepsOneItemInManagedSlotsWhenChestReserveIsElsewhere() {
-        assertEquals(63, HighwayBuilderTHM.offhandChestRefillCount(64, 128, 11, true));
-        assertEquals(64, HighwayBuilderTHM.offhandChestRefillCount(64, 128, 11, false));
-        assertEquals(0, HighwayBuilderTHM.offhandChestRefillCount(1, 65, 11, true));
+    void offhandMiningTopsUpWithoutLeavingAnExtraSingleChest() {
+        assertEquals(56, HighwayBuilderTHM.offhandChestRefillCount(64, 128, 11, 56));
+        assertEquals(1, HighwayBuilderTHM.offhandChestRefillCount(1, 12, 11, 56));
+        assertEquals(1, HighwayBuilderTHM.offhandChestRefillCount(12, 12, 11, 56));
     }
 
     @Test

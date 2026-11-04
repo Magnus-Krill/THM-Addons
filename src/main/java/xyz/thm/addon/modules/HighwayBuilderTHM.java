@@ -80,6 +80,7 @@ import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.PacketType;
 import net.minecraft.network.protocol.game.*;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.tags.ItemTags;
@@ -1831,6 +1832,8 @@ public class HighwayBuilderTHM extends Module {
 
     private State state, lastState;
     private IBlockPosProvider blockPosProvider;
+    private ServerboundUseItemOnPacket packetBuildSending;
+    private boolean packetBuildSent;
 
     public Vec3 start;
     public int blocksBroken, blocksPlaced;
@@ -5426,7 +5429,6 @@ public class HighwayBuilderTHM extends Module {
         tickAdaptiveMining();
         mineActionsThisTick = computeMineActionsThisTick();
         placeActionsThisTick = computePlaceActionsThisTick();
-        applyPacketBudget();
         pruneExpiredForwardBreakCredits();
         refreshCountedForwardStatPositions();
 
@@ -5447,6 +5449,7 @@ public class HighwayBuilderTHM extends Module {
         tickHotbarSupplies();
         tickNoSwapLoadout();
         tickPacketBuildMainHandObby();
+        applyPacketBudget();
         boolean restockWatchdogOwnedTick = restockWatchdog.tickBeforeState();
         if (!restockWatchdogOwnedTick) {
             // Double mine and fall-save can already have worked this tick; that counts as repair work too.
@@ -7625,9 +7628,27 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private PacketBudget.Plan packetBudgetPlan(int mineActions, int placeActions) {
-        int swing = swingPacketCost();
-        int overhead = 1 + ((silentForwardPlaceSwap.get() || silentForwardToolSwap.get()) ? 2 : 0);
-        return PacketBudget.split(packetBudgetLimit.get(), overhead, 2 + swing, 1 + swing, mineActions, placeActions);
+        PaketLimiter limiter = Modules.get().get(PaketLimiter.class);
+        boolean filterPackets = limiter != null && (mc.getConnection() == null
+            || !isChokeHoldingOrFlushing(mc.getConnection().getConnection()));
+        return packetBudgetPlan(packetBudgetLimit.get(), allowsSilentForwardToolSwap(),
+            silentForwardPlaceSwap.get() && !placeFromOffhand(),
+            mineActions, placeActions, type -> filterPackets && limiter.alwaysBlocks(type));
+    }
+
+    static PacketBudget.Plan packetBudgetPlan(int budget, boolean silentMineSwap, boolean silentPlaceSwap,
+                                               int mineActions, int placeActions,
+                                               Predicate<PacketType<?>> alwaysBlocked) {
+        int swing = alwaysBlocked.test(GamePacketTypes.SERVERBOUND_SWING) ? 0 : 1;
+        int mine = alwaysBlocked.test(GamePacketTypes.SERVERBOUND_PLAYER_ACTION) ? 0 : 2;
+        int place = alwaysBlocked.test(GamePacketTypes.SERVERBOUND_USE_ITEM_ON) ? 0 : 1;
+        boolean movementBlocked = alwaysBlocked.test(GamePacketTypes.SERVERBOUND_MOVE_PLAYER_POS)
+            && alwaysBlocked.test(GamePacketTypes.SERVERBOUND_MOVE_PLAYER_ROT)
+            && alwaysBlocked.test(GamePacketTypes.SERVERBOUND_MOVE_PLAYER_POS_ROT)
+            && alwaysBlocked.test(GamePacketTypes.SERVERBOUND_MOVE_PLAYER_STATUS_ONLY);
+        boolean reserveSwap = (mineActions > 0 && silentMineSwap) || (placeActions > 0 && silentPlaceSwap);
+        int overhead = (movementBlocked ? 0 : 1) + (reserveSwap ? 2 : 0);
+        return PacketBudget.split(budget, overhead, mine + swing, place + swing, mineActions, placeActions);
     }
 
     private void reclaimUnusedMinePacketBudgetForPlacing() {
@@ -7636,12 +7657,6 @@ public class HighwayBuilderTHM extends Module {
 
         int reclaimedPlaceActions = packetBudgetPlan(forwardMineCount, Integer.MAX_VALUE).place();
         placeActionsThisTick = Math.max(placeActionsThisTick, reclaimedPlaceActions);
-    }
-
-    private int swingPacketCost() {
-        PaketLimiter limiter = Modules.get().get(PaketLimiter.class);
-        boolean filtered = limiter != null && limiter.isActive() && limiter.alwaysBlock.get().contains(ServerboundSwingPacket.class);
-        return filtered ? 0 : 1;
     }
 
     /** Experimental settings only count while the group's master switch is on. */
@@ -8131,17 +8146,13 @@ public class HighwayBuilderTHM extends Module {
         return true;
     }
 
-    private boolean getRotateForMine() {
-        if (rotation.get().mine) return true;
-        return false;
-    }
-
     // ---- No-swap loadout: pickaxe in the main hand, obsidian in the offhand, self-managed totem ----
 
     /** Offhand stack at or below this gets topped up from the inventory... */
     private static final int OFFHAND_BLOCK_TOPUP_AT = 32;
     /** ...and at or below this, with nothing left in the inventory, starts a container restock. */
     private static final int OFFHAND_BLOCK_RESTOCK_AT = 16;
+    private static final int OFFHAND_ECHEST_TOPUP_AT = 8;
 
     /** True when the offhand currently holds a block we're allowed to place (obsidian), so we can place straight from it. */
     private boolean offhandHoldsPlaceable() {
@@ -8325,7 +8336,11 @@ public class HighwayBuilderTHM extends Module {
                 if (totem.found()) moveLoadoutToOffhand(totem.slot());
             }
         } else if (wantsEnderChestOffhand()) {
-            if (!offhandHoldsEnderChest()) refillOffhandEnderChests();
+            ItemStack offhand = mc.player.getOffhandItem();
+            if (!compactEnderChestReserve()
+                && (!offhandHoldsEnderChest() || offhand.getCount() <= OFFHAND_ECHEST_TOPUP_AT)) {
+                refillOffhandEnderChests();
+            }
         } else if (!restockTask.isSequenceActive() && !isRestockState(state)) {
             ItemStack offhand = mc.player.getOffhandItem();
             if (!offhandHoldsPlaceable()) {
@@ -8377,28 +8392,70 @@ public class HighwayBuilderTHM extends Module {
 
     private boolean refillOffhandEnderChests() {
         if (mc.player.containerMenu != mc.player.inventoryMenu || !mc.player.containerMenu.getCarried().isEmpty()) return false;
-        int total = countLooseInventoryEnderChests();
+        ItemStack offhand = mc.player.getOffhandItem();
+        boolean toppingUp = offhandHoldsEnderChest();
+        int outside = countLooseInventoryEnderChests() - (toppingUp ? offhand.getCount() : 0);
         int reserve = enderChestMiningReserve();
         int bestSlot = -1;
         int bestCount = 0;
         for (int offset = 0; offset < 36; offset++) {
             int slot = (offset + 9) % 36;
             ItemStack stack = mc.player.getInventory().getItem(slot);
-            if (!stack.is(Items.ENDER_CHEST)) continue;
-            int count = offhandChestRefillCount(stack.getCount(), total, reserve, isHotbarSlotReserved(slot));
+            if (!stack.is(Items.ENDER_CHEST) || toppingUp && !ItemStack.isSameItemSameComponents(stack, offhand)) continue;
+            int space = toppingUp ? offhand.getMaxStackSize() - offhand.getCount() : stack.getMaxStackSize();
+            int count = offhandChestRefillCount(stack.getCount(), outside, reserve, space);
             if (count > bestCount) {
                 bestSlot = slot;
                 bestCount = count;
             }
         }
         if (bestSlot == -1) return false;
-        if (bestCount == mc.player.getInventory().getItem(bestSlot).getCount()) return moveLoadoutToOffhand(bestSlot);
+        if (bestCount == mc.player.getInventory().getItem(bestSlot).getCount()
+            || toppingUp && bestCount == offhand.getMaxStackSize() - offhand.getCount()) {
+            return moveLoadoutToOffhand(bestSlot);
+        }
         return movePartialSupplyToOffhand(bestSlot, bestCount);
     }
 
-    static int offhandChestRefillCount(int sourceCount, int total, int reserve, boolean managed) {
-        int keep = Math.max(managed ? 1 : 0, reserve - (total - sourceCount));
-        return Math.max(sourceCount - keep, 0);
+    static int offhandChestRefillCount(int sourceCount, int outside, int reserve, int space) {
+        return Math.min(Math.min(sourceCount, space), Math.max(outside - reserve, 0));
+    }
+
+    private boolean compactEnderChestReserve() {
+        if (mc.player.containerMenu != mc.player.inventoryMenu || !mc.player.containerMenu.getCarried().isEmpty()) return false;
+        int reserve = enderChestMiningReserve();
+        int total = countLooseInventoryEnderChests();
+        ItemStack offhand = mc.player.getOffhandItem();
+        int outside = total - (offhand.is(Items.ENDER_CHEST) ? offhand.getCount() : 0);
+        if (total < 2 || outside == 0 || outside > reserve) return false;
+
+        int preferred = getPreferredHotbarSlot(Items.ENDER_CHEST);
+        int destination = -1;
+        int largest = 0;
+        for (int i = 0; i < 36; i++) {
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            if (!stack.is(Items.ENDER_CHEST) || stack.getCount() >= stack.getMaxStackSize()) continue;
+            if (i == preferred || stack.getCount() > largest) {
+                destination = i;
+                largest = stack.getCount();
+                if (i == preferred) break;
+            }
+        }
+        if (destination == -1) return false;
+
+        ItemStack stack = mc.player.getInventory().getItem(destination);
+        if (total <= reserve && ItemStack.isSameItemSameComponents(stack, offhand)) {
+            InvUtils.move().fromOffhand().to(destination);
+            return true;
+        }
+        if (largest == outside) return false;
+        for (int i = 0; i < 36; i++) {
+            if (i != destination && ItemStack.isSameItemSameComponents(stack, mc.player.getInventory().getItem(i))) {
+                InvUtils.move().from(i).to(destination);
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean movePartialSupplyToOffhand(int slot, int count) {
@@ -8426,7 +8483,16 @@ public class HighwayBuilderTHM extends Module {
         int outside = countLooseInventoryEnderChests() - mc.player.getOffhandItem().getCount();
         if (outside >= reserve) return true;
         if (mc.player.containerMenu != mc.player.inventoryMenu || !mc.player.containerMenu.getCarried().isEmpty()) return false;
-        int destination = getPreferredHotbarSlot(Items.ENDER_CHEST);
+        int destination = -1;
+        int largest = 0;
+        for (int i = 0; i < 36; i++) {
+            int count = mc.player.getInventory().getItem(i).getCount();
+            if (count > largest && canReceiveOffhandChest(i)) {
+                destination = i;
+                largest = count;
+            }
+        }
+        if (destination == -1) destination = getPreferredHotbarSlot(Items.ENDER_CHEST);
         if (destination == -1 || !canReceiveOffhandChest(destination)) {
             destination = -1;
             for (int i = 0; i < 36; i++) {
@@ -8439,7 +8505,9 @@ public class HighwayBuilderTHM extends Module {
         // A full inventory can still use vanilla stack prediction; packet-only replacement stays disabled.
         if (destination == -1) return true;
 
-        moveInventoryItems(SlotUtils.OFFHAND, destination, 1);
+        ItemStack offhand = mc.player.getOffhandItem();
+        int space = offhand.getMaxStackSize() - mc.player.getInventory().getItem(destination).getCount();
+        moveInventoryItems(SlotUtils.OFFHAND, destination, Math.min(reserve - outside, space));
         return false;
     }
 
@@ -8507,6 +8575,10 @@ public class HighwayBuilderTHM extends Module {
     static BlockPos restockAnchor(double x, double y, double z) {
         // Blockade iterators round the standing height instead of flooring slab/chest tops.
         return BlockPos.containing(x, Math.round(y), z);
+    }
+
+    static boolean isRestockShulkerSourceSlot(int slot, int carriedSlots) {
+        return slot == SlotUtils.OFFHAND || (slot >= 0 && slot < carriedSlots);
     }
 
     private void openRestockContainer(BlockPos pos) {
@@ -8640,45 +8712,56 @@ public class HighwayBuilderTHM extends Module {
         return placeWithoutPrediction(pos, slot, stack);
     }
 
-    /**
-     * Packet build: only the place packet goes out, the client never sets the block itself. It shows up
-     * when the server says so, so the client's world is always the server's - no ghost blocks.
-     */
+    @EventHandler
+    private void onPacketBuildSent(PacketEvent.Sent event) {
+        if (event.packet == packetBuildSending) packetBuildSent = true;
+    }
+
+    static BlockHitResult packetAirPlaceHit(BlockPos target, Vec3 eye) {
+        Vec3 center = Vec3.atCenterOf(target);
+        Vec3 towardEye = eye.subtract(center);
+        Direction face = Math.abs(towardEye.x) > Math.abs(towardEye.z)
+            ? (towardEye.x < 0 ? Direction.WEST : Direction.EAST)
+            : (towardEye.z < 0 ? Direction.NORTH : Direction.SOUTH);
+        return new BlockHitResult(center.add(face.getStepX() * 0.5, 0, face.getStepZ() * 0.5), face, target, false);
+    }
+
     private boolean placeWithoutPrediction(BlockPos pos, int slot, ItemStack stack) {
         Direction side = PlacementUtils.getPlaceSide(pos);
+        if (side == null && packetBuildAirPlace.get() == AirPlaceMode.Never) return false;
         boolean trackPending = side == null || normalRatePacketBuild() || experimental(chokeBuild);
         if (trackPending && !PacketPlaceTracker.canSend(pos)) return false;
         // offhand-build: place straight from the offhand obsidian instead of swapping the main hand.
         FindItemResult item = (slot == SlotUtils.OFFHAND || placeFromOffhand())
             ? new FindItemResult(SlotUtils.OFFHAND, mc.player.getOffhandItem().getCount())
             : new FindItemResult(slot, stack.getCount());
-        AirPlaceMode mode = packetBuildAirPlace.get();
-        boolean swapBack = silentForwardPlaceSwap.get();
-
-        boolean placed;
-        switch (mode) {
-            case Never -> {
-                if (side == null) return false;
-                placed = PlacementUtils.placeBlockPacket(pos, item, getRotateForMine(), 0, false, swapBack);
+        BlockPos target = pos.immutable();
+        BlockHitResult hit = side == null ? packetAirPlaceHit(target, mc.player.getEyePosition()) : PlacementUtils.packetPlacementHit(target, side);
+        boolean rotate = rotation.get().place;
+        boolean placed = PlacementUtils.placeBlockPacket(target, item, rotate, 0, silentForwardPlaceSwap.get(), hit, packet -> {
+            if (!isActive() || !packetBuild.get() || !BlockUtils.canPlace(target)
+                || trackPending && !PacketPlaceTracker.canSend(target)
+                || rotate && PlacementUtils.getPlaceSide(target) != side
+                || side == null && packetBuildAirPlace.get() == AirPlaceMode.Never
+                || !(mc.player.getItemInHand(packet.getHand()).getItem() instanceof BlockItem)) return false;
+            packetBuildSending = packet;
+            packetBuildSent = false;
+            try {
+                mc.player.connection.send(packet);
+                if (!packetBuildSent) return false;
+            } finally {
+                packetBuildSending = null;
             }
-            case Always -> placed = PlacementUtils.placeBlockPacket(pos, item, getRotateForMine(), 0, true, swapBack);
-            case Smart -> {
-                if (side != null) {
-                    placed = PlacementUtils.placeBlockPacket(pos, item, getRotateForMine(), 0, false, swapBack);
-                } else {
-                    placed = PlacementUtils.placeBlockPacket(pos, item, getRotateForMine(), 0, true, swapBack);
-                }
-            }
-            default -> placed = false;
-        }
+            if (trackPending) PacketPlaceTracker.markSent(target, normalRatePacketBuild() ? packetBuildResend.get() : 3);
+            if (isRestockState(state)) restockPacketPlaceTargets.add(target.asLong());
+            notePlacement(target);
+            if (renderPlace.get()) placeTrail.add(target.asLong());
+            return true;
+        });
 
         if (!placed) return false;
-        if (trackPending) PacketPlaceTracker.markSent(pos, normalRatePacketBuild() ? packetBuildResend.get() : 3);
-        if (isRestockState(state)) restockPacketPlaceTargets.add(pos.asLong());
         if (normalRatePacketBuild()) placeTimer = placeDelay.get();
         count++;
-        notePlacement(pos);
-        if (renderPlace.get()) placeTrail.add(BlockPos.asLong(pos.getX(), pos.getY(), pos.getZ()));
         return true;
     }
 
@@ -8940,8 +9023,12 @@ public class HighwayBuilderTHM extends Module {
             || block == Blocks.GILDED_BLACKSTONE;
     }
 
+    private boolean allowsSilentForwardToolSwap() {
+        return silentForwardToolSwap.get() && !noSwapLoadout.get();
+    }
+
     private boolean canUseSilentForwardToolSwap(BlockState state, int toolSlot) {
-        return silentForwardToolSwap.get()
+        return allowsSilentForwardToolSwap()
             && mc.player != null
             && mc.level != null
             && state != null
@@ -9192,6 +9279,10 @@ public class HighwayBuilderTHM extends Module {
             cleanupBreakPos = null;
             b.input.stop();
 
+            BlockPos source = getRestockContainerPos();
+            THMAddon.LOG.info("[HighwayBuilder Restock] Recovery {}/{} for {}: {}. Source {} = {}.",
+                retryCount, RESTOCK_WATCHDOG_LOCAL_RETRY_MAX, b.restockTask.item(), reason,
+                b.formatBlockPos(source), source == null ? "unknown" : b.mc.level.getBlockState(source).getBlock());
             if (b.restockDebugLog.get()) {
                 b.restockDebug("RestockWatchdog recovery %d/%d starting for %s (%s).",
                     retryCount,
@@ -12579,13 +12670,18 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private void tickHotbarSupplies() {
-        if (!manageHotbar.get() || ownsRestockInventory() || mc.player.isUsingItem()
+        if (ownsRestockInventory() || mc.player.isUsingItem()
             || mc.player.containerMenu != mc.player.inventoryMenu
             || !mc.player.containerMenu.getCarried().isEmpty()) return;
         if (hotbarSortTicks > 0) {
             hotbarSortTicks--;
             return;
         }
+        if (compactEnderChestReserve()) {
+            hotbarSortTicks = Math.max(inventoryDelay.get(), 1);
+            return;
+        }
+        if (!manageHotbar.get()) return;
 
         for (int target = 4; target <= 8; target++) {
             int hotbarSlot = target;
@@ -15499,7 +15595,7 @@ public class HighwayBuilderTHM extends Module {
             private int targetObsidianCount;
             private int lastObservedObsidianCount;
             private boolean first, primed, breakRequested, speedmineRebreakMode;
-            private boolean stopTimerEnabled;
+            private String stopReason;
             private int stopTimer, moveTimer, rebreakTimer, timeout;
             private double returnX, returnY, returnZ;
             private boolean returnAnchorSaved;
@@ -15551,13 +15647,15 @@ public class HighwayBuilderTHM extends Module {
                 session.refreshProgress();
                 b.restockTask.clampObsidianTargetToMineableEChests("mine-echests-start");
                 session.refreshProgress();
+                lastObservedObsidianCount = 0;
                 targetEchestsToBreak = session.getTargetEchestsToBreak();
                 targetObsidianCount = session.getMiningGoalObsidianCount();
                 if (targetEchestsToBreak <= 0) {
                     b.restockTask.markCurrentSourceExhausted(RestockTask.SourcePhase.MineEnderChests);
                     if (b.restockTask.isCurrentTaskSuccessful()) {
-                        completeAndReturnToAnchor(b);
+                        completeAndReturnToAnchor(b, "no-mineable-chests");
                     } else {
+                        logMiningFallback(b, "no-mineable-chests");
                         b.setState(Restock, Restock);
                     }
                     return;
@@ -15565,13 +15663,12 @@ public class HighwayBuilderTHM extends Module {
                 if (b.prioritizePickaxeRestockBeforeEChestMining(targetEchestsToBreak, "mine-echests-start durability preflight")) return;
                 first = true;
                 moveTimer = rebreakTimer = timeout = 0;
-                lastObservedObsidianCount = 0;
                 returnX = b.mc.player.getX();
                 returnY = b.mc.player.getY();
                 returnZ = b.mc.player.getZ();
                 returnAnchorSaved = true;
 
-                stopTimerEnabled = false;
+                stopReason = null;
                 primed = false;
                 breakRequested = false;
                 b.resetEChestDebug();
@@ -15595,9 +15692,9 @@ public class HighwayBuilderTHM extends Module {
 
             @Override
             protected void tick(HighwayBuilderTHM b) {
-                if (stopTimerEnabled) {
+                if (stopReason != null) {
                     b.restockTask.refreshSessionProgress();
-                    if (b.restockTask.isTargetSatisfied() || stopTimer-- <= 0) completeAndReturnToAnchor(b);
+                    if (b.restockTask.isTargetSatisfied() || stopTimer-- <= 0) completeAndReturnToAnchor(b, stopReason);
 
                     return;
                 }
@@ -15607,6 +15704,7 @@ public class HighwayBuilderTHM extends Module {
                 if (sourceContainerPos != null) {
                     pos.set(sourceContainerPos.getX(), sourceContainerPos.getY(), sourceContainerPos.getZ());
                 } else if (b.restockTask.isSequenceActive()) {
+                    logMiningFallback(b, "missing-source-position");
                     b.restockDebug("MineEnderChests could not resolve the dedicated source container slot; rebuilding from Center.");
                     b.restockTask.setBlockadeReady(false);
                     b.setState(Center);
@@ -15663,7 +15761,7 @@ public class HighwayBuilderTHM extends Module {
                     if (b.restockTask.getSession() != null && b.restockTask.getSession().getRemainingObsidianItems() > targetEchestsToBreak * 8) {
                         b.restockTask.getSession().markGreatestAvailable();
                     }
-                    stopTimerEnabled = true;
+                    stopReason = "obsidian-target-seen";
                     stopTimer = 40;
                     return;
                 }
@@ -15720,7 +15818,7 @@ public class HighwayBuilderTHM extends Module {
                             Speedmine.INSTANCE.toggle();
                         }
                         if (b.restockTask.isActiveMaterials() && b.restockTask.hasPendingPickaxes()) {
-                            completeAndReturnToAnchor(b);
+                            completeAndReturnToAnchor(b, "missing-pickaxe");
                         } else if (!b.restockTask.pickaxes
                             && b.hasPickaxeRestockSourceAvailable()
                             && b.restockTask.prioritizePickaxesBeforeActiveTask("missing eligible pickaxe while mining loose e-chests")) {
@@ -15839,7 +15937,7 @@ public class HighwayBuilderTHM extends Module {
                     int looseCount = countItem(b, stack -> stack.is(Items.ENDER_CHEST));
                     if (slot == -1 || looseCount <= minimumRemainingEChests) {
                         b.restockTask.markCurrentSourceExhausted(RestockTask.SourcePhase.MineEnderChests);
-                        stopTimerEnabled = true;
+                        stopReason = looseCount <= minimumRemainingEChests ? "reserve-reached" : "no-placement-slot";
                         stopTimer = 40;
                         return;
                     }
@@ -15909,7 +16007,7 @@ public class HighwayBuilderTHM extends Module {
                 }
             }
 
-            private void completeAndReturnToAnchor(HighwayBuilderTHM b) {
+            private void completeAndReturnToAnchor(HighwayBuilderTHM b, String reason) {
                 if (speedmineRebreakMode && Speedmine.INSTANCE != null) {
                     b.restoreSpeedmineAutoRebreak();
                     if (Speedmine.INSTANCE.isActive()) Speedmine.INSTANCE.toggle();
@@ -15923,9 +16021,26 @@ public class HighwayBuilderTHM extends Module {
                 if (b.restockTask.isCurrentTaskSuccessful()) {
                     b.completeRestockTaskAndContinue();
                 } else {
+                    logMiningFallback(b, reason);
                     b.restockTask.markCurrentSourceExhausted(RestockTask.SourcePhase.MineEnderChests);
                     b.setState(Restock, Restock);
                 }
+            }
+
+            private void logMiningFallback(HighwayBuilderTHM b, String reason) {
+                BlockPos source = b.restockTask.getSourceContainerPos();
+                BlockPos neighbor = source == null ? null : b.offsetBlockPos(source,
+                    b.getKitbotExpansionDirection(b.getRestockContainerDirection(b.dir)));
+                THMAddon.LOG.info(
+                    "[HighwayBuilder Restock] MineEnderChests fallback reason={} mode={} source={} block={} neighborBlock={} looseChests={} offhandChests={} reserve={} inventoryObsidian={} observedObsidian={} targetObsidian={}",
+                    reason, b.effectiveEChestBreakMode(), b.formatBlockPos(source),
+                    source == null ? "unknown" : b.mc.level.getBlockState(source).getBlock(),
+                    neighbor == null ? "unknown" : b.mc.level.getBlockState(neighbor).getBlock(),
+                    b.countLooseInventoryEnderChests(),
+                    b.offhandHoldsEnderChest() ? b.mc.player.getOffhandItem().getCount() : 0,
+                    b.enderChestMiningReserve(), countItem(b, stack -> stack.is(Items.OBSIDIAN)),
+                    lastObservedObsidianCount, targetObsidianCount
+                );
             }
         },
 
@@ -16778,8 +16893,8 @@ public class HighwayBuilderTHM extends Module {
             private static final MBlockPos pos = new MBlockPos();
             private static final int INVALID_RESTOCK_RECOVERY_MAX_RETRIES = 1;
             private static final int SOURCE_READY_MAX_RETRIES = 3;
+            private static final int SHULKER_SWAP_FAILED = -2;
             private static final int ENDER_CHEST_LIVE_RECHECK_COOLDOWN_TICKS = 40;
-            private static final int SOURCE_SELECTION_MOVE_FAILED = -2;
             private static final String ECHEST_RESERVE_NONE = "none";
             private static final String ECHEST_RESERVE_MATCHING = "matching";
             private static final String ECHEST_RESERVE_OBSIDIAN = "obsidian";
@@ -16937,11 +17052,15 @@ public class HighwayBuilderTHM extends Module {
                     b.restockTask.notePhase(RestockTask.SourcePhase.InventoryShulkers);
                     sourceItemPredicate = shulkerPredicate;
                     sourceLabel = "shulker";
-                    int selectedRestockShulkerSlot = findAndMoveBestRestockShulkerToHotbar(b);
+                    int selectedRestockShulkerSlot = findRestockShulkerPlacementSlot(b);
                     if (selectedRestockShulkerSlot >= 0) {
                         slot = selectedRestockShulkerSlot;
                     }
-                    else if (selectedRestockShulkerSlot == -1) {
+                    else {
+                        if (selectedRestockShulkerSlot == SHULKER_SWAP_FAILED) {
+                            b.restockTask.failActiveTaskHard("Couldn't move the restock shulker into the hotbar.");
+                            return;
+                        }
                         if (b.restockDebugLog.get()) {
                             if (isObsidianRestockTask(b)) {
                                 Container playerInventory = b.mc.player.getInventory();
@@ -16963,10 +17082,6 @@ public class HighwayBuilderTHM extends Module {
                         b.restockTask.markCurrentSourceExhausted(RestockTask.SourcePhase.InventoryShulkers);
                         sourceItemPredicate = null;
                         sourceLabel = "unknown";
-                    } else {
-                        sourceItemPredicate = null;
-                        sourceLabel = "unknown";
-                        return;
                     }
                 }
 
@@ -17780,16 +17895,16 @@ public class HighwayBuilderTHM extends Module {
                 return b.isActivePickaxeRestockMatch(stack);
             }
 
-            private int findAndMoveBestRestockShulkerToHotbar(HighwayBuilderTHM b) {
+            private int findRestockShulkerPlacementSlot(HighwayBuilderTHM b) {
                 Container inv = b.mc.player.getInventory();
                 String selectionKind = getPreferredInventoryRestockShulkerKind(b, inv);
                 if (selectionKind == null) return -1;
 
                 int inventorySlot = findBestRestockShulkerSlotInInventory(b, inv, selectionKind, true);
-                if (inventorySlot == -1) return -1;
+                if (inventorySlot == -1 || inventorySlot == SlotUtils.OFFHAND) return inventorySlot;
 
                 int usefulUnits = countRestockUnitsInShulker(b, inv.getItem(inventorySlot), selectionKind);
-                int hotbarSlot = moveInventorySlotToHotbar(b, inventorySlot, true);
+                int hotbarSlot = moveInventorySlotToHotbar(b, inventorySlot);
                 if (hotbarSlot == -1) {
                     if (b.restockDebugLog.get()) {
                         b.restockDebug("Restock.start found matching %s shulker in inventory slot %d but could not move it into the hotbar.",
@@ -17797,7 +17912,7 @@ public class HighwayBuilderTHM extends Module {
                             inventorySlot
                         );
                     }
-                    return SOURCE_SELECTION_MOVE_FAILED;
+                    return SHULKER_SWAP_FAILED;
                 }
 
                 if (b.restockDebugLog.get()) {
@@ -17813,23 +17928,21 @@ public class HighwayBuilderTHM extends Module {
                 return hotbarSlot;
             }
 
-            private int moveInventorySlotToHotbar(HighwayBuilderTHM b, int inventorySlot, boolean failHardNoHotbar) {
-                if (inventorySlot < 0 || inventorySlot >= b.mc.player.getInventory().getNonEquipmentItems().size()) return -1;
+            private int moveInventorySlotToHotbar(HighwayBuilderTHM b, int inventorySlot) {
+                if (!isRestockShulkerSourceSlot(inventorySlot, b.mc.player.getInventory().getNonEquipmentItems().size())) return -1;
                 if (inventorySlot < 9) return inventorySlot;
 
                 ItemStack inventoryStack = b.mc.player.getInventory().getItem(inventorySlot);
                 int hotbarSlot = b.getPreferredHotbarSlot(inventoryStack.getItem());
                 if (hotbarSlot == -1) {
-                    hotbarSlot = findHotbarSlot(b, false, failHardNoHotbar);
+                    hotbarSlot = findHotbarSlot(b, false, false);
                 }
                 if (hotbarSlot == -1) return -1;
 
-                InvUtils.move().from(inventorySlot).toHotbar(hotbarSlot);
-                if (!b.clearCursorStackToEmptySlot("Restock-moveInventorySlotToHotbar")
-                    && !b.dropCursorStackIfSafe("Restock-moveInventorySlotToHotbar")) {
-                }
-
-                return hotbarSlot;
+                ItemStack expected = inventoryStack.copy();
+                return State.Forward.swapInventoryToHotbar(b, inventorySlot, hotbarSlot)
+                    && ItemStack.isSameItemSameComponents(expected, b.mc.player.getInventory().getItem(hotbarSlot))
+                    ? hotbarSlot : -1;
             }
 
             private boolean tryExtractRestockShulkerFromEnderChest(HighwayBuilderTHM b, Container inv, String kind, int remainingNeed) {
@@ -17926,8 +18039,10 @@ public class HighwayBuilderTHM extends Module {
             private int findBestRestockShulkerSlotInInventory(HighwayBuilderTHM b, Container inv, String kind, boolean preferSmallest) {
                 int bestSlot = -1;
                 int bestUnits = -1;
+                int carriedSlots = inv == b.mc.player.getInventory() ? b.mc.player.getInventory().getNonEquipmentItems().size() : inv.getContainerSize();
 
                 for (int i = 0; i < inv.getContainerSize(); i++) {
+                    if (!isRestockShulkerSourceSlot(i, carriedSlots)) continue;
                     ItemStack candidate = inv.getItem(i);
                     int usefulUnits = countRestockUnitsInShulker(b, candidate, kind);
                     if (usefulUnits <= 0) continue;
@@ -18476,6 +18591,7 @@ public class HighwayBuilderTHM extends Module {
                 }
 
                 if (matchingEnderChestStacks <= 1 || smallestSlot == -1) return false;
+                if (b.countLooseInventoryEnderChests() - smallestCount < b.enderChestMiningReserve()) return false;
 
                 ItemStack before = b.mc.player.getInventory().getItem(smallestSlot).copy();
                 b.mc.gameMode.handleContainerInput(

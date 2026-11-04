@@ -48,7 +48,7 @@ Restock and KitBot enclosures use Netherrack first, then any suitable full block
 
 TPS safety enclosures also use Netherrack. After TPS recovers, the builder removes its enclosure blocks on all four sides before moving forward. Existing nearby blocks are left alone.
 
-With `Manage-hotbar` enabled, HighwayBuilder keeps food in slot 5, trash blocks in slot 6, ender chests in slot 7, a usable pickaxe in slot 8, and configured placement blocks in slot 9. It refills empty supply slots from inventory and pauses sorting during restocks, open containers, and item use. Offhand block refills use spare inventory stacks first. Refills leave at least one item in reserved hotbar slots.
+With `Manage-hotbar` enabled, HighwayBuilder keeps food in slot 5, trash blocks in slot 6, ender chests in slot 7, a usable pickaxe in slot 8, and configured placement blocks in slot 9. It refills empty supply slots from inventory and pauses sorting during restocks, open containers, and item use. Offhand building-block refills use spare inventory stacks first and leave at least one item in reserved hotbar slots.
 
 `keep-trash-block-stacks` counts hotbar and main-inventory stacks together. A limit of `1` keeps one trash block stack across both. Protected items remain excluded from trash cleanup.
 
@@ -59,7 +59,7 @@ KitBot orders for ender chests or obsidian always check your inventory first. `E
 Restock cleanup keeps the held tool when another tool has the same mining score. Offhand and packet-build loadouts let the restock state control the main hand while containers are being removed.
 
 Offhand restocks keep their supplies through recovery instead of refilling with obsidian. Chest,
-totem and tool swaps work with a full inventory, including `minimum-empty-slots` set to `0`. EChest mining refills the offhand with the largest available stack while keeping the configured reserve in inventory. If there is no room to separate an existing offhand stack, normal placement respects the reserve and predictive replacement waits.
+totem and tool swaps work with a full inventory, including `minimum-empty-slots` set to `0`. EChest mining tops up the offhand at eight chests or fewer while keeping the configured reserve in inventory. Matching reserve stacks are merged when only the reserve remains. If there is no room to separate an existing offhand stack, normal placement respects the reserve and predictive replacement waits.
 
 Single EChest restocks use the same standing height as the enclosure and clear solid blocks above the lid before opening.
 
@@ -351,7 +351,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | --- | --- | --- | --- |
 | `enable-experimental` | `false` | Always | Master switch for this group: every setting below is ignored (and hidden) while it is off. |
 | `predictive-echest-rebreak` | `false` | Experimental enabled, offhand OnPlace mode | Sends three rebreak STOP packets per tick. |
-| `packet-budget` | `false` | `enable-experimental` is on | Caps mine and place actions each tick so their packet cost stays under `packets-per-tick`. Mining is served first; Packet Build gives unused mining capacity to lookahead placement. One mine action always goes through so the builder cannot stall. Counts start+stop per mined block, one use-on-block per placed block, movement, slot swaps, and swing packets unless PaketLimiter filters them. |
+| `packet-budget` | `false` | `enable-experimental` is on | Caps mine and place actions each tick so their packet cost stays under `packets-per-tick`. Mining is served first; Packet Build gives unused mining capacity to lookahead placement. One mine action always goes through so the builder cannot stall. The budget excludes packets canceled by Paket Limiter's Always Block list. |
 | `packets-per-tick` | `23`, range `4-200` | `packet-budget` is on | The tick's packet allowance. Set it below the server's own limit. |
 
 ### THM-HighwayBuilder: Debugging
