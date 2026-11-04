@@ -965,14 +965,6 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
-    private final Setting<Boolean> packetMode = sgGeneral.add(new BoolSetting.Builder()
-        .name("packet-mode")
-        .description("Enables Packet Build and Packet Borer. Leaves them alone if already on.")
-        .defaultValue(false)
-        .onChanged(value -> { if (value) activatePacketMode(); })
-        .build()
-    );
-
     // Digging
 
     private final Setting<Boolean> instamineBypass = sgDigging.add(new BoolSetting.Builder()
@@ -6163,6 +6155,7 @@ public class HighwayBuilderTHM extends Module {
 
         applyAutosetupSpeedMine();
         applyAutosetupReach();
+        applyAutosetupTimer();
         applyAutosetupVelocity();
         KillAura killAura = Modules.get().get(KillAura.class);
         if (killAura != null) {
@@ -6231,6 +6224,16 @@ public class HighwayBuilderTHM extends Module {
         Setting<Double> entityReach = reach.settings.get("extra-entity-reach", Double.class);
         if (entityReach != null) entityReach.set(2.5);
         reach.enable();
+    }
+
+    private void applyAutosetupTimer() {
+        Timer timer = Modules.get().get(Timer.class);
+        if (timer == null) return;
+
+        Setting<Boolean> autoadjust = timer.settings.get("tps-sync", Boolean.class);
+        autoadjust.set(true);
+        timer.enable();
+        info("Timer with tps sync got activated. This may cause slower building on low tps.");
     }
 
     private static void configureAutosetupKillAura(Settings settings) {
@@ -8152,7 +8155,7 @@ public class HighwayBuilderTHM extends Module {
     private static final int OFFHAND_BLOCK_TOPUP_AT = 32;
     /** ...and at or below this, with nothing left in the inventory, starts a container restock. */
     private static final int OFFHAND_BLOCK_RESTOCK_AT = 16;
-    private static final int OFFHAND_ECHEST_TOPUP_AT = 8;
+    private static final int OFFHAND_ECHEST_TOPUP_AT = 16;
 
     /** True when the offhand currently holds a block we're allowed to place (obsidian), so we can place straight from it. */
     private boolean offhandHoldsPlaceable() {
@@ -13459,9 +13462,14 @@ public class HighwayBuilderTHM extends Module {
         if (borerPackets >= 130) return;
         BlockState state = mc.level.getBlockState(pos);
         if (!safeCanBreak(pos, state)) return;
-        mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos, Direction.UP));
-        mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, pos, Direction.UP));
-        borerPackets += 2;
+        if (!BlockUtils.canInstaBreak(pos)) {
+            mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos, Direction.UP));
+            borerPackets += 1;
+        } else {
+            mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos, Direction.UP));
+            mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, pos, Direction.UP));
+            borerPackets += 2;
+        }
     }
 
     private void tickDoubleMine() {
