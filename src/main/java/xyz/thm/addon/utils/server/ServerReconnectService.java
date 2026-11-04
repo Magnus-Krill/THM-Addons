@@ -180,7 +180,8 @@ public final class ServerReconnectService {
 
     private static final String BARITONE_PATH_COMPLETE_MARKER = "pathing complete";
     private static final String PORTAL_COMMAND = "goto nether_portal";
-    private static final long PATH_PRE_COMMAND_DELAY_MS = 1_500L;
+    // Lobby portals ignore players for 5 s after login.
+    private static final long PATH_PRE_COMMAND_DELAY_MS = 5_000L;
     private static final long PATH_POST_SUCCESS_DELAY_MS = 2_000L;
     private static final long PATH_STAGE_TIMEOUT_MS = 180_000L;
     private static final long CRACKED_LOGIN_MISSING_PASSWORD_GRACE_MS = 5_000L;

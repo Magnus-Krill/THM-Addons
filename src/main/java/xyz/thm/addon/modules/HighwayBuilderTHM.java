@@ -149,6 +149,7 @@ public class HighwayBuilderTHM extends Module {
     private static final int STATS_ARTIFACT_VERSION = 1;
     private static final long KITBOT_FRONTEND_WINDOW_BUFFER_MS = 1_000L;
     private static final long KITBOT_INVENTORY_PROOF_GRACE_MS = 30_000L;
+    private static final long KITBOT_INVENTORY_PROOF_MAX_MS = 180_000L;
     private static final int KITBOT_MAX_ACCEPTED_ATTEMPTS = 3;
 
     private enum KitbotRestockGate {
@@ -840,6 +841,13 @@ public class HighwayBuilderTHM extends Module {
         .description("Wait 2 more seconds before breaking the enclosure, so every dropped kit is picked up.")
         .defaultValue(true)
         .visible(kitbotRestock::get)
+        .build()
+    );
+
+    private final Setting<Boolean> kitbotPauseRestockNearby = sgKitBotIntegration.add(new BoolSetting.Builder()
+        .name("kitbot-pause-restock-nearby")
+        .description("Pauses restocking while KitBot1 is nearby.")
+        .defaultValue(true)
         .build()
     );
 
@@ -1903,6 +1911,9 @@ public class HighwayBuilderTHM extends Module {
     private boolean kitbotEnclosureRestorePending;
     private boolean kitbotReturnAnchorSaved;
     private boolean kitbotSeenNearby;
+    private boolean kitbotRestockPauseActive, kitbotRestockPauseExpired;
+    private int kitbotRestockPauseStartAge;
+    private long kitbotInventoryProofStartedMs;
     private int kitbotDepartureWaitUntilAge;
     private int kitbotCollectUntilAge;
     private double kitbotReturnX, kitbotReturnY, kitbotReturnZ;
@@ -2056,7 +2067,7 @@ public class HighwayBuilderTHM extends Module {
     private static final double KITBOT_NEARBY_DISTANCE = 30.0;
     private static final int KITBOT_COLLECT_DELAY_TICKS = 40; // 2s
     // Cap on kitbot-wait-until-gone, so a bot that parks next to you can't stall the restock forever.
-    private static final int KITBOT_DEPARTURE_WAIT_TICKS = 600; // 30s
+    private static final int KITBOT_DEPARTURE_WAIT_TICKS = 2400; // 2min
     private static final double CENTER_SPEED_OVERRIDE = 0.6;
     private static final int CENTER_SPEED_RESTORE_RETRY_WINDOW_TICKS = 60;
     private static final double CENTER_TELEPORT_MAX_HORIZONTAL_DISTANCE = 4.0;
@@ -2600,6 +2611,8 @@ public class HighwayBuilderTHM extends Module {
         packetChoke.clear();
         chokeEnabledLastTick = experimental(chokeBuild);
         chokeFlushErrorLogged = false;
+        kitbotRestockPauseActive = false;
+        kitbotRestockPauseExpired = false;
 
         // Creative may build freely — it just never reports anything (enforceCreativeStatisticsGuard plus
         // the silent creative skips in sendStatusLog / commitAndSendFinalExternalStats).
@@ -5039,6 +5052,7 @@ public class HighwayBuilderTHM extends Module {
         refreshCountedForwardStatPositions();
 
         if (mc.player.getY() < start.y - 0.5) setState(State.ReLevel); // don't let the current state keep ticking, switch to re-levelling straight away
+        if (tickKitbotRestockPause()) return;
         if (tickDesyncWiggleProbe()) {
             tickDebug("idle: desync wiggle probe running");
             if (breakTimer > 0) breakTimer--;
@@ -5362,7 +5376,8 @@ public class HighwayBuilderTHM extends Module {
     private void handleKitbotRestockFrontendSuccess(KitbotFrontend.LifecycleEvent event) {
         kitbotOrderInFlight = false;
         kitbotOrderFrontendSucceeded = true;
-        kitbotInventoryProofDeadlineMs = System.currentTimeMillis() + KITBOT_INVENTORY_PROOF_GRACE_MS;
+        kitbotInventoryProofStartedMs = System.currentTimeMillis();
+        kitbotInventoryProofDeadlineMs = kitbotInventoryProofStartedMs + KITBOT_INVENTORY_PROOF_GRACE_MS;
         kitbotNextSubmitAtMs = 0L;
         restockWatchdog.markProgress("kitbot-frontend-success");
 
@@ -6249,6 +6264,45 @@ public class HighwayBuilderTHM extends Module {
         kitbotNextSubmitAtMs = 0L;
         kitbotInventoryProofDeadlineMs = 0L;
         if (restockDebugLog.get()) restockDebug("KitbotOrder cleared in-flight order tracking (%s).", reason);
+    }
+
+    // KitBot1 picks up dropped obsidian, so restock waits until it leaves. KitbotOrder needs it nearby.
+    private boolean tickKitbotRestockPause() {
+        boolean kitbotNearby = isKitbotNearby();
+
+        // Center also runs on activation, so it only counts while a restock is underway.
+        boolean restocking = isRestockState(state)
+            && state != State.KitbotOrder
+            && (state != State.Center || restockTask.isSequenceActive() || !restockTask.tasksInactive());
+        if (!kitbotNearby || !restocking) kitbotRestockPauseExpired = false;
+        boolean pause = kitbotPauseRestockNearby.get() && restocking && kitbotNearby && !kitbotRestockPauseExpired;
+
+        if (pause && kitbotRestockPauseActive && mc.player.tickCount - kitbotRestockPauseStartAge >= KITBOT_DEPARTURE_WAIT_TICKS) {
+            kitbotRestockPauseExpired = true;
+            kitbotRestockPauseActive = false;
+            info("KitBot1 is still nearby after 2 minutes, continuing restock anyway.");
+            return false;
+        }
+
+        if (!pause) {
+            if (kitbotRestockPauseActive) {
+                kitbotRestockPauseActive = false;
+                info("KitBot1 left, continuing restock.");
+            }
+            return false;
+        }
+
+        if (!kitbotRestockPauseActive) {
+            kitbotRestockPauseActive = true;
+            kitbotRestockPauseStartAge = mc.player.tickCount;
+            info("KitBot1 is nearby, pausing restock until it leaves.");
+        }
+        // Keeps the totem swap working while paused.
+        tickNoSwapLoadout();
+        input.stop();
+        restockWatchdog.pauseHeartbeat("kitbot-nearby");
+        tickDebug("idle: restock paused while %s is nearby (state=%s)", KITBOT_NAME, stateName(state));
+        return true;
     }
 
     private boolean isKitbotNearby() {
@@ -15016,6 +15070,9 @@ public class HighwayBuilderTHM extends Module {
             private int lastObservedObsidianCount;
             private boolean first, primed, breakRequested, speedmineRebreakMode;
             private boolean stopTimerEnabled;
+            // Set once dropped obsidian failed to reach the inventory within the stop timer.
+            private boolean ignoreGroundObsidian;
+            private int obsidianAtGroundIgnore, echestsAtGroundIgnore, echestBudgetAtGroundIgnore, noObsidianSinceAge = -1;
             private int stopTimer, moveTimer, rebreakTimer, timeout;
             private double returnX, returnY, returnZ;
             private boolean returnAnchorSaved;
@@ -15090,6 +15147,7 @@ public class HighwayBuilderTHM extends Module {
                 returnAnchorSaved = true;
 
                 stopTimerEnabled = false;
+                ignoreGroundObsidian = false;
                 primed = false;
                 breakRequested = false;
                 b.resetEChestDebug();
@@ -15115,7 +15173,24 @@ public class HighwayBuilderTHM extends Module {
             protected void tick(HighwayBuilderTHM b) {
                 if (stopTimerEnabled) {
                     b.restockTask.refreshSessionProgress();
-                    if (b.restockTask.isTargetSatisfied() || stopTimer-- <= 0) completeAndReturnToAnchor(b);
+                    if (b.restockTask.isTargetSatisfied()) {
+                        completeAndReturnToAnchor(b);
+                    } else if (stopTimer-- <= 0) {
+                        if (!ignoreGroundObsidian && b.restockTask.getSession() != null
+                            && b.restockTask.getSession().getTargetEchestsToBreak() > 0) {
+                            // Ground items counted towards the goal were never picked up. Returning to Restock here
+                            // reopens MineEnderChests with the same ground items and loops forever, so keep mining
+                            // and count only the inventory from now on.
+                            b.restockDebug("MineEnderChests stop timer expired without reaching the session target; ignoring ground obsidian and continuing (remaining=%d).",
+                                b.restockTask.getSession().getRemainingObsidianItems());
+                            ignoreGroundObsidian = true;
+                            obsidianAtGroundIgnore = -1;
+                            noObsidianSinceAge = -1;
+                            stopTimerEnabled = false;
+                        } else {
+                            completeAndReturnToAnchor(b);
+                        }
+                    }
 
                     return;
                 }
@@ -15145,9 +15220,11 @@ public class HighwayBuilderTHM extends Module {
                 // Check for obsidian count
                 int obsidianCount = 0;
 
-                for (Entity entity : b.mc.level.getEntities(b.mc.player, new AABB(pos.x, pos.y, pos.z, pos.x + 1, pos.y + 2, pos.z + 1).inflate(2))) {
-                    if (entity instanceof ItemEntity itemEntity && itemEntity.getItem().getItem() == Items.OBSIDIAN) {
-                        obsidianCount += itemEntity.getItem().getCount();
+                if (!ignoreGroundObsidian) {
+                    for (Entity entity : b.mc.level.getEntities(b.mc.player, new AABB(pos.x, pos.y, pos.z, pos.x + 1, pos.y + 2, pos.z + 1).inflate(2))) {
+                        if (entity instanceof ItemEntity itemEntity && itemEntity.getItem().getItem() == Items.OBSIDIAN) {
+                            obsidianCount += itemEntity.getItem().getCount();
+                        }
                     }
                 }
 
@@ -15157,6 +15234,28 @@ public class HighwayBuilderTHM extends Module {
                 }
                 if (b.mc.player.getOffhandItem().is(Items.OBSIDIAN)) {
                     obsidianCount += b.mc.player.getOffhandItem().getCount();
+                }
+
+                if (ignoreGroundObsidian) {
+                    int looseEchests = countLooseEnderChests(b);
+                    if (obsidianAtGroundIgnore < 0) {
+                        obsidianAtGroundIgnore = obsidianCount;
+                        echestsAtGroundIgnore = looseEchests;
+                        int reserve = b.restockTask.getSession() != null ? b.restockTask.getSession().saveEchestsReserve : 0;
+                        echestBudgetAtGroundIgnore = Math.max(Math.min(targetEchestsToBreak, looseEchests - reserve), 1);
+                    } else if (obsidianCount <= obsidianAtGroundIgnore
+                        // Placing consumes a chest before the break, so the target chest must also be gone.
+                        && echestsAtGroundIgnore - looseEchests >= echestBudgetAtGroundIgnore
+                        && !b.mc.level.getBlockState(pos.getBlockPos()).is(Blocks.ENDER_CHEST)) {
+                        if (noObsidianSinceAge < 0) noObsidianSinceAge = b.mc.player.tickCount;
+                        // Drops need a moment to be picked up.
+                        if (b.mc.player.tickCount - noObsidianSinceAge >= 40) {
+                            b.error("Mined ender chests but no obsidian reached the inventory; stopping to save ender chests.");
+                            return;
+                        }
+                    } else {
+                        noObsidianSinceAge = -1;
+                    }
                 }
 
                 if (obsidianCount > lastObservedObsidianCount) {
@@ -15431,6 +15530,16 @@ public class HighwayBuilderTHM extends Module {
                 }
             }
 
+            private static int countLooseEnderChests(HighwayBuilderTHM b) {
+                int count = 0;
+                for (int i = 0; i < b.mc.player.getInventory().getNonEquipmentItems().size(); i++) {
+                    ItemStack itemStack = b.mc.player.getInventory().getItem(i);
+                    if (itemStack.getItem() == Items.ENDER_CHEST) count += itemStack.getCount();
+                }
+                if (b.mc.player.getOffhandItem().is(Items.ENDER_CHEST)) count += b.mc.player.getOffhandItem().getCount();
+                return count;
+            }
+
             private void completeAndReturnToAnchor(HighwayBuilderTHM b) {
                 if (speedmineRebreakMode && Speedmine.INSTANCE != null) {
                     b.restoreSpeedmineAutoRebreak();
@@ -15548,10 +15657,19 @@ public class HighwayBuilderTHM extends Module {
                     return;
                 }
 
-                if (b.kitbotOrderFrontendSucceeded && System.currentTimeMillis() >= b.kitbotInventoryProofDeadlineMs) {
+                long now = System.currentTimeMillis();
+                // KitBot1 may hold kits until its /kill, so the window restarts while it is nearby.
+                if (b.kitbotOrderFrontendSucceeded && b.isKitbotNearby()) {
+                    b.kitbotInventoryProofDeadlineMs = Math.max(b.kitbotInventoryProofDeadlineMs, Math.min(
+                        now + KITBOT_INVENTORY_PROOF_GRACE_MS,
+                        b.kitbotInventoryProofStartedMs + KITBOT_INVENTORY_PROOF_MAX_MS
+                    ));
+                }
+
+                if (b.kitbotOrderFrontendSucceeded && now >= b.kitbotInventoryProofDeadlineMs) {
                     failKitbotOrder(
                         b,
-                        "Kitbot restock delivery arrived, but matching shulkers were not detected within 30 seconds.",
+                        "Kitbot restock delivery arrived, but matching shulkers were not detected in time.",
                         FailureMode.KITBOT_LOCAL
                     );
                 }
@@ -16668,6 +16786,22 @@ public class HighwayBuilderTHM extends Module {
                 RestockTask.RestockSession session = b.restockTask.getSession();
                 if (session == null) return;
 
+                // Runs first: raw e-chest kits only count as matching shulkers while MineEnderChests is open.
+                if (session.isMineEnderChestsExhausted()) {
+                    int usableLooseEchests = countUsableLooseInventoryEnderChests(b);
+                    boolean rawEchestKits = hasInventoryRestockShulkerOfKind(b, ECHEST_RESERVE_RAW_ENDER_CHEST);
+                    // shouldMineEnderChestsForMaterials() is false while exhausted, so check the supply directly.
+                    if (isObsidianRestockTask(b) && b.mineEnderChests.get() && (usableLooseEchests > 0 || rawEchestKits)) {
+                        b.restockTask.reopenSourcePhase(RestockTask.SourcePhase.MineEnderChests);
+                        if (b.restockDebugLog.get()) {
+                            b.restockDebug("Restock.start reopened MineEnderChests because ender chest supply is available (usableLooseEchests=%d, rawEchestKits=%s).",
+                                usableLooseEchests,
+                                rawEchestKits
+                            );
+                        }
+                    }
+                }
+
                 if (session.isInventoryShulkersExhausted()) {
                     int matchingInventoryShulkers = countMatchingRestockShulkersInPlayerInventory(b);
                     if (matchingInventoryShulkers > 0) {
@@ -16675,18 +16809,6 @@ public class HighwayBuilderTHM extends Module {
                         if (b.restockDebugLog.get()) {
                             b.restockDebug("Restock.start reopened InventoryShulkers because matching inventory shulker supply changed (matchingInventoryShulkers=%d).",
                                 matchingInventoryShulkers
-                            );
-                        }
-                    }
-                }
-
-                if (session.isMineEnderChestsExhausted()) {
-                    int usableLooseEchests = countUsableLooseInventoryEnderChests(b);
-                    if (shouldMineEnderChestsForMaterials(b) && usableLooseEchests > 0) {
-                        b.restockTask.reopenSourcePhase(RestockTask.SourcePhase.MineEnderChests);
-                        if (b.restockDebugLog.get()) {
-                            b.restockDebug("Restock.start reopened MineEnderChests because usable loose ender chest supply changed (usableLooseEchests=%d).",
-                                usableLooseEchests
                             );
                         }
                     }
