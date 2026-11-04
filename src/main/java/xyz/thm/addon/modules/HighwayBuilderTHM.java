@@ -15669,6 +15669,10 @@ public class HighwayBuilderTHM extends Module {
                             obsidianAtGroundIgnore = -1;
                             noObsidianSinceAge = -1;
                             stopTimerEnabled = false;
+                        } else if (ignoreGroundObsidian && noObsidianSinceAge >= 0
+                            && countLooseItems(b, Items.OBSIDIAN) <= obsidianAtGroundIgnore) {
+                            // The stall check below is skipped while the stop timer runs.
+                            b.error("Mined ender chests but no obsidian reached the inventory; stopping to save ender chests.");
                         } else {
                             completeAndReturnToAnchor(b);
                         }
@@ -15719,7 +15723,7 @@ public class HighwayBuilderTHM extends Module {
                 }
 
                 if (ignoreGroundObsidian) {
-                    int looseEchests = countLooseEnderChests(b);
+                    int looseEchests = countLooseItems(b, Items.ENDER_CHEST);
                     if (obsidianAtGroundIgnore < 0) {
                         obsidianAtGroundIgnore = obsidianCount;
                         echestsAtGroundIgnore = looseEchests;
@@ -16008,13 +16012,13 @@ public class HighwayBuilderTHM extends Module {
                 }
             }
 
-            private static int countLooseEnderChests(HighwayBuilderTHM b) {
+            private static int countLooseItems(HighwayBuilderTHM b, Item item) {
                 int count = 0;
                 for (int i = 0; i < b.mc.player.getInventory().getNonEquipmentItems().size(); i++) {
                     ItemStack itemStack = b.mc.player.getInventory().getItem(i);
-                    if (itemStack.getItem() == Items.ENDER_CHEST) count += itemStack.getCount();
+                    if (itemStack.getItem() == item) count += itemStack.getCount();
                 }
-                if (b.mc.player.getOffhandItem().is(Items.ENDER_CHEST)) count += b.mc.player.getOffhandItem().getCount();
+                if (b.mc.player.getOffhandItem().is(item)) count += b.mc.player.getOffhandItem().getCount();
                 return count;
             }
 
