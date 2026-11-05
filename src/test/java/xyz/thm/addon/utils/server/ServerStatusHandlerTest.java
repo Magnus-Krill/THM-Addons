@@ -47,6 +47,22 @@ class ServerStatusHandlerTest {
     }
 
     @Test
+    void backupServerNoticeOverridesSurvivalGameMode() {
+        assertEquals(ServerState.TRANSFER_SERVER, ServerStatusHandler.resolveCandidate(
+            ServerStatusHandler.scoreStrictEvidence(GameType.SURVIVAL, "minecraft:the_end", false, false, true)));
+        assertEquals(ServerState.MAIN_SERVER, ServerStatusHandler.resolveCandidate(
+            ServerStatusHandler.scoreStrictEvidence(GameType.SURVIVAL, "minecraft:the_end", false, false, false)));
+    }
+
+    @Test
+    void recognizesTheBackupServerNotice() {
+        assertTrue(ServerStatusHandler.isBackupServerNotice(
+            "we've sent you back to the backup server. just a minute as we are reserving a spot for you on the server."));
+        assertFalse(ServerStatusHandler.isBackupServerNotice("you're now playing on worker-2, hosted on node-12 in us-east."));
+        assertFalse(ServerStatusHandler.isBackupServerNotice(null));
+    }
+
+    @Test
     void recognizesTheTagFactoryUsedByVanillaServerSystemMessages() throws Exception {
         var chat = new ClassNode();
         try (var input = getClass().getResourceAsStream("/net/minecraft/client/gui/components/ChatComponent.class")) {

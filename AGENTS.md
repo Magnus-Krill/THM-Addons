@@ -169,6 +169,7 @@ Movement uses collision-checked sub-block steps and cancels for manual input, wo
 **Highway block rates:** `BlockRateSample` measures counted Dug/Paved work each monotonic-clock second and averages actual client ticks. Both control screens toggle `block-rate-debug`; `block-rate-mode` selects BPS or blocks/tick. Packet placements count only after the block appears; repeated sends share one expiring confirmation.
 
 **Reconnect lobby portals:** Only armed reconnects walk to portals. Adventure Overworld is the main lobby; Adventure End is backup/transfer unless trusted cracked-auth evidence applies. Choose the nearest loaded portal from lobby entry and advance only on server-state changes.
+6b6t's backup server can run in Survival; its system notice ("sent you back to the backup server") marks the connection as transfer.
 
 **Stats screenshots:** Capture after `Minecraft.renderFrame` draws the GUI. Disconnect proof must match the expected reason/stats and complete two visible frames; keep disconnect captures alive across `GameLeftEvent`.
 

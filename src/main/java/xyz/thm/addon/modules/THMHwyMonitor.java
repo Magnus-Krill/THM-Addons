@@ -2603,9 +2603,13 @@ public class THMHwyMonitor extends Module {
         }
 
         long now = System.currentTimeMillis();
-        if (now < delayedMainServerResumeAtMs) return;
         if (mc == null || mc.player == null || mc.level == null) return;
-        if (!isHighwayRecoveryAllowedOnCurrentServer()) return;
+        if (!isHighwayRecoveryAllowedOnCurrentServer()) {
+            // Restart the full wait once a backup-server hop returns to the main server.
+            delayedMainServerResumeAtMs = now + MAIN_SERVER_RESUME_DELAY_MS;
+            return;
+        }
+        if (now < delayedMainServerResumeAtMs) return;
 
         long cycleId = delayedMainServerResumeCycleId;
         String contextTag = delayedMainServerResumeContext;
