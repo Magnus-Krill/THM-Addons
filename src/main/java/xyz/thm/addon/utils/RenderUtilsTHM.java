@@ -35,6 +35,17 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
  * Use this instead of calling event.renderer directly.
  */
 public class RenderUtilsTHM {
+    public static void renderItemBadge(net.minecraft.client.gui.GuiGraphicsExtractor graphics,
+                                       net.minecraft.world.item.ItemStack stack, int x, int y, int size) {
+        graphics.nextStratum();
+        graphics.pose().pushMatrix();
+        try {
+            graphics.pose().translate(x, y).scale(size / 16f);
+            graphics.item(stack, 0, 0);
+        } finally { graphics.pose().popMatrix(); }
+        graphics.nextStratum();
+    }
+
     // Direction.values() hands out a fresh array on every call.
     private static final Direction[] DIRECTIONS = Direction.values();
 

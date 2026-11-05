@@ -38,6 +38,7 @@ meteor-client = { module = "meteordevelopment:meteor-client", version.ref = "met
 baritone = { module = "meteordevelopment:baritone", version.ref = "meteor" }
 
 # Optional integrations inspected by compatibility tests.
+distant-horizons = { module = "maven.modrinth:distanthorizons", version = "3.3.3-26.2" }
 sodium = { module = "maven.modrinth:sodium", version = "mc26.2-0.9.2-fabric" }
 xaeros-minimap = { module = "maven.modrinth:xaeros-minimap", version = "fabric-26.2-26.6.2" }
 xaeros-world-map = { module = "maven.modrinth:xaeros-world-map", version = "fabric-26.2-1.47.2" }

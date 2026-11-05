@@ -10,6 +10,21 @@ package xyz.thm.addon.utils;
 public final class PacketBudget {
     public record Plan(int mine, int place) {}
 
+    public record Costs(int available, int dig, int swing, int use) {
+        public int mine(boolean instant) {
+            return dig * (instant ? 1 : 2) + swing;
+        }
+
+        public int placements(int remaining) {
+            int cost = use + swing;
+            return cost == 0 ? Integer.MAX_VALUE : Math.max(0, remaining) / cost;
+        }
+
+        public Plan plan(boolean instant, int wantMine, int wantPlace) {
+            return split(available, 0, mine(instant), use + swing, wantMine, wantPlace);
+        }
+    }
+
     private PacketBudget() {}
 
     /**

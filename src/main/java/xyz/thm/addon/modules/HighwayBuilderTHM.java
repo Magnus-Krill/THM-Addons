@@ -157,7 +157,7 @@ public class HighwayBuilderTHM extends Module {
     private static final String STATS_ARTIFACT_MAGIC = "HB_STATS_ARTIFACT_V1";
     private static final int STATS_ARTIFACT_VERSION = 1;
     private static final long KITBOT_FRONTEND_WINDOW_BUFFER_MS = 1_000L;
-    private static final long KITBOT_INVENTORY_PROOF_GRACE_MS = 30_000L;
+    private static final long KITBOT_INVENTORY_PROOF_GRACE_MS = 120_000L;
     private static final int KITBOT_MAX_ACCEPTED_ATTEMPTS = 3;
 
     private enum KitbotRestockGate {
@@ -838,14 +838,6 @@ public class HighwayBuilderTHM extends Module {
         .range(1, 10)
         .sliderRange(1, 10)
         .visible(() -> kitbotRestock.get() && kitbotFoodRestock.get())
-        .build()
-    );
-
-    private final Setting<Boolean> kitbotWaitUntilGone = sgKitBotIntegration.add(new BoolSetting.Builder()
-        .name("kitbot-wait-until-gone")
-        .description("After the kits arrive, wait for KitBot1 to leave before breaking the enclosure.")
-        .defaultValue(true)
-        .visible(kitbotRestock::get)
         .build()
     );
 
@@ -1842,6 +1834,9 @@ public class HighwayBuilderTHM extends Module {
     private int restockEnclosureOffhandSwapSlot = -1;
     private final LongOpenHashSet restockEnclosureObsidian = new LongOpenHashSet();
     private int mineActionsThisTick;
+    private PacketBudget.Costs packetCostsThisTick;
+    private int minePacketsLeft;
+    private boolean minePacketAttempted;
     private final double[] mineFractionCarry = new double[1];
     private int borerPackets;
     private int placeActionsThisTick;
@@ -1965,17 +1960,12 @@ public class HighwayBuilderTHM extends Module {
     private boolean kitbotEnclosureActive;
     private boolean kitbotEnclosureRestorePending;
     private boolean kitbotReturnAnchorSaved;
-    private boolean kitbotSeenNearby;
-    private int kitbotDepartureWaitUntilAge;
     private int kitbotCollectUntilAge;
     private double kitbotReturnX, kitbotReturnY, kitbotReturnZ;
     private final BlockPos.MutableBlockPos kitbotAnchorPos = new BlockPos.MutableBlockPos();
     private int kitbotOrderBaselineShulkerCount;
     private int kitbotOrderExpectedShulkerGain;
-    private int kitbotOrderSentAtAge;
     private int kitbotOrderAcceptedAttempts;
-    private int kitbotOrderLastObservedMatchingShulkerCount;
-    private int kitbotPartialDeliveryGraceUntilAge;
     private long kitbotNextSubmitAtMs;
     private long kitbotInventoryProofDeadlineMs;
     private boolean kitbotOrderCenterVerificationActive;
@@ -2112,6 +2102,7 @@ public class HighwayBuilderTHM extends Module {
 
     private int debugStateLastAge = -1;
     private BlockPos eChestDebugTarget;
+    private boolean eChestBreakAborted;
     private long eChestDebugLastPlaceNanos;
     private int eChestDebugCycle, eChestDebugStopAttempts;
     private int eChestObservedBreaks, eChestObsidianBaseline = -1, eChestObsidianPeak;
@@ -2120,10 +2111,7 @@ public class HighwayBuilderTHM extends Module {
     private int nextAdvertisementIndex;
     private long nextAdvertisementAtTick;
     private static final String KITBOT_NAME = "KitBot1";
-    private static final double KITBOT_NEARBY_DISTANCE = 30.0;
     private static final int KITBOT_COLLECT_DELAY_TICKS = 40; // 2s
-    // Cap on kitbot-wait-until-gone, so a bot that parks next to you can't stall the restock forever.
-    private static final int KITBOT_DEPARTURE_WAIT_TICKS = 600; // 30s
     private static final double CENTER_SPEED_OVERRIDE = 0.6;
     private static final int CENTER_SPEED_RESTORE_RETRY_WINDOW_TICKS = 60;
     private static final double CENTER_TELEPORT_MAX_HORIZONTAL_DISTANCE = 4.0;
@@ -3249,6 +3237,9 @@ public class HighwayBuilderTHM extends Module {
 
         restoreSpeedMineSettingsIfNeeded();
 
+        if (mc.player != null && prevInput != null && mc.player.input == input) mc.player.input = prevInput;
+        prevInput = null;
+
         if (mc.player == null || mc.level == null || !Utils.canUpdate()) {
             if (hasActiveInMemoryStatsSession()) {
                 if (isMonitorPauseDeactivate || isTravelHandoffDeactivate) {
@@ -3264,7 +3255,6 @@ public class HighwayBuilderTHM extends Module {
             return;
         }
 
-        mc.player.input = prevInput;
         mc.options.keyUse.setDown(false);
         if (perspectiveChanged) {
             mc.options.setCameraType(previousPerspective);
@@ -5663,6 +5653,10 @@ public class HighwayBuilderTHM extends Module {
             }
         }
         if (mc.level != null && event.packet instanceof ServerboundPlayerActionPacket a) {
+            if (state == State.MineEnderChests && a.getPos().equals(eChestDebugTarget)
+                && a.getAction() == ServerboundPlayerActionPacket.Action.ABORT_DESTROY_BLOCK) {
+                eChestBreakAborted = true;
+            }
             if (restockDebugLog.get()
                 && state == State.MineEnderChests
                 && a.getPos().equals(eChestDebugTarget)) {
@@ -5957,10 +5951,18 @@ public class HighwayBuilderTHM extends Module {
             ItemStack stack = mc.player.getInventory().getItem(i);
             if (stack == null || stack.isEmpty()) continue;
 
-            if (isKitbotProofShulker(stack)) count++;
+            if (isKitbotProofShulker(stack)) count += stack.getCount();
         }
+        ItemStack offhand = mc.player.getOffhandItem();
+        if (isKitbotProofShulker(offhand)) count += offhand.getCount();
+        ItemStack cursor = mc.player.containerMenu.getCarried();
+        if (isKitbotProofShulker(cursor)) count += cursor.getCount();
 
         return count;
+    }
+
+    static boolean hasExpectedKitDelivery(int baseline, int expectedGain, int currentCount) {
+        return expectedGain > 0 && currentCount - baseline >= expectedGain;
     }
 
     private void failActiveKitbotRestock(String message) {
@@ -6114,7 +6116,7 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private void updateVariables() {
-        prevInput = mc.player.input;
+        if (mc.player.input != input) prevInput = mc.player.input;
         mc.player.input = input = new CustomPlayerInput();
 
         placeTimer = breakTimer = count = syncId = 0;
@@ -6713,10 +6715,7 @@ public class HighwayBuilderTHM extends Module {
             || kitbotOrderFrontendSucceeded
             || kitbotOrderBaselineShulkerCount != 0
             || kitbotOrderExpectedShulkerGain != 0
-            || kitbotOrderSentAtAge != 0
             || kitbotOrderAcceptedAttempts != 0
-            || kitbotOrderLastObservedMatchingShulkerCount != 0
-            || kitbotPartialDeliveryGraceUntilAge != 0
             || kitbotNextSubmitAtMs != 0L
             || kitbotInventoryProofDeadlineMs != 0L;
         if (!hadOrderState) return;
@@ -6725,25 +6724,10 @@ public class HighwayBuilderTHM extends Module {
         kitbotOrderFrontendSucceeded = false;
         kitbotOrderBaselineShulkerCount = 0;
         kitbotOrderExpectedShulkerGain = 0;
-        kitbotOrderSentAtAge = 0;
         kitbotOrderAcceptedAttempts = 0;
-        kitbotOrderLastObservedMatchingShulkerCount = 0;
-        kitbotPartialDeliveryGraceUntilAge = 0;
         kitbotNextSubmitAtMs = 0L;
         kitbotInventoryProofDeadlineMs = 0L;
         if (restockDebugLog.get()) restockDebug("KitbotOrder cleared in-flight order tracking (%s).", reason);
-    }
-
-    private boolean isKitbotNearby() {
-        if (mc.player == null || mc.level == null) return false;
-
-        for (Player player : mc.level.players()) {
-            if (player == null || player == mc.player) continue;
-            if (!KITBOT_NAME.equals(player.getName().getString())) continue;
-            if (player.distanceToSqr(mc.player) <= KITBOT_NEARBY_DISTANCE * KITBOT_NEARBY_DISTANCE) return true;
-        }
-
-        return false;
     }
 
     private void clearKitbotEnclosureState(String reason) {
@@ -6757,8 +6741,6 @@ public class HighwayBuilderTHM extends Module {
         kitbotEnclosureActive = false;
         kitbotEnclosureRestorePending = false;
         kitbotReturnAnchorSaved = false;
-        kitbotSeenNearby = false;
-        kitbotDepartureWaitUntilAge = 0;
         kitbotCollectUntilAge = 0;
         kitbotReturnX = kitbotReturnY = kitbotReturnZ = 0;
         kitbotAnchorPos.set(0, 0, 0);
@@ -7619,31 +7601,29 @@ public class HighwayBuilderTHM extends Module {
         return AdaptiveRate.actionsThisTick(effectiveBlocksPerTickActionRate(), mineFractionCarry);
     }
 
-    /** Mining sends start+stop per block, placing one use-on-block; a swing follows each unless it is filtered. */
     private void applyPacketBudget() {
-        //if (!experimental(packetBudget)) return; //Because its not experimental anymore
+        PaketLimiter limiter = Modules.get().get(PaketLimiter.class);
+        boolean filterPackets = limiter != null && (mc.getConnection() == null
+            || !isChokeHoldingOrFlushing(mc.getConnection().getConnection()));
+        packetCostsThisTick = packetBudgetCosts(packetBudgetLimit.get(), allowsSilentForwardToolSwap(),
+            silentForwardPlaceSwap.get() && !placeFromOffhand(),
+            mineActionsThisTick, placeActionsThisTick, type -> filterPackets && limiter.alwaysBlocks(type));
+        minePacketsLeft = packetCostsThisTick.available() - forwardMineCount * packetCostsThisTick.mine(false);
+        minePacketAttempted = false;
 
-        PacketBudget.Plan plan = packetBudgetPlan(mineActionsThisTick, placeActionsThisTick);
-
+        // Reserve the minimum per block up front. Slower blocks spend the extra packet at the mine call.
+        boolean inlineMining = !packetBorer.get() && normalMining == null && packetMining == null;
+        PacketBudget.Plan plan = packetCostsThisTick.plan(inlineMining, mineActionsThisTick, placeActionsThisTick);
         if (plan.mine() < mineActionsThisTick || plan.place() < placeActionsThisTick) sessionBudgetClipped++;
         mineActionsThisTick = plan.mine();
         placeActionsThisTick = plan.place();
     }
 
-    private PacketBudget.Plan packetBudgetPlan(int mineActions, int placeActions) {
-        PaketLimiter limiter = Modules.get().get(PaketLimiter.class);
-        boolean filterPackets = limiter != null && (mc.getConnection() == null
-            || !isChokeHoldingOrFlushing(mc.getConnection().getConnection()));
-        return packetBudgetPlan(packetBudgetLimit.get(), allowsSilentForwardToolSwap(),
-            silentForwardPlaceSwap.get() && !placeFromOffhand(),
-            mineActions, placeActions, type -> filterPackets && limiter.alwaysBlocks(type));
-    }
-
-    static PacketBudget.Plan packetBudgetPlan(int budget, boolean silentMineSwap, boolean silentPlaceSwap,
+    static PacketBudget.Costs packetBudgetCosts(int budget, boolean silentMineSwap, boolean silentPlaceSwap,
                                                int mineActions, int placeActions,
                                                Predicate<PacketType<?>> alwaysBlocked) {
         int swing = alwaysBlocked.test(GamePacketTypes.SERVERBOUND_SWING) ? 0 : 1;
-        int mine = alwaysBlocked.test(GamePacketTypes.SERVERBOUND_PLAYER_ACTION) ? 0 : 2;
+        int dig = alwaysBlocked.test(GamePacketTypes.SERVERBOUND_PLAYER_ACTION) ? 0 : 1;
         int place = alwaysBlocked.test(GamePacketTypes.SERVERBOUND_USE_ITEM_ON) ? 0 : 1;
         boolean movementBlocked = alwaysBlocked.test(GamePacketTypes.SERVERBOUND_MOVE_PLAYER_POS)
             && alwaysBlocked.test(GamePacketTypes.SERVERBOUND_MOVE_PLAYER_ROT)
@@ -7651,14 +7631,14 @@ public class HighwayBuilderTHM extends Module {
             && alwaysBlocked.test(GamePacketTypes.SERVERBOUND_MOVE_PLAYER_STATUS_ONLY);
         boolean reserveSwap = (mineActions > 0 && silentMineSwap) || (placeActions > 0 && silentPlaceSwap);
         int overhead = (movementBlocked ? 0 : 1) + (reserveSwap ? 2 : 0);
-        return PacketBudget.split(budget, overhead, mine + swing, place + swing, mineActions, placeActions);
+        return new PacketBudget.Costs(Math.max(0, budget - overhead), dig, swing, place);
     }
 
     private void reclaimUnusedMinePacketBudgetForPlacing() {
         if (!packetBuild.get() || normalRatePacketBuild() || !experimental(packetBudget)) return;
         if (packetBorer.get() || normalMining != null || packetMining != null) return;
 
-        int reclaimedPlaceActions = packetBudgetPlan(forwardMineCount, Integer.MAX_VALUE).place();
+        int reclaimedPlaceActions = packetCostsThisTick.placements(minePacketsLeft);
         placeActionsThisTick = Math.max(placeActionsThisTick, reclaimedPlaceActions);
     }
 
@@ -7922,7 +7902,8 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private int currentPlaceActionsThisTick() {
-        return Math.max(0, placeActionsThisTick);
+        return packetCostsThisTick == null ? placeActionsThisTick
+            : Math.min(placeActionsThisTick, packetCostsThisTick.placements(minePacketsLeft));
     }
 
     private boolean useForwardRowSchedulerMode() {
@@ -7952,6 +7933,19 @@ public class HighwayBuilderTHM extends Module {
     private boolean tryMineBlock(BlockPos pos, BlockState state, boolean rotate, Runnable beforeBreakAction) {
         if (!isWithinConfiguredForwardRange(pos)) return false;
         if (!safeCanBreak(pos, state)) return false;
+
+        if (packetCostsThisTick != null) {
+            boolean instant = (Speedmine.INSTANCE == null || !Speedmine.INSTANCE.interceptsManualBreak(pos))
+                && !mc.gameMode.isDestroying()
+                && (mc.player.isCreative() || state.getDestroyProgress(mc.player, mc.level, pos) >= 1.0f);
+            int packets = packetCostsThisTick.mine(instant);
+            if (minePacketAttempted && packets > minePacketsLeft) {
+                sessionBudgetClipped++;
+                return false;
+            }
+            minePacketsLeft -= packets;
+            minePacketAttempted = true;
+        }
 
         Runnable breakAction = () -> {
             if (beforeBreakAction != null) beforeBreakAction.run();
@@ -8339,11 +8333,7 @@ public class HighwayBuilderTHM extends Module {
                 if (totem.found()) moveLoadoutToOffhand(totem.slot());
             }
         } else if (wantsEnderChestOffhand()) {
-            ItemStack offhand = mc.player.getOffhandItem();
-            if (!compactEnderChestReserve()
-                && (!offhandHoldsEnderChest() || offhand.getCount() <= OFFHAND_ECHEST_TOPUP_AT)) {
-                refillOffhandEnderChests();
-            }
+            prepareEChestOffhand();
         } else if (!restockTask.isSequenceActive() && !isRestockState(state)) {
             ItemStack offhand = mc.player.getOffhandItem();
             if (!offhandHoldsPlaceable()) {
@@ -8385,7 +8375,7 @@ public class HighwayBuilderTHM extends Module {
 
     private boolean moveSupplyToOffhand(int slot) {
         if (!isHotbarSlotReserved(slot)) return moveLoadoutToOffhand(slot);
-        return movePartialSupplyToOffhand(slot, 1);
+        return movePartialSupplyToOffhand(slot, mc.player.getInventory().getItem(slot).getCount() - 1);
     }
 
     private int enderChestMiningReserve() {
@@ -8401,10 +8391,17 @@ public class HighwayBuilderTHM extends Module {
         int reserve = enderChestMiningReserve();
         int bestSlot = -1;
         int bestCount = 0;
+        int swapSlot = -1;
+        int swapCount = toppingUp ? offhand.getCount() : 0;
         for (int offset = 0; offset < 36; offset++) {
             int slot = (offset + 9) % 36;
             ItemStack stack = mc.player.getInventory().getItem(slot);
             if (!stack.is(Items.ENDER_CHEST) || toppingUp && !ItemStack.isSameItemSameComponents(stack, offhand)) continue;
+            if (stack.getCount() > swapCount
+                && offhandChestRefillCount(stack.getCount(), outside, reserve, stack.getCount()) == stack.getCount()) {
+                swapSlot = slot;
+                swapCount = stack.getCount();
+            }
             int space = toppingUp ? offhand.getMaxStackSize() - offhand.getCount() : stack.getMaxStackSize();
             int count = offhandChestRefillCount(stack.getCount(), outside, reserve, space);
             if (count > bestCount) {
@@ -8412,6 +8409,7 @@ public class HighwayBuilderTHM extends Module {
                 bestCount = count;
             }
         }
+        if (swapSlot != -1) return swapLoadoutToOffhand(swapSlot);
         if (bestSlot == -1) return false;
         if (bestCount == mc.player.getInventory().getItem(bestSlot).getCount()
             || toppingUp && bestCount == offhand.getMaxStackSize() - offhand.getCount()) {
@@ -8422,6 +8420,25 @@ public class HighwayBuilderTHM extends Module {
 
     static int offhandChestRefillCount(int sourceCount, int outside, int reserve, int space) {
         return Math.min(Math.min(sourceCount, space), Math.max(outside - reserve, 0));
+    }
+
+    private boolean prepareEChestOffhand() {
+        if (mc.gameMode == null || mc.player.containerMenu != mc.player.inventoryMenu) return false;
+        ItemStack cursor = mc.player.containerMenu.getCarried();
+        if (!cursor.isEmpty()) {
+            for (int i = 0; i < 36; i++) {
+                ItemStack stack = mc.player.getInventory().getItem(i);
+                if (!ItemStack.isSameItemSameComponents(cursor, stack) || stack.getCount() >= stack.getMaxStackSize()) continue;
+                clickInventorySlot(SlotUtils.indexToId(i), 0);
+                if (mc.player.containerMenu.getCarried().isEmpty()) break;
+            }
+            if (!mc.player.containerMenu.getCarried().isEmpty()) clearCursorStackToEmptySlot("echest-offhand-refill", true);
+            return false;
+        }
+        if (!offhandHoldsEnderChest() || mc.player.getOffhandItem().getCount() <= OFFHAND_ECHEST_TOPUP_AT) {
+            refillOffhandEnderChests();
+        }
+        return offhandHoldsEnderChest() && protectOffhandEChestReserve(enderChestMiningReserve());
     }
 
     private boolean compactEnderChestReserve() {
@@ -8467,6 +8484,9 @@ public class HighwayBuilderTHM extends Module {
         ItemStack source = mc.player.getInventory().getItem(slot);
         ItemStack expected = source.copy();
         ItemStack offhand = mc.player.getOffhandItem();
+        int space = source.getMaxStackSize() - (ItemStack.isSameItemSameComponents(source, offhand) ? offhand.getCount() : 0);
+        count = Math.min(count, Math.min(source.getCount(), space));
+        if (count <= 0) return false;
         if (!offhand.isEmpty() && !ItemStack.isSameItemSameComponents(source, offhand)) {
             int empty = -1;
             for (int i = 9; i < 36; i++) {
@@ -8568,10 +8588,17 @@ public class HighwayBuilderTHM extends Module {
                 || !mc.player.containerMenu.getCarried().isEmpty()) return false;
             InvUtils.move().from(slot).toOffhand();
         } else {
-            // SWAP needs neither cursor clicks nor a spare inventory slot.
-            mc.gameMode.handleContainerInput(mc.player.containerMenu.containerId,
-                slotId, SlotUtils.OFFHAND, ContainerInput.SWAP, mc.player);
+            return swapLoadoutToOffhand(slot);
         }
+        return ItemStack.isSameItemSameComponents(expected, mc.player.getOffhandItem());
+    }
+
+    private boolean swapLoadoutToOffhand(int slot) {
+        if (mc.gameMode == null || slot < 0 || slot >= 36) return false;
+        // SWAP needs neither cursor clicks nor a spare inventory slot.
+        ItemStack expected = mc.player.getInventory().getItem(slot).copy();
+        mc.gameMode.handleContainerInput(mc.player.containerMenu.containerId,
+            SlotUtils.indexToId(slot), SlotUtils.OFFHAND, ContainerInput.SWAP, mc.player);
         return ItemStack.isSameItemSameComponents(expected, mc.player.getOffhandItem());
     }
 
@@ -8861,6 +8888,7 @@ public class HighwayBuilderTHM extends Module {
 
     private void resetEChestDebug() {
         eChestDebugTarget = null;
+        eChestBreakAborted = false;
         eChestDebugLastPlaceNanos = 0L;
         eChestDebugCycle = 0;
         eChestDebugStopAttempts = 0;
@@ -15599,12 +15627,13 @@ public class HighwayBuilderTHM extends Module {
 
         MineEnderChests {
             private static final MBlockPos pos = new MBlockPos();
+            private static final int SPEEDMINE_RETRY_TICKS = 10;
             private int targetEchestsToBreak;
             private int targetObsidianCount;
             private int lastObservedObsidianCount;
-            private boolean first, primed, breakRequested, speedmineRebreakMode;
+            private boolean first, primed, speedmineRebreakMode;
             private String stopReason;
-            private int stopTimer, moveTimer, rebreakTimer, timeout;
+            private int stopTimer, moveTimer, rebreakTimer, timeout, nextSpeedmineRequest;
             private double returnX, returnY, returnZ;
             private boolean returnAnchorSaved;
             @Override
@@ -15678,7 +15707,7 @@ public class HighwayBuilderTHM extends Module {
 
                 stopReason = null;
                 primed = false;
-                breakRequested = false;
+                nextSpeedmineRequest = 0;
                 b.resetEChestDebug();
                 b.eChestDebug(
                     "phase-start mode=%s offhandMode=%s mineRotation=%s placeRotation=%s silentSwap=%s targetEchests=%d targetObsidian=%d clientAge=%d.",
@@ -15777,6 +15806,7 @@ public class HighwayBuilderTHM extends Module {
                 BlockPos bp = pos.getBlockPos();
                 if (!bp.equals(b.eChestDebugTarget)) {
                     b.eChestDebugTarget = bp.immutable();
+                    b.eChestBreakAborted = false;
                     b.eChestDebugLastObservedChest = false;
                     b.eChestDebug("target cycle=%d target=%s clientAge=%d.", b.eChestDebugCycle, b.formatBlockPos(bp), b.mc.player.tickCount);
                 }
@@ -15784,6 +15814,13 @@ public class HighwayBuilderTHM extends Module {
                 // Check block state
                 BlockState blockState = b.mc.level.getBlockState(bp);
                 boolean chestVisible = blockState.is(Blocks.ENDER_CHEST);
+                boolean retryAbortedBreak = chestVisible && b.eChestBreakAborted;
+                b.eChestBreakAborted = false;
+                if (retryAbortedBreak) {
+                    primed = false;
+                    timeout = 0;
+                    nextSpeedmineRequest = 0;
+                }
                 if (chestVisible != b.eChestDebugLastObservedChest) {
                     b.eChestDebug(
                         "client-block-transition cycle=%d target=%s block=%s chestVisible=%s clientAge=%d sincePlaceMs=%d stopAttempts=%d.",
@@ -15804,6 +15841,15 @@ public class HighwayBuilderTHM extends Module {
                         if (screen.getMenu().containerId != b.syncId) return;
 
                         b.closeHandledScreen();
+                    }
+
+                    if (b.noSwapLoadout.get()) {
+                        if (b.noSwapShouldHoldTotem()) {
+                            b.restockWatchdog.pauseHeartbeat("echest-offhand-totem");
+                            return;
+                        }
+                        if (b.countLooseInventoryEnderChests() > b.enderChestMiningReserve()
+                            && !b.prepareEChestOffhand()) return;
                     }
 
                     // if we don't know what's in your echest, open it quickly while we have one available to check
@@ -15840,12 +15886,11 @@ public class HighwayBuilderTHM extends Module {
                     }
 
                     if (speedmineRebreakMode && Speedmine.INSTANCE != null) {
-                        if (!breakRequested) {
-                            b.info("MineEnderChests: requesting first break at %s", bp);
-                            Speedmine.INSTANCE.requestBreak(bp);
-                            breakRequested = true;
-                        } else {
-                            b.restockDebug("MineEnderChests: break already requested, Speedmine autoRebreak handles %s (isMining=%s)", bp, Speedmine.INSTANCE.isMining(bp));
+                        int tick = b.mc.player.tickCount;
+                        if (tick >= nextSpeedmineRequest && !Speedmine.INSTANCE.isMining(bp)) {
+                            b.restockDebug("MineEnderChests: requesting a fresh Speedmine break at %s.", bp);
+                            Speedmine.INSTANCE.requestFreshBreak(bp);
+                            nextSpeedmineRequest = tick + SPEEDMINE_RETRY_TICKS;
                         }
                     } else {
                         int selectedSlot = b.mc.player.getInventory().getSelectedSlot();
@@ -15923,7 +15968,9 @@ public class HighwayBuilderTHM extends Module {
                                 b.mc.player.tickCount
                             );
                             if (selectedSlot != slot) InvUtils.swap(slot, false);
-                            if (b.rotation.get().mine) Rotations.rotate(Rotations.getYaw(bp), Rotations.getPitch(bp), () -> BlockUtils.breakBlock(bp, true));
+                            if (retryAbortedBreak && Speedmine.INSTANCE != null && Speedmine.INSTANCE.interceptsManualBreak(bp)) {
+                                Speedmine.INSTANCE.requestFreshBreak(bp);
+                            } else if (b.rotation.get().mine) Rotations.rotate(Rotations.getYaw(bp), Rotations.getPitch(bp), () -> BlockUtils.breakBlock(bp, true));
                             else BlockUtils.breakBlock(bp, true);
                         }
                     }
@@ -15953,9 +16000,7 @@ public class HighwayBuilderTHM extends Module {
 
                     if (!first) primed = true;
 
-                    if (speedmineRebreakMode) {
-                        b.restockDebug("MineEnderChests: placing echest at %s (breakRequested=%s, primed=%s)", bp, breakRequested, primed);
-                    } else {
+                    if (!speedmineRebreakMode) {
                         timeout = 0;
                     }
                     int nextCycle = b.eChestDebugCycle + 1;
@@ -16053,8 +16098,6 @@ public class HighwayBuilderTHM extends Module {
         },
 
         KitbotOrder {
-            private static final int KITBOT_FAILSAFE_DELAY_TICKS = 200;
-            private static final int KITBOT_PARTIAL_DELIVERY_GRACE_TICKS = 40;
             private enum FailureMode {
                 KITBOT_LOCAL,
                 POST_DELIVERY_RESTORE
@@ -16088,8 +16131,6 @@ public class HighwayBuilderTHM extends Module {
                 }
 
                 positionReady = false;
-                b.kitbotSeenNearby = false;
-                b.kitbotDepartureWaitUntilAge = 0;
                 b.kitbotCollectUntilAge = 0;
                 b.clearKitbotCenteringRuntime("kitbot-order-start");
                 b.resetKitbotOrderCenterVerificationRuntime("kitbot-order-start");
@@ -16141,18 +16182,20 @@ public class HighwayBuilderTHM extends Module {
 
                 if (b.kitbotOrderInFlight) return;
 
-                if (b.isKitbotNearby()) b.kitbotSeenNearby = true;
-
-                if (b.kitbotOrderFrontendSucceeded && hasExpectedKitDelivery(b)) {
+                if (b.kitbotOrderFrontendSucceeded && hasExpectedKitDelivery(
+                    b.kitbotOrderBaselineShulkerCount, b.kitbotOrderExpectedShulkerGain, b.countKitbotProofUnitsForActiveRestock())) {
                     if (!isKitCollectionSettled(b)) return;
                     b.kitbotEnclosureRestorePending = true;
                     return;
                 }
 
+                b.kitbotCollectUntilAge = 0;
                 if (b.kitbotOrderFrontendSucceeded && System.currentTimeMillis() >= b.kitbotInventoryProofDeadlineMs) {
                     failKitbotOrder(
                         b,
-                        "Kitbot restock delivery arrived, but matching shulkers were not detected within 30 seconds.",
+                        String.format(Locale.ROOT, "KitBot delivery incomplete after 2 minutes: collected %d/%d matching shulkers.",
+                            Math.max(b.countKitbotProofUnitsForActiveRestock() - b.kitbotOrderBaselineShulkerCount, 0),
+                            b.kitbotOrderExpectedShulkerGain),
                         FailureMode.KITBOT_LOCAL
                     );
                 }
@@ -16539,12 +16582,9 @@ public class HighwayBuilderTHM extends Module {
                 if (b.kitbotOrderAcceptedAttempts == 0) {
                     b.kitbotOrderBaselineShulkerCount = baseline;
                     b.kitbotOrderExpectedShulkerGain = amount;
-                    b.kitbotOrderLastObservedMatchingShulkerCount = baseline;
-                    b.kitbotPartialDeliveryGraceUntilAge = 0;
                 }
 
                 b.kitbotOrderAcceptedAttempts++;
-                b.kitbotOrderSentAtAge = b.mc.player.tickCount;
                 b.kitbotOrderInFlight = true;
                 b.kitbotOrderFrontendSucceeded = false;
                 b.kitbotNextSubmitAtMs = 0L;
@@ -16569,77 +16609,10 @@ public class HighwayBuilderTHM extends Module {
                 }
             }
 
-            // Kits are delivered before KitBot1 walks off, and the last few land on the floor after
-            // the inventory proof already passed - breaking the enclosure right then leaves them
-            // behind. Hold the enclosure until the bot is gone, then a beat longer to sweep pickups.
             private boolean isKitCollectionSettled(HighwayBuilderTHM b) {
-                if (b.kitbotWaitUntilGone.get() && b.kitbotSeenNearby) {
-                    if (b.kitbotDepartureWaitUntilAge == 0) b.kitbotDepartureWaitUntilAge = b.mc.player.tickCount + KITBOT_DEPARTURE_WAIT_TICKS;
-
-                    if (b.isKitbotNearby() && b.mc.player.tickCount < b.kitbotDepartureWaitUntilAge) {
-                        b.kitbotCollectUntilAge = 0;
-                        return false;
-                    }
-                }
-
                 if (!b.kitbotCollectDelay.get()) return true;
                 if (b.kitbotCollectUntilAge == 0) b.kitbotCollectUntilAge = b.mc.player.tickCount + KITBOT_COLLECT_DELAY_TICKS;
                 return b.mc.player.tickCount >= b.kitbotCollectUntilAge;
-            }
-
-            private boolean hasExpectedKitDelivery(HighwayBuilderTHM b) {
-                int expectedGain = Math.max(b.kitbotOrderExpectedShulkerGain, 1);
-                int currentShulkerCount = b.countKitbotProofUnitsForActiveRestock();
-                int targetCount = b.kitbotOrderBaselineShulkerCount + expectedGain;
-                int failsafeGain = expectedGain == 1 ? 1 : expectedGain - 1;
-                int failsafeTarget = b.kitbotOrderBaselineShulkerCount + failsafeGain;
-                int ticksWaiting = Math.max(b.mc.player.tickCount - b.kitbotOrderSentAtAge, 0);
-                updatePartialDeliveryGrace(b, currentShulkerCount, targetCount);
-                boolean partialDeliveryGraceActive = currentShulkerCount < targetCount
-                    && b.kitbotPartialDeliveryGraceUntilAge > b.mc.player.tickCount;
-                boolean failsafeReady = !partialDeliveryGraceActive
-                    && currentShulkerCount >= failsafeTarget
-                    && ticksWaiting >= KITBOT_FAILSAFE_DELAY_TICKS;
-
-                if (b.restockDebugLog.get()) {
-                    b.restockDebug("KitbotOrder delivery progress: currentMatchingShulkers=%d target=%d baseline=%d expectedGain=%d failsafeTarget=%d ticksWaiting=%d/%d failsafeReady=%s partialGraceActive=%s partialGraceRemaining=%d.",
-                        currentShulkerCount,
-                        targetCount,
-                        b.kitbotOrderBaselineShulkerCount,
-                        expectedGain,
-                        failsafeTarget,
-                        ticksWaiting,
-                        KITBOT_FAILSAFE_DELAY_TICKS,
-                        failsafeReady,
-                        partialDeliveryGraceActive,
-                        Math.max(b.kitbotPartialDeliveryGraceUntilAge - b.mc.player.tickCount, 0)
-                    );
-                }
-
-                return currentShulkerCount >= targetCount || failsafeReady;
-            }
-
-            private void updatePartialDeliveryGrace(HighwayBuilderTHM b, int currentShulkerCount, int targetCount) {
-                if (currentShulkerCount >= targetCount) {
-                    b.kitbotOrderLastObservedMatchingShulkerCount = currentShulkerCount;
-                    b.kitbotPartialDeliveryGraceUntilAge = 0;
-                    return;
-                }
-
-                if (currentShulkerCount > b.kitbotOrderLastObservedMatchingShulkerCount) {
-                    b.kitbotOrderLastObservedMatchingShulkerCount = currentShulkerCount;
-                    b.restockWatchdog.markProgress("kitbot-proof-progress");
-                    if (currentShulkerCount > b.kitbotOrderBaselineShulkerCount) {
-                        b.kitbotPartialDeliveryGraceUntilAge = b.mc.player.tickCount + KITBOT_PARTIAL_DELIVERY_GRACE_TICKS;
-                        if (b.restockDebugLog.get()) {
-                            b.restockDebug("KitbotOrder extended partial-delivery grace after detecting %d/%d matching shulkers (grace=%d ticks).",
-                                currentShulkerCount - b.kitbotOrderBaselineShulkerCount,
-                                targetCount - b.kitbotOrderBaselineShulkerCount,
-                                KITBOT_PARTIAL_DELIVERY_GRACE_TICKS
-                            );
-                        }
-                    }
-                }
             }
 
             private int countMatchingRestockShulkersInInventory(HighwayBuilderTHM b) {
@@ -18992,6 +18965,7 @@ public class HighwayBuilderTHM extends Module {
             if (b.normalMining == null) {
                 DoubleMineBlock block = new DoubleMineBlock(b, blocks.pop());
                 b.normalMining = block.startDestroying();
+                if (b.packetCostsThisTick != null) b.minePacketsLeft -= b.packetCostsThisTick.dig();
 
                 b.breakTimer = b.breakDelay.get();
                 if (b.breakTimer > 0) return;
@@ -19005,6 +18979,7 @@ public class HighwayBuilderTHM extends Module {
                 if (block != null) {
                     b.packetMining = b.normalMining.packetMine();
                     b.normalMining = block.startDestroying();
+                    if (b.packetCostsThisTick != null) b.minePacketsLeft -= 2 * b.packetCostsThisTick.dig();
 
                     b.breakTimer = b.breakDelay.get();
                 }

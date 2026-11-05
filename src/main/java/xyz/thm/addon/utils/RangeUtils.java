@@ -26,6 +26,16 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
 public final class RangeUtils {
     private RangeUtils() {}
 
+    public static net.minecraft.world.phys.BlockHitResult clipSkipping(net.minecraft.world.level.BlockGetter world,
+        net.minecraft.world.level.ClipContext context, java.util.function.Predicate<BlockPos> skip) {
+        Vec3 from = context.getFrom(), to = context.getTo();
+        return net.minecraft.world.level.BlockGetter.traverseBlocks(from, to, context, (clip, pos) -> {
+            if (skip.test(pos)) return null;
+            var state = world.getBlockState(pos);
+            return state.isAir() ? null : world.clipWithInteractionOverride(from, to, pos, clip.getBlockShape(state, world, pos), state);
+        }, clip -> null);
+    }
+
     /** Nearest point on {@code pos}'s full cube to {@code from}. */
     public static Vec3 nearestPoint(BlockPos pos, Vec3 from) {
         return new Vec3(

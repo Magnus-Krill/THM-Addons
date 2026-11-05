@@ -24,22 +24,18 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.*;
 import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.block.state.BlockState;
-import xyz.thm.addon.mixin.accessor.ClientPlayerInteractionManagerTHMAccessor;
 import xyz.thm.addon.mixin.accessor.InputAccessor;
 import xyz.thm.addon.mixin.accessor.PlayerInventoryAccessor;
 import xyz.thm.addon.mixin.accessor.UpdateSelectedSlotS2CPacketAccessor;
 
 import java.util.Arrays;
-import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 import static meteordevelopment.meteorclient.MeteorClient.mc;
 import static meteordevelopment.meteorclient.utils.player.ChatUtils.info;
 
 public class InventoryManager {
     private static InventoryManager INSTANCE;
-    private final List<PreSwapData> swapData = new CopyOnWriteArrayList<>();
-    private int serverSlot = -1;
+    private volatile int serverSlot = -1;
     private boolean sendingPacket = false;
     private boolean isEating = false;
     private long lastSetbackTime = -1;
@@ -54,10 +50,6 @@ public class InventoryManager {
         public static final int SURROUND = 20;
         public static final int PEARL_PHASE = 30;
     }
-    private int lastSwapOriginalSlot = -1;
-    private int lastSwapBufferSlot = -1;
-    private int lastSwapOriginalServerSlot = -1;
-    private int lastSwapOriginalClientSlot = -1;
 
     private InventoryManager() {
         MeteorClient.EVENT_BUS.subscribe(this);
@@ -78,13 +70,19 @@ public class InventoryManager {
                 event.cancel();
                 return;
             }
-            serverSlot = packetSlot;
         }
+    }
+    @EventHandler
+    public void onPacketSent(PacketEvent.Sent event) {
+        if (mc.getConnection() != null && event.connection == mc.getConnection().getConnection()
+            && event.packet instanceof ServerboundSetCarriedItemPacket packet) serverSlot = packet.getSlot();
     }
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPacketReceive(PacketEvent.Receive event) {
         if (event.packet instanceof ClientboundSetHeldSlotPacket packet) {
-            serverSlot = ((UpdateSelectedSlotS2CPacketAccessor) (Object) packet).getSlot();
+            if (mc.getConnection() != null && event.connection == mc.getConnection().getConnection()) {
+                serverSlot = ((UpdateSelectedSlotS2CPacketAccessor) (Object) packet).getSlot();
+            }
         }
         else if (event.packet instanceof ClientboundPingPacket packet) {
             if (transactionIndex > 3) {
@@ -106,7 +104,6 @@ public class InventoryManager {
         if (mc.player != null && serverSlot == -1) {
             serverSlot = ((PlayerInventoryAccessor) mc.player.getInventory()).getSelectedSlot();
         }
-        swapData.removeIf(PreSwapData::isExpired);
         if (!isEating && currentPriority > Priority.NORMAL) {
             currentPriority = Priority.NORMAL;
         }
@@ -117,11 +114,6 @@ public class InventoryManager {
         sendingPacket = false;
         isEating = false;
         currentPriority = Priority.NORMAL;
-        swapData.clear();
-        lastSwapOriginalSlot = -1;
-        lastSwapBufferSlot = -1;
-        lastSwapOriginalServerSlot = -1;
-        lastSwapOriginalClientSlot = -1;
         Arrays.fill(transactions, -1);
         transactionIndex = 0;
         isGrim = false;
@@ -149,39 +141,24 @@ public class InventoryManager {
         setSlot(barSlot, highPriority ? Priority.SURROUND : Priority.NORMAL);
     }
     public void setSlot(final int barSlot, int priority) {
-        if (mc.player == null || mc.getConnection() == null) return;
-        if (priority < currentPriority) return;
-        if (serverSlot == -1) {
-            serverSlot = ((PlayerInventoryAccessor) mc.player.getInventory()).getSelectedSlot();
-        }
-        if (serverSlot != barSlot && Inventory.isHotbarSlot(barSlot)) {
-            setSlotForced(barSlot);
-            final ItemStack[] hotbarCopy = new ItemStack[9];
-            for (int i = 0; i < 9; i++) {
-                hotbarCopy[i] = mc.player.getInventory().getItem(i);
-            }
-            swapData.add(new PreSwapData(hotbarCopy, serverSlot, barSlot));
-            currentPriority = priority;
-        }
+        if (mc.player == null || mc.getConnection() == null || priority < currentPriority || !Inventory.isHotbarSlot(barSlot)) return;
+        setSlotForced(barSlot);
+        if (getServerSlot() == barSlot) currentPriority = priority;
     }
     public void setClientSlot(final int barSlot) {
         setClientSlot(barSlot, Priority.NORMAL);
     }
     public void setClientSlot(final int barSlot, int priority) {
-        if (mc.player == null) return;
-        if (priority < currentPriority) return;
-        if (((PlayerInventoryAccessor) mc.player.getInventory()).getSelectedSlot() != barSlot && Inventory.isHotbarSlot(barSlot)) {
-            ((PlayerInventoryAccessor) mc.player.getInventory()).setSelectedSlot( barSlot);
-            setSlotForced(barSlot);
-            currentPriority = priority;
-        }
+        if (mc.player == null || priority < currentPriority || !Inventory.isHotbarSlot(barSlot)) return;
+        mc.player.getInventory().setSelectedSlot(barSlot);
+        setSlotForced(barSlot);
+        if (getServerSlot() == barSlot) currentPriority = priority;
     }
     public void setSlotForced(final int barSlot) {
-        if (mc.getConnection() == null) return;
+        if (mc.getConnection() == null || !Inventory.isHotbarSlot(barSlot) || getServerSlot() == barSlot) return;
         sendingPacket = true;
         try {
             mc.getConnection().send(new ServerboundSetCarriedItemPacket(barSlot));
-            serverSlot = barSlot;
         } finally {
             sendingPacket = false;
         }
@@ -190,9 +167,6 @@ public class InventoryManager {
         if (mc.player == null) return;
         if (isDesynced()) {
             setSlotForced(((PlayerInventoryAccessor) mc.player.getInventory()).getSelectedSlot());
-            for (PreSwapData data : swapData) {
-                data.beginClear();
-            }
         }
     }
     public boolean isDesynced() {
@@ -331,116 +305,29 @@ public class InventoryManager {
         }
     }
 
-    /**
-     * Finds the item in inventory and swaps to it. Call {@link #swapBack} afterward to restore.
-     *
-     * @param item      item to search for (searches hotbar 0–8 if inventory=false, full 0–35 if true)
-     * @param silent    true = server-side only (held item on client is unchanged); false = client + server both update
-     * @param inventory true = uses SWAP-action into a buffer hotbar slot so the visually held item does not change;
-     *                  false = plain UpdateSelectedSlot (hotbar only)
-     */
-    public static void swapTo(Item item, boolean silent, boolean inventory) {
-        if (mc.player == null || mc.getConnection() == null) return;
-        int limit = inventory ? 36 : 9;
-        int slot = -1;
-        for (int i = 0; i < limit; i++) {
-            if (mc.player.getInventory().getItem(i).getItem() == item) {
-                slot = i;
-                break;
-            }
-        }
-        if (slot == -1) return;
-        swapTo(slot, silent, inventory);
+    public static boolean withItem(Object owner, int source, boolean silent, int priority, Runnable action) {
+        return withItem(owner, source, silent, priority, false, action);
     }
 
-    /**
-     * Swaps to the given inventory slot. Call {@link #swapBack} afterward to restore.
-     *
-     * For main-inventory slots (9–35) uses a single SlotActionType.SWAP packet — no cursor involved,
-     * one state-revision increment, and calling the same SWAP again in swapBack reverses it exactly.
-     *   silent=false (InventoryNormal)  → target = current client hotbar slot; held item visibly changes.
-     *   silent=true  (InventorySilent)  → target = buffer hotbar slot (8 or 7); held item does not change.
-     *
-     * @param slot      0–8 hotbar, 9–35 main inventory
-     * @param silent    true = server-side only (held item on client unchanged); false = client + server update
-     * @param inventory true = full-inventory SWAP; false = plain UpdateSelectedSlot (hotbar only)
-     */
-    public static void swapTo(int slot, boolean silent, boolean inventory) {
-        InventoryManager mgr = getInstance();
-        if (mc.player == null || mc.getConnection() == null) return;
-        mgr.lastSwapOriginalSlot = -1;
-
-        if (inventory) {
-            int clientSlot = ((PlayerInventoryAccessor) mc.player.getInventory()).getSelectedSlot();
-            mgr.lastSwapOriginalServerSlot = mgr.getServerSlot();
-            mgr.lastSwapOriginalClientSlot = clientSlot;
-
-            if (slot < 9) {
-                // Item is already in hotbar — just change selection, no inventory packets needed
-                mgr.lastSwapOriginalSlot = slot;
-                mgr.lastSwapBufferSlot = -1;
-                if (silent) {
-                    mgr.setSlotForced(slot);
-                } else {
-                    ((PlayerInventoryAccessor) mc.player.getInventory()).setSelectedSlot(slot);
-                    mgr.setSlotForced(slot);
-                }
-            } else {
-                // Silent: swap into buffer slot so the visually held item does not change.
-                // Normal: swap into the currently held slot so the item is visibly in hand.
-                int targetHotbar = silent ? (clientSlot == 8 ? 7 : 8) : clientSlot;
-                mgr.lastSwapOriginalSlot = slot;
-                mgr.lastSwapBufferSlot = targetHotbar;
-
-                // Single SWAP packet: swaps screen-handler slot `slot` with hotbar slot `targetHotbar` (0-8).
-                // Calling the same packet again in swapBack self-reverses the swap.
-                int syncId = mc.player.containerMenu.containerId;
-                mc.gameMode.handleContainerInput(syncId, slot, targetHotbar, ContainerInput.SWAP, mc.player);
-
-                if (silent) {
-                    mgr.setSlotForced(targetHotbar);
-                } else {
-                    ((PlayerInventoryAccessor) mc.player.getInventory()).setSelectedSlot(targetHotbar);
-                    mgr.setSlotForced(targetHotbar);
-                }
-            }
-        } else if (silent) {
-            mgr.setSlot(slot);
-        } else {
-            if (!Inventory.isHotbarSlot(slot)) return;
-            ((PlayerInventoryAccessor) mc.player.getInventory()).setSelectedSlot(slot);
-            mgr.setSlotForced(slot);
+    public static boolean withItem(Object owner, int source, boolean silent, int priority, boolean allowItemUse, Runnable action) {
+        if (mc.player == null || source < 0 || source >= 36) return false;
+        boolean staged = source >= 9;
+        int slot = staged ? DeepSwapManager.get().stage(owner, source, allowItemUse) : source;
+        if (slot < 0) return false;
+        try {
+            return SwapManager.get().withSlot(owner, slot, priority, silent, allowItemUse, action);
+        } finally {
+            if (staged) DeepSwapManager.get().restore(owner);
         }
     }
 
-    /**
-     * Restores the state saved by the last {@link #swapTo} call that used inventory=true.
-     * No-op if no inventory swap is pending.
-     *
-     * @param silent true = only restore server slot; false = restore client + server
-     */
-    public static void swapBack(boolean silent) {
-        InventoryManager mgr = getInstance();
-        if (mc.player == null || mc.getConnection() == null || mgr.lastSwapOriginalSlot == -1) return;
-
-        if (mgr.lastSwapBufferSlot != -1) {
-            // Same SWAP packet as swapTo — calling it again reverses the swap exactly.
-            int syncId = mc.player.containerMenu.containerId;
-            mc.gameMode.handleContainerInput(syncId, mgr.lastSwapOriginalSlot, mgr.lastSwapBufferSlot, ContainerInput.SWAP, mc.player);
-        }
-
-        if (silent) {
-            mgr.setSlotForced(mgr.lastSwapOriginalServerSlot);
-        } else {
-            ((PlayerInventoryAccessor) mc.player.getInventory()).setSelectedSlot(mgr.lastSwapOriginalClientSlot);
-            mgr.setSlotForced(mgr.lastSwapOriginalClientSlot);
-        }
-
-        mgr.lastSwapOriginalSlot = -1;
-        mgr.lastSwapBufferSlot = -1;
-        mgr.lastSwapOriginalServerSlot = -1;
-        mgr.lastSwapOriginalClientSlot = -1;
+    public static int clickBudget(int requested) {
+        var modules = meteordevelopment.meteorclient.systems.modules.Modules.get();
+        var limiter = modules == null ? null : modules.get(xyz.thm.addon.modules.PaketLimiter.class);
+        return limiter == null ? requested : Math.min(requested,
+            limiter.available(net.minecraft.network.protocol.game.GamePacketTypes.SERVERBOUND_CONTAINER_CLICK));
     }
+
     public static double getAttackSpeed(ItemStack weapon) {
         if (weapon.isEmpty()) return 4.0;
         Item item = weapon.getItem();
@@ -484,58 +371,9 @@ public class InventoryManager {
                mc.options.keyJump.isDown() ||
                mc.options.keyShift.isDown();
     }
-    public static class PreSwapData {
-        private final ItemStack[] preHotbar;
-        private final int starting;
-        private final int swapTo;
-        private long clearTime = -1;
-        public PreSwapData(ItemStack[] preHotbar, int start, int swapTo) {
-            this.preHotbar = preHotbar;
-            this.starting = start;
-            this.swapTo = swapTo;
-        }
-        public void beginClear() {
-            clearTime = System.currentTimeMillis();
-        }
-        public boolean isExpired() {
-            return clearTime != -1 && System.currentTimeMillis() - clearTime > 300;
-        }
-        public ItemStack getPreHolding(int i) {
-            return preHotbar[i];
-        }
-        public int getStarting() {
-            return starting;
-        }
-        public int getSlot() {
-            return swapTo;
-        }
-    }
-
-    /**
-     * Silently swaps to the best hotbar tool for {@code state}, runs {@code action},
-     * then swaps back — all via sequenced packets so the visual held item never changes.
-     *
-     * <pre>{@code
-     * BlockState state = mc.world.getBlockState(pos);
-     * Speedmine.INSTANCE.withSilentTool(state, () -> {
-     *     mc.interactionManager.sendSequencedPacket(mc.world, seq ->
-     *         new PlayerActionC2SPacket(STOP_DESTROY_BLOCK, pos, dir, seq));
-     * });
-     * }</pre>
-     */
     public void withSilentTool(BlockState state, Runnable action) {
-        if (mc.player == null) { action.run(); return; }
         int best = findBestHotbarSlot(state);
-        int prev = ((PlayerInventoryAccessor) mc.player.getInventory()).getSelectedSlot();
-        boolean swap = best != -1 && best != prev;
-        if (swap) sendSequencedUpdateSlot(best);
-        action.run();
-        if (swap) sendSequencedUpdateSlot(prev);
-    }
-    public void sendSequencedUpdateSlot(int slot) {
-        if (mc.gameMode == null || mc.level == null || slot < 0) return;
-        ((ClientPlayerInteractionManagerTHMAccessor) mc.gameMode)
-            .thm$sendSequencedPacket(mc.level, seq -> new ServerboundSetCarriedItemPacket(slot));
+        if (best >= 0) SwapManager.get().withSlot(this, best, SwapManager.MINING, true, action);
     }
 
     public int findBestHotbarSlot(BlockState state) {

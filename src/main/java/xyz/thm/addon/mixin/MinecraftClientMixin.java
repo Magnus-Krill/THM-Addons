@@ -21,6 +21,27 @@ import xyz.thm.addon.utils.StatsScreenshotChatGuard;
 
 @Mixin(Minecraft.class)
 public abstract class MinecraftClientMixin {
+    @Inject(method = "startUseItem", at = @At("HEAD"))
+    private void thm$restoreManualItem(CallbackInfo ci) {
+        xyz.thm.addon.utils.SwapManager.get().onUserAction();
+    }
+
+    @Inject(method = "startAttack", at = @At("HEAD"))
+    private void thm$restoreManualWeapon(org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Boolean> ci) {
+        Minecraft client = (Minecraft) (Object) this;
+        var miner = Modules.get().get(xyz.thm.addon.modules.Speedmine.class);
+        if (client.hitResult != null && client.hitResult.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK
+            && miner != null && miner.isActive()) return;
+        xyz.thm.addon.utils.SwapManager.get().onUserAction();
+    }
+
+    @com.llamalad7.mixinextras.injector.ModifyExpressionValue(method = "runTick", at = @At(value = "INVOKE",
+        target = "Lnet/minecraft/client/DeltaTracker$Timer;advanceGameTime(J)I"))
+    private int thm$paceCatchUp(int wanted) {
+        return xyz.thm.addon.modules.CatchUpPacing.limit(wanted,
+            (net.minecraft.client.DeltaTracker.Timer) ((Minecraft) (Object) this).getDeltaTracker());
+    }
+
 
     @Inject(method = "renderFrame", at = @At(value = "INVOKE",
         target = "Lnet/minecraft/client/renderer/GameRenderer;render(Lnet/minecraft/client/DeltaTracker;Z)V", shift = At.Shift.AFTER))

@@ -91,9 +91,8 @@ public abstract class EXPThrowerMixin extends Module {
 
         int slot = exp.slot();
         Rotations.rotate(mc.player.getYRot(), 90, () -> {
-            InventoryManager.swapTo(slot, false, true);
-            mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
-            InventoryManager.swapBack(false);
+            InventoryManager.withItem(this, slot, false, xyz.thm.addon.utils.SwapManager.WEAPON,
+                () -> mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND));
         });
     }
 

@@ -50,7 +50,6 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.mixin.accessor.ClientLevelPredictionAccessor;
 import xyz.thm.addon.mixin.accessor.ClientPlayerInteractionManagerTHMAccessor;
-import xyz.thm.addon.mixin.accessor.PlayerInventoryAccessor;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.utils.InventoryManager;
 import xyz.thm.addon.utils.PacketPlaceTracker;
@@ -510,30 +509,16 @@ public class Surround extends Module {
 
     private void sendPlacement(BlockHitResult hit, int slot) {
         InteractionHand hand = slot == 45 ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
-        InventoryManager inventory = InventoryManager.getInstance();
-        var playerInventory = (PlayerInventoryAccessor) mc.player.getInventory();
-        int previousClient = inventory.getClientSlot(), previousServer = inventory.getServerSlot();
-        int source = slot, buffer = previousClient == 8 ? 7 : 8;
-        boolean fromInventory = slot >= 9 && slot < 36;
-        if (fromInventory) {
-            mc.gameMode.handleContainerInput(mc.player.inventoryMenu.containerId, source, buffer, ContainerInput.SWAP, mc.player);
-            slot = buffer;
-        }
-        try {
-            if (hand == InteractionHand.MAIN_HAND) {
-                if (!placementMode.get().packet) playerInventory.setSelectedSlot(slot);
-                if (inventory.getServerSlot() != slot) inventory.setSlotForced(slot);
-            }
+        Runnable place = () -> {
             if (placementMode.get().packet) {
                 ((ClientPlayerInteractionManagerTHMAccessor) mc.gameMode).thm$sendSequencedPacket(world,
                     sequence -> new ServerboundUseItemOnPacket(hand, hit, sequence));
                 mc.player.swing(hand);
             } else BlockUtils.interact(hit, hand, true);
-        } finally {
-            playerInventory.setSelectedSlot(previousClient);
-            if (inventory.getServerSlot() != previousServer) inventory.setSlotForced(previousServer);
-            if (fromInventory) mc.gameMode.handleContainerInput(mc.player.inventoryMenu.containerId, source, buffer, ContainerInput.SWAP, mc.player);
-        }
+        };
+        if (hand == InteractionHand.OFF_HAND) place.run();
+        else InventoryManager.withItem(this, slot, placementMode.get().packet,
+            xyz.thm.addon.utils.SwapManager.SURROUND, multitask.get(), place);
     }
 
     /** Called on the client thread before vanilla applies an authoritative block update. */

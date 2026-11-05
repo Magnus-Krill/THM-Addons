@@ -56,10 +56,12 @@ Carried shulkers are checked before external restock sources. Exhausting loose e
 
 KitBot orders for ender chests or obsidian always check your inventory first. `EnderChestThenKitBot` also checks the ender chest bank before ordering. `KitBotThenEnderChest` skips the bank for these orders, including after a failed order.
 
+After KitBot confirms delivery, HighwayBuilder waits up to two minutes to collect every ordered shulker. Matching shulkers in the inventory, offhand, and cursor count toward the order. Once all are collected, it continues after the optional two-second `kitbot-collect-delay`. An incomplete delivery reports the collected and expected counts when the timeout expires.
+
 Restock cleanup keeps the held tool when another tool has the same mining score. Offhand and packet-build loadouts let the restock state control the main hand while containers are being removed.
 
 Offhand restocks keep their supplies through recovery instead of refilling with obsidian. Chest,
-totem and tool swaps work with a full inventory, including `minimum-empty-slots` set to `0`. EChest mining tops up the offhand at eight chests or fewer while keeping the configured reserve in inventory. Matching reserve stacks are merged when only the reserve remains. If there is no room to separate an existing offhand stack, normal placement respects the reserve and predictive replacement waits.
+totem and tool swaps work with a full inventory, including `minimum-empty-slots` set to `0`. EChest mining tops up the offhand at sixteen chests or fewer and prefers direct stack swaps while keeping the configured reserve in inventory. It clears leftover cursor stacks and prepares replacement supplies before breaking the current chest. Matching reserve stacks are merged when only the reserve remains. If there is no room to separate an existing offhand stack, normal placement respects the reserve and predictive replacement waits.
 
 Single EChest restocks use the same standing height as the enclosure and clear solid blocks above the lid before opening.
 

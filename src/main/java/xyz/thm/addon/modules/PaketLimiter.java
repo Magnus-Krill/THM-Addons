@@ -106,6 +106,17 @@ public class PaketLimiter extends Module {
             && alwaysBlock.get().contains(type);
     }
 
+    public int available(PacketType<?> type) {
+        if (!isActive() || limit.get() == 0 || type == GamePacketTypes.SERVERBOUND_SET_CARRIED_ITEM) return Integer.MAX_VALUE;
+        HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
+        if (builder != null && mc.getConnection() != null && builder.isChokeHoldingOrFlushing(mc.getConnection().getConnection())) return Integer.MAX_VALUE;
+        if (alwaysBlocks(type)) return 0;
+        if (bypass.get().contains(type)) return Integer.MAX_VALUE;
+        int maximum = limit.get();
+        if (allowBursts.get() && (tick == lastBurstTick || tick - lastBurstTick >= 20)) maximum = Math.max(maximum, burstLimit.get());
+        return Math.max(0, maximum - sentThisTick);
+    }
+
     @EventHandler
     private void onTick(TickEvent.Post event) {
         sentThisTick = 0;
