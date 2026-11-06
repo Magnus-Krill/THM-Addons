@@ -51,7 +51,8 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
  *     <li>{@link ServerState#MAIN_LOBBY}:
  *     ADVENTURE + {@code minecraft:overworld}.</li>
  *     <li>{@link ServerState#TRANSFER_SERVER}:
- *     ADVENTURE + {@code minecraft:the_end} without cracked-auth evidence, or SPECTATOR.</li>
+ *     ADVENTURE + {@code minecraft:the_end} without cracked-auth evidence, SPECTATOR,
+ *     or a system "sent you back to the backup server" notice on this connection.</li>
  *     <li>{@link ServerState#MAIN_SERVER}: SURVIVAL (dimension-agnostic).</li>
  *     <li>Otherwise {@link ServerState#UNKNOWN}.</li>
  * </ul>
@@ -149,6 +150,7 @@ public final class ServerStatusHandler {
     private long lastTransitionAtMs;
     private String lastEvidenceSummary = "no-evidence";
     private boolean crackedPromptSeenThisConnection;
+    private boolean backupNoticeSeenThisConnection;
     private boolean crackedPromptPosValid;
     private int crackedPromptX;
     private int crackedPromptY;
@@ -275,6 +277,7 @@ public final class ServerStatusHandler {
 
         // Spoof-hardening: only server/system messages may contribute cracked prompt evidence.
         if (!isSystemIndicator(event.getIndicator())) return;
+        if (isBackupServerNotice(lower)) backupNoticeSeenThisConnection = true;
         if (!isTrustedCrackedPrompt(lower, now)) return;
 
         crackedPromptSeenThisConnection = true;
@@ -296,6 +299,11 @@ public final class ServerStatusHandler {
         } catch (Throwable ignored) {
             return false;
         }
+    }
+
+    // 6b6t's backup server runs in SURVIVAL, so the gamemode alone reads as the main server.
+    static boolean isBackupServerNotice(String lowerMessage) {
+        return lowerMessage != null && lowerMessage.contains("sent you back to the backup server");
     }
 
     private boolean isTrustedCrackedPrompt(String lowerMessage, long nowMs) {
@@ -417,16 +425,28 @@ public final class ServerStatusHandler {
             }
         }
 
-        return scoreStrictEvidence(gm, dimensionId, crackedPromptSeenThisConnection, hasMetPostLoginTeleportGate());
+        return scoreStrictEvidence(gm, dimensionId, crackedPromptSeenThisConnection, hasMetPostLoginTeleportGate(),
+            backupNoticeSeenThisConnection);
     }
 
     static EvidenceScore scoreStrictEvidence(GameType gm, String dimensionId, boolean crackedPromptSeen, boolean postLoginTeleported) {
+        return scoreStrictEvidence(gm, dimensionId, crackedPromptSeen, postLoginTeleported, false);
+    }
+
+    static EvidenceScore scoreStrictEvidence(GameType gm, String dimensionId, boolean crackedPromptSeen, boolean postLoginTeleported,
+        boolean backupNoticeSeen) {
         EvidenceScore score = new EvidenceScore();
         if (gm == null) {
             score.reasons.add("strict:missing-player-list-gamemode");
             return score;
         }
         String gmSource = "player-list";
+
+        if (backupNoticeSeen) {
+            score.transfer = 100;
+            score.reasons.add("strict:backup-server-notice->transfer+gm-source:" + gmSource);
+            return score;
+        }
         boolean crackedAdventureEnd = gm == GameType.ADVENTURE && "minecraft:the_end".equals(dimensionId);
 
         if (crackedPromptSeen && crackedAdventureEnd && !postLoginTeleported) {
@@ -538,6 +558,7 @@ public final class ServerStatusHandler {
         lastEvidenceSummary = "scores[lobby=0,main=0,crackedLogin=0,cracked=0,transfer=0],reasons=forced-unknown:" + reason;
 
         crackedPromptSeenThisConnection = false;
+        backupNoticeSeenThisConnection = false;
         crackedPromptPosValid = false;
         crackedPromptX = 0;
         crackedPromptY = 0;

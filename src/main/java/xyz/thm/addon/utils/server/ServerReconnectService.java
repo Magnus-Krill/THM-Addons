@@ -180,7 +180,8 @@ public final class ServerReconnectService {
         void onReconnectFailure(long cycleId, FailureReason reason, String detail, String contextTag, long armedAtMs, long failedAtMs);
     }
 
-    private static final long PATH_PRE_COMMAND_DELAY_MS = 1_500L;
+    // Lobby portals ignore players for 5 s after login.
+    private static final long PATH_PRE_COMMAND_DELAY_MS = 5_000L;
     private static final long PATH_STAGE_TIMEOUT_MS = 180_000L;
     private static final long CRACKED_LOGIN_MISSING_PASSWORD_GRACE_MS = 5_000L;
     private static final long AWAITING_RECONNECT_DIAGNOSTIC_INTERVAL_MS = 1_000L;

@@ -22,6 +22,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import xyz.thm.addon.modules.BetterBaritoneBuild;
 
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -49,7 +50,10 @@ public abstract class BaritoneBuilderMixin {
     @Inject(method = "onTick", at = @At("HEAD"), cancellable = true)
     private void thm$stripLogs(CallbackInfoReturnable<PathingCommand> cir) {
         BetterBaritoneBuild module = BetterBaritoneBuild.get();
-        if (module != null && module.isActive() && module.stripNextLog((IBuilderProcess) this, ((IBuilderProcess) this).getApproxPlaceable())) {
+        if (module == null || !module.isActive()) return;
+        List<BlockState> placeable = thm$getApproxPlaceable();
+        // Substitutions need the list, so let Baritone fill it on its first tick.
+        if (placeable != null && module.stripNextLog((IBuilderProcess) this, placeable)) {
             BaritoneAPI.getProvider().getPrimaryBaritone().getInputOverrideHandler().clearAllKeys();
             cir.setReturnValue(new PathingCommand(null, baritone.api.process.PathingCommandType.REQUEST_PAUSE));
         }
@@ -71,6 +75,12 @@ public abstract class BaritoneBuilderMixin {
 
     private Vec3i thm$getOrigin() {
         return (Vec3i) thm$field(Vec3i.class, "origin");
+    }
+
+    // Null until the first onTick body runs; getApproxPlaceable() would throw.
+    @SuppressWarnings("unchecked")
+    private List<BlockState> thm$getApproxPlaceable() {
+        return (List<BlockState>) thm$field(List.class, "approxPlaceable");
     }
 
     private Object thm$field(Class<?> fieldType, String name) {
