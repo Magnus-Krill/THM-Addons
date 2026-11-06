@@ -921,6 +921,10 @@ public class THMHwyMonitor extends Module {
         pendingDisconnectScreenEvidenceCheck = false;
         pendingDisconnectScreenEvidenceUntilMs = 0L;
         resetForwardPacketDesyncEpisode("game-left");
+        HighwayBuilderTHM builderBeforeDisconnect = Modules.get().get(HighwayBuilderTHM.class);
+        boolean builderPausedForRecovery = recoveryModulesPaused && recoveryPausedModules.contains(builderBeforeDisconnect);
+        boolean builderWasActiveAtDisconnect = builderBeforeDisconnect != null &&
+            shouldResumeBuilderAfterDisconnect(builderBeforeDisconnect.isActive(), builderPausedForRecovery);
         abortActiveRecoveryForNonMainServer("game-left");
 
         if (intentionalSafetyDisconnectArmed) {
@@ -934,8 +938,6 @@ public class THMHwyMonitor extends Module {
             return;
         }
 
-        HighwayBuilderTHM builderBeforeDisconnect = Modules.get().get(HighwayBuilderTHM.class);
-        boolean builderWasActiveAtDisconnect = builderBeforeDisconnect != null && builderBeforeDisconnect.isActive();
         THMStashMover stashMoverBeforeDisconnect = Modules.get().get(THMStashMover.class);
         boolean stashMoverWasActiveAtDisconnect = stashMoverBeforeDisconnect != null
             && stashMoverBeforeDisconnect.isActive()
@@ -983,7 +985,7 @@ public class THMHwyMonitor extends Module {
         String restartEvidence = consumeRestartDisconnectEvidence();
 
         if (builderWasActiveAtDisconnect && reconnectAutomationEnabled()) {
-            if (!prepareFreshHighwayBuilderReconnect(builderBeforeDisconnect, "game-left")) return;
+            if (!prepareFreshHighwayBuilderReconnect(builderBeforeDisconnect, builderPausedForRecovery, "game-left")) return;
 
             if (restartEvidence != null) {
                 unresolvedMainServerDisconnectCandidate = false;
@@ -1125,8 +1127,12 @@ public class THMHwyMonitor extends Module {
         });
     }
 
-    private boolean prepareFreshHighwayBuilderReconnect(HighwayBuilderTHM builder, String source) {
-        if (builder == null || !builder.isActive() || !reconnectAutomationEnabled()) return false;
+    static boolean shouldResumeBuilderAfterDisconnect(boolean active, boolean monitorOwnsPause) {
+        return active || monitorOwnsPause;
+    }
+
+    private boolean prepareFreshHighwayBuilderReconnect(HighwayBuilderTHM builder, boolean monitorOwnsPause, String source) {
+        if (builder == null || !shouldResumeBuilderAfterDisconnect(builder.isActive(), monitorOwnsPause) || !reconnectAutomationEnabled()) return false;
 
         ServerReconnectService.ReconnectPreflight preflight = reconnectService().getReconnectPreflight();
         long cycleId;
@@ -1445,7 +1451,6 @@ public class THMHwyMonitor extends Module {
         }
 
         RecoveryCause recoveryCause = updateStallWatch(builder);
-        boolean stallRecoveryArmed = recoveryCause != RecoveryCause.None;
         boolean centerStallRecovery = recoveryCause == RecoveryCause.CenterStall;
 
         if (builder.shouldSuppressThmHwyMonitorRecovery(centerStallRecovery)) {
@@ -1465,8 +1470,8 @@ public class THMHwyMonitor extends Module {
 
         double yDelta = recoveryYDelta(mc.player.getY(), recoveryGoalY);
         boolean yAligned = Math.abs(yDelta) <= Y_ALIGNMENT_TOLERANCE;
-        boolean aligned = target != null && target.distance() <= WORKING_LINE_TOLERANCE && yAligned;
-        if (aligned && !stallRecoveryArmed) {
+        recoveryCause = selectRecoveryCause(recoveryCause, target == null ? Double.POSITIVE_INFINITY : target.distance(), yDelta, mc.player.onGround());
+        if (recoveryCause == RecoveryCause.None) {
             clearPendingAlignmentGateRequest();
             return;
         }
@@ -1512,8 +1517,7 @@ public class THMHwyMonitor extends Module {
 
             yDelta = recoveryYDelta(mc.player.getY(), recoveryGoalY);
             yAligned = Math.abs(yDelta) <= Y_ALIGNMENT_TOLERANCE;
-            aligned = target.distance() <= WORKING_LINE_TOLERANCE && yAligned;
-            if (aligned) {
+            if (selectRecoveryCause(RecoveryCause.None, target.distance(), yDelta, mc.player.onGround()) == RecoveryCause.None) {
                 clearPendingAlignmentGateRequest();
                 return;
             }
@@ -1728,6 +1732,12 @@ public class THMHwyMonitor extends Module {
             info("Paused recovery modules (THM HighwayBuilder / Timer / Speed) on %s %s (off by %.2f%s). Starting Baritone correction in 2.0s.",
                 target.highway(), target.direction(), target.distance(), yOffset);
         }
+    }
+
+    static RecoveryCause selectRecoveryCause(RecoveryCause stall, double horizontalError, double verticalError, boolean grounded) {
+        if (stall != RecoveryCause.None) return stall;
+        if (!grounded || horizontalError <= WORKING_LINE_TOLERANCE && Math.abs(verticalError) <= Y_ALIGNMENT_TOLERANCE) return RecoveryCause.None;
+        return RecoveryCause.Misalignment;
     }
 
     private RecoveryCause updateStallWatch(HighwayBuilderTHM builder) {
@@ -2553,6 +2563,7 @@ public class THMHwyMonitor extends Module {
 
         if (recoveryPhase == RecoveryPhase.None && !recoveryModulesPaused) return;
 
+        stopBaritoneForRecovery(getPrimaryBaritoneForRecovery());
         preserveHighwayBuilderDisabledAcrossRecoveryResume();
         resetRecoveryState();
         cooldownTicks = recoveryCooldown.get();
@@ -4269,7 +4280,7 @@ public class THMHwyMonitor extends Module {
         WaitBeforeResume
     }
 
-    private enum RecoveryCause {
+    enum RecoveryCause {
         None,
         Misalignment,
         ForwardStall,

@@ -16,6 +16,27 @@ import org.junit.jupiter.params.provider.CsvSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 class THMHwyMonitorTest {
+    @Test
+    void disconnectKeepsMonitorOwnedPauseButDoesNotResumeAnIdleBuilder() {
+        assertTrue(THMHwyMonitor.shouldResumeBuilderAfterDisconnect(true, false));
+        assertTrue(THMHwyMonitor.shouldResumeBuilderAfterDisconnect(false, true));
+        assertFalse(THMHwyMonitor.shouldResumeBuilderAfterDisconnect(false, false));
+    }
+
+    @Test
+    void groundedMisalignmentUsesTheSafetyGatedRecoveryCause() {
+        var none = THMHwyMonitor.RecoveryCause.None;
+        var misalignment = THMHwyMonitor.RecoveryCause.Misalignment;
+        assertEquals(misalignment, THMHwyMonitor.selectRecoveryCause(none, 7.78, 99.94, true));
+        assertEquals(misalignment, THMHwyMonitor.selectRecoveryCause(none, 0, 0.77, true));
+        assertEquals(none, THMHwyMonitor.selectRecoveryCause(none, 0, 0.39, true));
+        assertEquals(none, THMHwyMonitor.selectRecoveryCause(none, 0, 0.77, false));
+        assertEquals(THMHwyMonitor.RecoveryCause.CenterStall,
+            THMHwyMonitor.selectRecoveryCause(THMHwyMonitor.RecoveryCause.CenterStall, 0, 0, false));
+        assertEquals(THMHwyMonitor.RecoveryCause.ForwardStall,
+            THMHwyMonitor.selectRecoveryCause(THMHwyMonitor.RecoveryCause.ForwardStall, 0, 0, true));
+    }
+
     @ParameterizedTest
     @CsvSource({"1,0", "-1,0", "0,1", "0,-1", "1,1", "1,-1", "-1,1", "-1,-1"})
     void retreatClearsServerTrackingAndReturnsWithinTheOriginalDistance(int dx, int dz) {

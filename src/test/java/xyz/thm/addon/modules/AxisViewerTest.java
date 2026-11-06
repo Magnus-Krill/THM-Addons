@@ -13,6 +13,28 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class AxisViewerTest {
     @Test
+    void periodicAlignmentKeepsTheWorkingDirectionAtIntersectionsAndEndpoints() {
+        for (var direction : HorizontalDirection.values()) {
+            var alignment = AxisViewer.nearestStartAlignment(0.5, 0.5, direction.opposite().yaw, true, true, direction);
+            assertNotNull(alignment);
+            assertEquals(direction, alignment.direction());
+        }
+        var edge = AxisViewer.nearestStartAlignment(125008.0, 50000.7, 90, true, true, HorizontalDirection.East);
+        assertEquals(HorizontalDirection.East, edge.direction());
+        assertEquals(125000, edge.x());
+    }
+
+    @Test
+    void alignmentChecksLateralDriftRatherThanNormalForwardMovement() {
+        var cardinal = new AxisViewer.StartAlignment(0, 0, HorizontalDirection.South);
+        assertEquals(0, cardinal.crossTrackDistance(0.5, 123.8));
+        assertEquals(0.6, cardinal.crossTrackDistance(1.1, 123.8), 1e-9);
+        var diagonal = new AxisViewer.StartAlignment(0, 0, HorizontalDirection.SouthEast);
+        assertEquals(0, diagonal.crossTrackDistance(50.9, 50.9));
+        assertEquals(Math.sqrt(0.5), diagonal.crossTrackDistance(51.9, 50.9), 1e-9);
+    }
+
+    @Test
     void startupAlignmentPicksABlockCenterAndFollowsThePlayersFacing() {
         assertEquals(new AxisViewer.StartAlignment(0, 90, HorizontalDirection.North),
             AxisViewer.nearestStartAlignment(2.8, 90.1, 175, false, true));
@@ -48,12 +70,16 @@ class AxisViewerTest {
             for (int sign : new int[] {-1, 1}) {
                 assertTrue(AxisViewer.isOnHighway(sign * radius + 0.5, radius * 0.37 + 0.5, true));
                 assertTrue(AxisViewer.isOnHighway(radius * 0.37 + 0.5, sign * radius + 0.5, true));
+                assertEquals("ring", AxisViewer.highwayType(sign * radius + 0.5, radius * 0.37 + 0.5, true, HorizontalDirection.North));
+                assertEquals("ring", AxisViewer.highwayType(radius * 0.37 + 0.5, sign * radius + 0.5, true, HorizontalDirection.East));
             }
         }
         for (int radius : AxisViewer.DIAMONDS) {
             for (int sx : new int[] {-1, 1}) {
                 for (int sz : new int[] {-1, 1}) {
                     assertTrue(AxisViewer.isOnHighway(sx * radius * 0.37 + 0.5, sz * radius * 0.63 + 0.5, true));
+                    assertEquals("diamond", AxisViewer.highwayType(sx * radius * 0.37 + 0.5, sz * radius * 0.63 + 0.5, true,
+                        sx == sz ? HorizontalDirection.NorthEast : HorizontalDirection.SouthEast));
                 }
             }
         }
@@ -75,6 +101,35 @@ class AxisViewerTest {
         assertFalse(AxisViewer.isOnHighway(62500.5, 23123.5, false), "rings are Nether-only");
         assertFalse(AxisViewer.isOnHighway(Double.NaN, 0.5, true));
         assertFalse(AxisViewer.isOnHighway(Double.POSITIVE_INFINITY, 0.5, true));
+    }
+
+    @Test
+    void roadTypesKeepMainRingDiamondAndOtherSeparateFromOfficialEligibility() {
+        for (int sx : new int[] {-1, 1}) {
+            for (int sz : new int[] {-1, 1}) {
+                assertEquals("main", AxisViewer.highwayType(sx * 15000 + 0.5, sz * 15000 + 0.5, true, sx == sz ? HorizontalDirection.SouthEast : HorizontalDirection.SouthWest));
+                assertEquals("ring", AxisViewer.highwayType(sx * 62500 + 0.5, sz * 23123 + 0.5, true, HorizontalDirection.North));
+                assertEquals("diamond", AxisViewer.highwayType(sx * 370 + 0.5, sz * 630 + 0.5, true, sx == sz ? HorizontalDirection.NorthEast : HorizontalDirection.SouthEast));
+                assertEquals("other", AxisViewer.highwayType(sx * 5000 + 0.5, sz * 42123 + 0.5, true, HorizontalDirection.North));
+                assertEquals("other", AxisViewer.highwayType(sx * 54321 + 0.5, sz * 12345 + 0.5, true, HorizontalDirection.North));
+            }
+        }
+        assertTrue(AxisViewer.isOnHighway(5000.5, 42123.5, true), "other includes official grid roads");
+        assertFalse(AxisViewer.isOnHighway(54321.5, 12345.5, true), "other also includes unofficial roads");
+        assertEquals("main", AxisViewer.highwayType(0.5, 62500.5, true, HorizontalDirection.North), "main wins at road intersections");
+        assertEquals("ring", AxisViewer.highwayType(0.5, 62500.5, true, HorizontalDirection.East), "ring crossing a main axis");
+        assertEquals("ring", AxisViewer.highwayType(62500.5, 62500.5, true, HorizontalDirection.North), "ring crossing a main diagonal");
+        assertEquals("main", AxisViewer.highwayType(62500.5, 62500.5, true, HorizontalDirection.SouthEast));
+        assertEquals("diamond", AxisViewer.highwayType(0.5, 1000.5, true, HorizontalDirection.NorthEast), "diamond vertex on a main axis");
+        assertEquals("diamond", AxisViewer.highwayType(500.5, 500.5, true, HorizontalDirection.NorthEast), "diamond crossing a ring and main diagonal");
+        assertEquals("other", AxisViewer.highwayType(370.5, 630.5, true, HorizontalDirection.SouthEast), "crossing a diamond is not building along it");
+        assertEquals("other", AxisViewer.highwayType(62500.5, 23123.5, true, null));
+        assertEquals("other", AxisViewer.highwayType(62500.5, 23123.5, false, HorizontalDirection.North));
+        assertEquals("ring", AxisViewer.highwayType(62504.5, 23123.5, true, HorizontalDirection.North));
+        assertEquals("other", AxisViewer.highwayType(62506.5, 23123.5, true, HorizontalDirection.North));
+        assertEquals("other", AxisViewer.highwayType(Double.NaN, 0.5, true, HorizontalDirection.North));
+        assertEquals("other", AxisViewer.highwayType(Double.POSITIVE_INFINITY, 0.5, true, HorizontalDirection.North));
+        assertEquals("other", AxisViewer.highwayType(30000005.5, 0.5, true, HorizontalDirection.North));
     }
 
     @Test

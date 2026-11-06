@@ -10,6 +10,8 @@ import meteordevelopment.meteorclient.utils.misc.HorizontalDirection;
 import meteordevelopment.meteorclient.utils.player.SlotUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
 import net.minecraft.network.protocol.game.GamePacketTypes;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.phys.Vec3;
@@ -22,6 +24,33 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class HighwayBuilderTHMTest {
     @Test
+    void legacyAlignmentPreferenceMigratesWithoutChangingTheSavedPreset() {
+        CompoundTag legacy = new CompoundTag();
+        legacy.putString("name", "align-first");
+        legacy.putBoolean("value", false);
+        ListTag values = new ListTag();
+        values.add(legacy);
+        CompoundTag group = new CompoundTag();
+        group.putString("name", "General");
+        group.put("settings", values);
+        ListTag groups = new ListTag();
+        groups.add(group);
+        CompoundTag source = new CompoundTag();
+        source.put("groups", groups);
+        CompoundTag migrated = HighwayBuilderTHM.migrateAlignmentSettings(source);
+        var setting = ((CompoundTag) migrated.getListOrEmpty("groups").get(0)).getListOrEmpty("settings").get(0).asCompound().orElseThrow();
+        assertEquals("auto-align", setting.getStringOr("name", ""));
+        assertFalse(setting.getBooleanOr("value", true));
+        assertEquals("align-first", legacy.getStringOr("name", ""));
+        assertSame(migrated, HighwayBuilderTHM.migrateAlignmentSettings(migrated));
+        CompoundTag current = legacy.copy();
+        current.putString("name", "auto-align");
+        current.putBoolean("value", true);
+        values.add(current);
+        assertSame(source, HighwayBuilderTHM.migrateAlignmentSettings(source));
+    }
+
+    @Test
     void kitbotDeliveryRequiresTheEntireOrderAboveExistingStock() {
         assertFalse(HighwayBuilderTHM.hasExpectedKitDelivery(10, 6, 15));
         assertTrue(HighwayBuilderTHM.hasExpectedKitDelivery(10, 6, 16));
@@ -32,24 +61,40 @@ class HighwayBuilderTHMTest {
     }
 
     @Test
+    void disablingPacketBudgetDoesNotAllocateOrFilterAnyPackets() {
+        assertNull(HighwayBuilderTHM.packetBudgetCosts(false, 4, true, true, 100, Integer.MAX_VALUE,
+            type -> { throw new AssertionError("Disabled budgeting must not inspect the limiter."); }));
+    }
+
+    @Test
+    void unusedMiningReservationCanSupplyEighteenPlacementsInTheSameTick() {
+        var blocked = Set.of(GamePacketTypes.SERVERBOUND_SWING);
+        var costs = HighwayBuilderTHM.packetBudgetCosts(true, 23, false, false, 11, Integer.MAX_VALUE, blocked::contains);
+        assertEquals(0, costs.plan(false, 11, Integer.MAX_VALUE).place());
+        int remainingAfterTwoMines = costs.available() - 2 * costs.mine(false);
+        assertEquals(18, costs.placements(remainingAfterTwoMines));
+        assertTrue(2 * costs.mine(false) + 18 * (costs.use() + costs.swing()) <= costs.available());
+    }
+
+    @Test
     void diggingBudgetOnlyChargesForSwingsThatCanBeSent() {
         var alwaysBlocked = Set.of(GamePacketTypes.SERVERBOUND_SWING, GamePacketTypes.SERVERBOUND_CLIENT_TICK_END);
-        assertEquals(6, HighwayBuilderTHM.packetBudgetCosts(23, true, false, 20, 0, type -> false).plan(false, 20, 0).mine());
-        assertEquals(10, HighwayBuilderTHM.packetBudgetCosts(23, true, false, 20, 0, alwaysBlocked::contains).plan(false, 20, 0).mine());
+        assertEquals(6, HighwayBuilderTHM.packetBudgetCosts(true, 23, true, false, 20, 0, type -> false).plan(false, 20, 0).mine());
+        assertEquals(10, HighwayBuilderTHM.packetBudgetCosts(true, 23, true, false, 20, 0, alwaysBlocked::contains).plan(false, 20, 0).mine());
     }
 
     @Test
     void offhandLoadoutUsesTheTwoPacketsOtherwiseReservedForSilentSwaps() {
         var alwaysBlocked = Set.of(GamePacketTypes.SERVERBOUND_SWING);
-        assertEquals(11, HighwayBuilderTHM.packetBudgetCosts(23, false, true, 20, 0, alwaysBlocked::contains).plan(false, 20, 0).mine());
-        assertEquals(22, HighwayBuilderTHM.packetBudgetCosts(23, true, false, 0, 25, alwaysBlocked::contains).plan(false, 0, 25).place());
-        assertEquals(20, HighwayBuilderTHM.packetBudgetCosts(23, false, true, 0, 25, alwaysBlocked::contains).plan(false, 0, 25).place());
+        assertEquals(11, HighwayBuilderTHM.packetBudgetCosts(true, 23, false, true, 20, 0, alwaysBlocked::contains).plan(false, 20, 0).mine());
+        assertEquals(22, HighwayBuilderTHM.packetBudgetCosts(true, 23, true, false, 0, 25, alwaysBlocked::contains).plan(false, 0, 25).place());
+        assertEquals(20, HighwayBuilderTHM.packetBudgetCosts(true, 23, false, true, 0, 25, alwaysBlocked::contains).plan(false, 0, 25).place());
     }
 
     @Test
     void packetBudgetExcludesBlockedDigAndPlacePackets() {
         var alwaysBlocked = Set.of(GamePacketTypes.SERVERBOUND_PLAYER_ACTION, GamePacketTypes.SERVERBOUND_USE_ITEM_ON);
-        var plan = HighwayBuilderTHM.packetBudgetCosts(7, false, false, 2, 3, alwaysBlocked::contains).plan(false, 2, 3);
+        var plan = HighwayBuilderTHM.packetBudgetCosts(true, 7, false, false, 2, 3, alwaysBlocked::contains).plan(false, 2, 3);
         assertEquals(2, plan.mine());
         assertEquals(3, plan.place());
     }
@@ -57,7 +102,7 @@ class HighwayBuilderTHMTest {
     @Test
     void instantMiningOnlySpendsOneDigPacketAndLeavesRoomForMixedWork() {
         var blocked = Set.of(GamePacketTypes.SERVERBOUND_SWING);
-        var costs = HighwayBuilderTHM.packetBudgetCosts(23, false, false, 22, 10, blocked::contains);
+        var costs = HighwayBuilderTHM.packetBudgetCosts(true, 23, false, false, 22, 10, blocked::contains);
         assertEquals(22, costs.plan(true, 22, 10).mine());
         assertEquals(11, costs.plan(false, 22, 10).mine());
         assertEquals(3, costs.placements(costs.available() - 15 * costs.mine(true) - 2 * costs.mine(false)));
@@ -66,14 +111,26 @@ class HighwayBuilderTHMTest {
     @Test
     void packetAirPlaceClicksTheTargetOnTheNearestHorizontalFace() {
         BlockPos target = new BlockPos(5, 120, -2);
-        var west = HighwayBuilderTHM.packetAirPlaceHit(target, new Vec3(1, 126, -1.5));
+        var west = HighwayBuilderTHM.packetAirPlaceHit(target, new Vec3(1, 126, -1.5), false);
         assertEquals(target, west.getBlockPos());
         assertEquals(Direction.WEST, west.getDirection());
         assertEquals(new Vec3(5, 120.5, -1.5), west.getLocation());
-        var south = HighwayBuilderTHM.packetAirPlaceHit(target, new Vec3(6, 126, 4));
+        var south = HighwayBuilderTHM.packetAirPlaceHit(target, new Vec3(6, 126, 4), false);
         assertEquals(target, south.getBlockPos());
         assertEquals(Direction.SOUTH, south.getDirection());
         assertEquals(new Vec3(5.5, 120.5, -1), south.getLocation());
+    }
+
+    @Test
+    void legacyPacketAirPlaceClicksTheTargetCenterWithTheUpFace() {
+        BlockPos target = new BlockPos(5, 120, -2);
+        for (Vec3 eye : List.of(new Vec3(1, 126, -1.5), new Vec3(6, 126, 4))) {
+            var hit = HighwayBuilderTHM.packetAirPlaceHit(target, eye, true);
+            assertEquals(target, hit.getBlockPos());
+            assertEquals(Direction.UP, hit.getDirection());
+            assertEquals(Vec3.atCenterOf(target), hit.getLocation());
+            assertFalse(hit.isInside());
+        }
     }
 
     @Test
@@ -258,8 +315,8 @@ class HighwayBuilderTHMTest {
     @Test
     void pausedReturnRequiresTheSavedHeightAndPositionBeforeResuming() {
         var pause = new HighwayBuilderTHM.ManualPause(new Vec3(-16.9, 119.875, 23.9),
-            HorizontalDirection.North, 20, "test", "minecraft:the_nether", false, true);
-        assertFalse(pause.mainHighway());
+            HorizontalDirection.North, 20, "test", "minecraft:the_nether", true, "ring");
+        assertEquals("ring", pause.roadType(), "a paused build keeps its road type away from the build position");
         assertTrue(pause.mappedHighway(), "a paused ring-road build keeps its network eligibility");
         assertTrue(pause.arrived(pause.position()));
         assertTrue(pause.arrived(new Vec3(-16.5, 120, 23.5)));

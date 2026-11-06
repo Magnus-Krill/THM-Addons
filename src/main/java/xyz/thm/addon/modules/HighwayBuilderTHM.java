@@ -76,6 +76,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
@@ -720,9 +721,9 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
-    private final Setting<Boolean> alignFirst = sgGeneral.add(new BoolSetting.Builder()
-        .name("align-first")
-        .description("Aligns to the nearest mapped highway before building.")
+    private final Setting<Boolean> autoAlign = sgGeneral.add(new BoolSetting.Builder()
+        .name("auto-align")
+        .description("Aligns to mapped highways before and during building.")
         .defaultValue(true)
         .build()
     );
@@ -1178,6 +1179,14 @@ public class HighwayBuilderTHM extends Module {
         .description("When to air-place in Packet Build mode: never, only when needed, or always.")
         .defaultValue(AirPlaceMode.Smart)
         .visible(packetBuild::get)
+        .build()
+    );
+
+    private final Setting<Boolean> legacyAirPlace = sgPaving.add(new BoolSetting.Builder()
+        .name("legacy-air-place")
+        .description("Uses the 1.21.11 airplace click position and face.")
+        .defaultValue(false)
+        .visible(() -> packetBuild.get() && packetBuildAirPlace.get() != AirPlaceMode.Never)
         .build()
     );
 
@@ -1992,6 +2001,8 @@ public class HighwayBuilderTHM extends Module {
     private BlockPos pendingCenterTargetBlock;
     private BlockPos initialAlignmentTarget;
     private Level initialAlignmentLevel;
+    private boolean alignmentStartsSession;
+    private int autoAlignCheckTicks;
     private BlockPos activeCenterTargetBlock;
     private int centerTeleportInvalidLogCooldownTicks;
     private boolean centerTeleportBlockedForMonitor;
@@ -2431,8 +2442,9 @@ public class HighwayBuilderTHM extends Module {
         }
 
         ManualPause saved = new ManualPause(mc.player.position(), dir, mc.player.getXRot(),
-            Utils.getWorldName(), mc.level.dimension().identifier().toString(), isOnMainHighway(),
-            AxisViewer.isOnHighway(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER));
+            Utils.getWorldName(), mc.level.dimension().identifier().toString(),
+            AxisViewer.isOnHighway(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER),
+            AxisViewer.highwayType(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER, dir));
         resumeStatsSessionOnNextActivate = true;
         // Travel handoffs already release controls without finalizing statistics.
         travelHandoffDeactivateArmed = true;
@@ -2515,7 +2527,7 @@ public class HighwayBuilderTHM extends Module {
     }
 
     record ManualPause(Vec3 position, HorizontalDirection direction, float pitch, String world, String dimension,
-                       boolean mainHighway, boolean mappedHighway) {
+                       boolean mappedHighway, String roadType) {
         boolean arrived(Vec3 current) {
             double dx = current.x - position.x;
             double dz = current.z - position.z;
@@ -2722,14 +2734,16 @@ public class HighwayBuilderTHM extends Module {
         String axis = dir.toString();
 
         String mode = apiModeSuffix(THMSystem.get().getMode());
-        String statusMessage = String.format("%s:%s:%s:%d:%d:%s%s",
+        String statusMessage = String.format("%s:%s:%s:%d:%d:%s%s:official=%s:road=%s",
             THMSystem.get().getApiToken(),
             playerName,
             axis,
             blocksBroken,
             blocksPlaced,
             generateTimestamp(),
-            mode
+            mode,
+            AxisViewer.isOnHighway(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER),
+            AxisViewer.highwayType(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER, dir)
         );
 
         sendStatus(statusMessage);
@@ -3025,12 +3039,14 @@ public class HighwayBuilderTHM extends Module {
         updateSignBreakRegex();
         initialAlignmentTarget = null;
         initialAlignmentLevel = null;
+        alignmentStartsSession = false;
+        autoAlignCheckTicks = 0;
         HorizontalDirection activationDirection;
         if (reconnectActivation) {
             activationWorkingDirectionSource = "reconnect-locked";
             activationDirection = reconnectResume.direction();
         } else {
-            AxisViewer.StartAlignment alignment = alignFirst.get() && !resumeStatsSessionOnNextActivate
+            AxisViewer.StartAlignment alignment = autoAlign.get() && !resumeStatsSessionOnNextActivate
                 && !isResumableStatsSession(statsCacheSnapshot)
                 ? AxisViewer.nearestStartAlignment(mc.player.getX(), mc.player.getZ(), mc.player.getYRot(),
                     mc.level.dimension() == Level.NETHER, width.get() >= 3)
@@ -3038,6 +3054,7 @@ public class HighwayBuilderTHM extends Module {
             if (alignment != null) {
                 initialAlignmentTarget = new BlockPos(alignment.x(), mc.player.blockPosition().getY(), alignment.z());
                 initialAlignmentLevel = mc.level;
+                alignmentStartsSession = true;
                 activationWorkingDirectionSource = "axis-viewer";
                 activationDirection = alignment.direction();
             } else {
@@ -3079,7 +3096,7 @@ public class HighwayBuilderTHM extends Module {
             markArtifactConsumed(statsCacheSnapshot);
         }
 
-        if (initialAlignmentTarget != null) setState(State.AlignFirst);
+        if (initialAlignmentTarget != null) setState(State.AutoAlign);
         else {
             if (!reconnectActivation) setState(State.Center);
             if (!resumedStatsSession) startFreshStatsSession();
@@ -3135,7 +3152,7 @@ public class HighwayBuilderTHM extends Module {
         if (speedMineBlocksFilter != null
             && speedMineBlocksFilter.get() == ListMode.Blacklist
             && speedMineBlocks != null
-            && speedMineBlocks.get().contains(Blocks.NETHERRACK)) {
+            && !speedMineBlocks.get().contains(Blocks.NETHERRACK)) {
             warning("It's recommended to add Netherrack to the blacklist in Speed Mine (Ignore if you let highway builder manage it)");
         }
         if (Modules.get().get(Speed.class).isActive() && dir.diagonal)
@@ -4978,6 +4995,7 @@ public class HighwayBuilderTHM extends Module {
         if (generation <= 0L) return false;
         if (!hasCapturedReconnectBaselineLease(generation)) {
             if (reconnectBaselineLease != null && reconnectBaselineLease.generation() == generation) return false;
+            if (centerSpeedOverrideActive) restoreCenterSpeedIfOwned("monitor-reconnect-pause-prep");
             if (centerSpeedOverrideActive) return false;
             // Otherwise a mid-mining Timer boost gets captured as "normal" and never turns off after resume.
             restoreEChestBreakSpeedIfOwned("monitor-reconnect-pause-prep");
@@ -5270,6 +5288,9 @@ public class HighwayBuilderTHM extends Module {
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
+        packetCostsThisTick = null;
+        minePacketsLeft = 0;
+        minePacketAttempted = false;
         tickPacketChoke();
         if (mc.player == null || mc.level == null) return;
         long rateNow = System.nanoTime();
@@ -5338,7 +5359,8 @@ public class HighwayBuilderTHM extends Module {
         if (useThmSpeed.get() || thmSpeedOwnershipActive || thmSpeedSnapshot != null) syncThmSpeedOwnership("tick");
         tickDeferredCenterSpeedRestore();
         updateTpsActionThrottle();
-        if (state == State.AlignFirst) {
+        if (!shouldPauseForTpsThrottle()) tickAutoAlignment();
+        if (state == State.AutoAlign) {
             if (shouldPauseForTpsThrottle()) handleTpsThrottlePauseTick();
             else state.tick(this);
             return;
@@ -5436,6 +5458,7 @@ public class HighwayBuilderTHM extends Module {
             if (placeTimer > 0) placeTimer--;
             return;
         }
+        applyPacketBudget();
         tickPacketBorer();
         tickDoubleMine();
         accrueEnclosurePlaceCredit();
@@ -5446,7 +5469,6 @@ public class HighwayBuilderTHM extends Module {
         tickHotbarSupplies();
         tickNoSwapLoadout();
         tickPacketBuildMainHandObby();
-        applyPacketBudget();
         boolean restockWatchdogOwnedTick = restockWatchdog.tickBeforeState();
         if (!restockWatchdogOwnedTick) {
             // Double mine and fall-save can already have worked this tick; that counts as repair work too.
@@ -5564,7 +5586,7 @@ public class HighwayBuilderTHM extends Module {
 
     private double currentThmForwardSpeedPerTick() {
         double speed = highwaySpeed.get();
-        if (state == State.AlignFirst) speed = Math.min(speed, 2.5);
+        if (state == State.AutoAlign) speed = Math.min(speed, 2.5);
         if (state == State.Center && centerMode.get() == CenterMode.Walk) speed = Math.min(speed, CENTER_SPEED_OVERRIDE);
         if (state == State.Center && centerMode.get() == CenterMode.Teleport && centerTeleportSlowdownActive) {
             speed *= THM_CENTER_TELEPORT_SLOWDOWN_MULTIPLIER;
@@ -6502,6 +6524,70 @@ public class HighwayBuilderTHM extends Module {
         if (mc.player != null && mc.gui.screen() != null) mc.player.closeContainer();
     }
 
+    private void tickAutoAlignment() {
+        if (!autoAlign.get() || state != State.Forward || suspended || shouldSuppressThmHwyMonitorRecovery(false)
+            || !mc.player.onGround() || dir == null) {
+            autoAlignCheckTicks = 0;
+            return;
+        }
+        if (++autoAlignCheckTicks < 20) return;
+        autoAlignCheckTicks = 0;
+        AxisViewer.StartAlignment alignment = AxisViewer.nearestStartAlignment(mc.player.getX(), mc.player.getZ(),
+            dir.yaw, mc.level.dimension() == Level.NETHER, dir.diagonal, dir);
+        if (alignment == null || alignment.crossTrackDistance(mc.player.getX(), mc.player.getZ()) <= 0.4) return;
+        BlockPos target = new BlockPos(alignment.x(), mc.player.blockPosition().getY(), alignment.z());
+        if (centerTeleportHorizontalDistance(target) > START_ALIGNMENT_MAX_DISTANCE || !canWalkInitialAlignmentBlock(target)) return;
+        releaseActiveDoubleMineRuntime(true);
+        if (mc.gameMode != null) mc.gameMode.stopDestroyBlock();
+        resetForwardSchedulerRuntime();
+        initialAlignmentTarget = target;
+        initialAlignmentLevel = mc.level;
+        alignmentStartsSession = false;
+        setState(State.AutoAlign);
+    }
+
+    @Override
+    public HighwayBuilderTHM fromTag(CompoundTag tag) {
+        CompoundTag migrated = tag;
+        if (tag.get("settings") instanceof CompoundTag saved) {
+            CompoundTag aligned = migrateAlignmentSettings(saved);
+            if (aligned != saved) {
+                migrated = tag.copy();
+                migrated.put("settings", aligned);
+            }
+        }
+        super.fromTag(migrated);
+        return this;
+    }
+
+    public void loadSettingsSnapshot(CompoundTag tag) {
+        settings.fromTag(migrateAlignmentSettings(tag));
+    }
+
+    public static CompoundTag migrateAlignmentSettings(CompoundTag source) {
+        boolean hasLegacy = false;
+        for (var entry : source.getListOrEmpty("groups")) {
+            if (!(entry instanceof CompoundTag group)) continue;
+            for (var entrySetting : group.getListOrEmpty("settings")) {
+                if (!(entrySetting instanceof CompoundTag setting)) continue;
+                String name = setting.getStringOr("name", "");
+                if (name.equals("auto-align")) return source;
+                if (name.equals("align-first")) hasLegacy = true;
+            }
+        }
+        if (!hasLegacy) return source;
+        CompoundTag migrated = source.copy();
+        for (var entry : migrated.getListOrEmpty("groups")) {
+            if (!(entry instanceof CompoundTag group)) continue;
+            for (var entrySetting : group.getListOrEmpty("settings")) {
+                if (entrySetting instanceof CompoundTag setting && setting.getStringOr("name", "").equals("align-first")) {
+                    setting.putString("name", "auto-align");
+                }
+            }
+        }
+        return migrated;
+    }
+
     private void setState(State state) {
         setState(state, this.state);
     }
@@ -6859,7 +6945,7 @@ public class HighwayBuilderTHM extends Module {
     }
 
     public boolean shouldSuppressThmHwyMonitorRecovery(boolean centerStallRecovery) {
-        if (state == State.AlignFirst || isTpsThrottlePaused()) return true;
+        if (state == State.AutoAlign || isTpsThrottlePaused()) return true;
         if (centerStallRecovery) return false;
 
         return restockTask.isSequenceActive()
@@ -7671,10 +7757,11 @@ public class HighwayBuilderTHM extends Module {
         PaketLimiter limiter = Modules.get().get(PaketLimiter.class);
         boolean filterPackets = limiter != null && (mc.getConnection() == null
             || !isChokeHoldingOrFlushing(mc.getConnection().getConnection()));
-        packetCostsThisTick = packetBudgetCosts(packetBudgetLimit.get(), allowsSilentForwardToolSwap(),
+        packetCostsThisTick = packetBudgetCosts(packetBudget.get(), packetBudgetLimit.get(), allowsSilentForwardToolSwap(),
             silentForwardPlaceSwap.get() && !placeFromOffhand(),
             mineActionsThisTick, placeActionsThisTick, type -> filterPackets && limiter.alwaysBlocks(type));
-        minePacketsLeft = packetCostsThisTick.available() - forwardMineCount * packetCostsThisTick.mine(false);
+        if (packetCostsThisTick == null) return;
+        minePacketsLeft = packetCostsThisTick.available();
         minePacketAttempted = false;
 
         // Reserve the minimum per block up front. Slower blocks spend the extra packet at the mine call.
@@ -7682,12 +7769,14 @@ public class HighwayBuilderTHM extends Module {
         PacketBudget.Plan plan = packetCostsThisTick.plan(inlineMining, mineActionsThisTick, placeActionsThisTick);
         if (plan.mine() < mineActionsThisTick || plan.place() < placeActionsThisTick) sessionBudgetClipped++;
         mineActionsThisTick = plan.mine();
-        placeActionsThisTick = plan.place();
+        // Fast packet placement uses what mining actually leaves, rather than its initial reservation.
+        if (!packetBuild.get() || normalRatePacketBuild()) placeActionsThisTick = plan.place();
     }
 
-    static PacketBudget.Costs packetBudgetCosts(int budget, boolean silentMineSwap, boolean silentPlaceSwap,
+    static PacketBudget.Costs packetBudgetCosts(boolean enabled, int budget, boolean silentMineSwap, boolean silentPlaceSwap,
                                                int mineActions, int placeActions,
                                                Predicate<PacketType<?>> alwaysBlocked) {
+        if (!enabled) return null;
         int swing = alwaysBlocked.test(GamePacketTypes.SERVERBOUND_SWING) ? 0 : 1;
         int dig = alwaysBlocked.test(GamePacketTypes.SERVERBOUND_PLAYER_ACTION) ? 0 : 1;
         int place = alwaysBlocked.test(GamePacketTypes.SERVERBOUND_USE_ITEM_ON) ? 0 : 1;
@@ -7700,12 +7789,10 @@ public class HighwayBuilderTHM extends Module {
         return new PacketBudget.Costs(Math.max(0, budget - overhead), dig, swing, place);
     }
 
-    private void reclaimUnusedMinePacketBudgetForPlacing() {
-        if (!packetBuild.get() || normalRatePacketBuild() || !experimental(packetBudget)) return;
-        if (packetBorer.get() || normalMining != null || packetMining != null) return;
-
-        int reclaimedPlaceActions = packetCostsThisTick.placements(minePacketsLeft);
-        placeActionsThisTick = Math.max(placeActionsThisTick, reclaimedPlaceActions);
+    private void chargeDigPackets(int count) {
+        if (packetCostsThisTick == null) return;
+        minePacketsLeft -= count * packetCostsThisTick.dig();
+        minePacketAttempted = true;
     }
 
     /** Experimental settings only count while the group's master switch is on. */
@@ -8813,8 +8900,9 @@ public class HighwayBuilderTHM extends Module {
         if (event.packet == packetBuildSending) packetBuildSent = true;
     }
 
-    static BlockHitResult packetAirPlaceHit(BlockPos target, Vec3 eye) {
+    static BlockHitResult packetAirPlaceHit(BlockPos target, Vec3 eye, boolean legacy) {
         Vec3 center = Vec3.atCenterOf(target);
+        if (legacy) return new BlockHitResult(center, Direction.UP, target, false);
         Vec3 towardEye = eye.subtract(center);
         Direction face = Math.abs(towardEye.x) > Math.abs(towardEye.z)
             ? (towardEye.x < 0 ? Direction.WEST : Direction.EAST)
@@ -8832,7 +8920,7 @@ public class HighwayBuilderTHM extends Module {
             ? new FindItemResult(SlotUtils.OFFHAND, mc.player.getOffhandItem().getCount())
             : new FindItemResult(slot, stack.getCount());
         BlockPos target = pos.immutable();
-        BlockHitResult hit = side == null ? packetAirPlaceHit(target, mc.player.getEyePosition()) : PlacementUtils.packetPlacementHit(target, side);
+        BlockHitResult hit = side == null ? packetAirPlaceHit(target, mc.player.getEyePosition(), legacyAirPlace.get()) : PlacementUtils.packetPlacementHit(target, side);
         boolean rotate = rotation.get().place;
         boolean placed = PlacementUtils.placeBlockPacket(target, item, rotate, 0, silentForwardPlaceSwap.get(), hit, packet -> {
             if (!isActive() || !packetBuild.get() || !BlockUtils.canPlace(target)
@@ -10449,6 +10537,13 @@ public class HighwayBuilderTHM extends Module {
 
             if (timer != null) {
                 timer.setOverride(Timer.OFF);
+                // TPS sync can change this setting in a transfer lobby.
+                if (payload.timerWasActive() && !payload.timerOverrideActive()) {
+                    Setting<Double> multiplier = timer.settings.get("multiplier", Double.class);
+                    if (multiplier == null || !multiplier.set(payload.timerEffectiveMultiplier())) {
+                        return ReconnectBaselineRestoreResult.fail("timer-multiplier-restore-failed");
+                    }
+                }
                 if (payload.timerWasActive() != timer.isActive()) timer.toggle();
                 if (payload.timerOverrideActive()) timer.setOverride(payload.timerOverrideValue());
             }
@@ -10456,7 +10551,10 @@ public class HighwayBuilderTHM extends Module {
             reconnectBaselineRestoreInProgress = false;
         }
 
-        if (!reconnectBaselineMatchesLiveState(payload)) return ReconnectBaselineRestoreResult.fail("baseline-restore-mismatch");
+        if (!reconnectBaselineMatchesLiveState(payload)) {
+            THMAddon.LOG.warn("[HighwayBuilder Reconnect] Baseline restore mismatch: expected={}, actual={}", payload, captureReconnectBaselinePayload());
+            return ReconnectBaselineRestoreResult.fail("baseline-restore-mismatch");
+        }
         return ReconnectBaselineRestoreResult.ok();
     }
 
@@ -11585,7 +11683,9 @@ public class HighwayBuilderTHM extends Module {
                         );
                         if (committed != null) {
                             String server = mc.getCurrentServer() != null ? mc.getCurrentServer().ip : "singleplayer";
-                            String statsMessageapi = String.format("%s:%s:%s:%.0f:%s:%s:%s:%s:%s%s:official=%s",
+                            String roadType = manualPause != null ? manualPause.roadType()
+                                : AxisViewer.highwayType(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER, dir);
+                            String statsMessageapi = String.format("%s:%s:%s:%.0f:%s:%s:%s:%s:%s%s:official=%s:road=%s",
                                 THMSystem.get().getApiToken(),
                                 playerName,
                                 server,
@@ -11594,10 +11694,11 @@ public class HighwayBuilderTHM extends Module {
                                 report.blocksPlaced(),
                                 dir,
                                 generateTimestamp(),
-                                manualPause != null ? manualPause.mainHighway() : isOnMainHighway(),
+                                roadType.equals("main"),
                                 apiModeSuffix(THMSystem.get().getMode()),
                                 manualPause != null ? manualPause.mappedHighway()
-                                    : AxisViewer.isOnHighway(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER)
+                                    : AxisViewer.isOnHighway(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER),
+                                roadType
                             );
                             sendStatistics(statsMessageapi);
                             working = committed;
@@ -13558,10 +13659,12 @@ public class HighwayBuilderTHM extends Module {
         if (!safeCanBreak(pos, state)) return;
         if (!BlockUtils.canInstaBreak(pos)) {
             mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos, Direction.UP));
+            chargeDigPackets(1);
             borerPackets += 1;
         } else {
             mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos, Direction.UP));
             mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, pos, Direction.UP));
+            chargeDigPackets(2);
             borerPackets += 2;
         }
     }
@@ -13572,6 +13675,7 @@ public class HighwayBuilderTHM extends Module {
             if (normalMining.shouldRemove()) {
                 cancelPendingForwardBreakCredit(normalMining.blockPos);
                 mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.ABORT_DESTROY_BLOCK, normalMining.blockPos, normalMining.direction));
+                chargeDigPackets(1);
                 normalMining = null;
                 DoubleMineBlock.rateLimited = true;
             }
@@ -13591,6 +13695,7 @@ public class HighwayBuilderTHM extends Module {
             }
 
             mc.player.swing(InteractionHand.MAIN_HAND);
+            if (packetCostsThisTick != null) minePacketsLeft -= packetCostsThisTick.swing();
         }
 
         if (packetMining != null) {
@@ -14407,8 +14512,6 @@ public class HighwayBuilderTHM extends Module {
             if (state != State.Forward) return;
         }
 
-        reclaimUnusedMinePacketBudgetForPlacing();
-
         // In paket mode, skip place work while mine tasks are pending so the UpdateSelectedSlot
         // packet (pickaxe switch) and the mine packets are not dropped by the packet rate limiter.
         // offhand-build has no slot switch to protect (pickaxe stays in the main hand, obsidian in the
@@ -14745,7 +14848,7 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private enum State {
-        AlignFirst {
+        AutoAlign {
             private int ticks;
 
             @Override
@@ -14757,16 +14860,16 @@ public class HighwayBuilderTHM extends Module {
             protected void tick(HighwayBuilderTHM b) {
                 BlockPos target = b.initialAlignmentTarget;
                 if (target == null || b.mc.level != b.initialAlignmentLevel) {
-                    b.errorEarly("Align First stopped because the world changed.");
+                    b.errorEarly("Auto Align stopped because the world changed.");
                     return;
                 }
                 double distance = b.centerTeleportHorizontalDistance(target);
                 if (distance > START_ALIGNMENT_MAX_DISTANCE) {
-                    b.errorEarly("Align First needs a mapped highway within %.0f blocks.", START_ALIGNMENT_MAX_DISTANCE);
+                    b.errorEarly("Auto Align needs a mapped highway within %.0f blocks.", START_ALIGNMENT_MAX_DISTANCE);
                     return;
                 }
                 if (++ticks >= 20 * 30) {
-                    b.errorEarly("Align First timed out while walking to the highway.");
+                    b.errorEarly("Auto Align timed out while walking to the highway.");
                     return;
                 }
                 if (!b.mc.player.onGround()) {
@@ -14774,7 +14877,7 @@ public class HighwayBuilderTHM extends Module {
                     return;
                 }
                 if (b.mc.player.blockPosition().getY() != target.getY() || !b.canWalkInitialAlignmentBlock(target)) {
-                    b.errorEarly("Align First needs a clear highway at your current height.");
+                    b.errorEarly("Auto Align needs a clear highway at your current height.");
                     return;
                 }
                 if (distance <= CENTER_TELEPORT_SNAP_RADIUS) {
@@ -14782,7 +14885,8 @@ public class HighwayBuilderTHM extends Module {
                     b.snapPlayerToCurrentBlockCenter();
                     b.initialAlignmentTarget = null;
                     b.initialAlignmentLevel = null;
-                    b.startFreshStatsSession();
+                    if (b.alignmentStartsSession) b.startFreshStatsSession();
+                    b.alignmentStartsSession = false;
                     b.setState(Forward);
                     return;
                 }
@@ -14793,7 +14897,7 @@ public class HighwayBuilderTHM extends Module {
                 BlockPos ahead = BlockPos.containing(player.x + (center.x - player.x) * lookAhead,
                     player.y, player.z + (center.z - player.z) * lookAhead);
                 if (!b.canWalkInitialAlignmentBlock(ahead)) {
-                    b.errorEarly("Align First needs a clear walk to the highway.");
+                    b.errorEarly("Auto Align needs a clear walk to the highway.");
                     return;
                 }
                 b.mc.player.setYRot((float) Rotations.getYaw(center));
@@ -19094,7 +19198,6 @@ public class HighwayBuilderTHM extends Module {
             if (b.normalMining == null) {
                 DoubleMineBlock block = new DoubleMineBlock(b, blocks.pop());
                 b.normalMining = block.startDestroying();
-                if (b.packetCostsThisTick != null) b.minePacketsLeft -= b.packetCostsThisTick.dig();
 
                 b.breakTimer = b.breakDelay.get();
                 if (b.breakTimer > 0) return;
@@ -19108,7 +19211,6 @@ public class HighwayBuilderTHM extends Module {
                 if (block != null) {
                     b.packetMining = b.normalMining.packetMine();
                     b.normalMining = block.startDestroying();
-                    if (b.packetCostsThisTick != null) b.minePacketsLeft -= 2 * b.packetCostsThisTick.dig();
 
                     b.breakTimer = b.breakDelay.get();
                 }
@@ -20894,12 +20996,14 @@ public class HighwayBuilderTHM extends Module {
         public DoubleMineBlock startDestroying() {
             b.createOrRefreshForwardBreakCreditIfEligible(this.blockPos, this.blockState);
             b.mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, this.blockPos, this.direction));
+            b.chargeDigPackets(1);
             normalStartTime = b.mc.player.tickCount;
             return this;
         }
 
         public DoubleMineBlock stopDestroying() {
             b.mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, this.blockPos, this.direction));
+            b.chargeDigPackets(1);
             return this;
         }
 

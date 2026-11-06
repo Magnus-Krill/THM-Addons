@@ -9,7 +9,7 @@
 This document lists the modules, HUD widgets, and utilities shipped with THM Addons. Module names match the in-game Meteor module list.
 
 ## Highway and Travel
-- `THM-HighwayBuilder` — Automatically builds highways according to THM standards.
+- `THM-HighwayBuilder` — Automatically builds highways according to THM standards, with startup and periodic mapped-highway alignment.
 - `THM Highway Monitor` — Monitors alignment and recovers HighwayBuilder from drift, with reconnect or chunk-refresh recovery. Requires Baritone.
 - `Highway-Tools` — Highway utilities: axis walker, highway teleporter, boundary finder, and highway checker. Requires Baritone.
 - `axis-viewer` — Displays world axes and Nether highways, including XaeroPlus rings, diamonds, the 50k grid, and 125k extensions.
@@ -92,7 +92,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `eclip`
 - `desync`
 - `uuid`
-- `serverinfo` — Passive diagnostics: estimated uptime, TPS, host, brand/version, ping, players, world age, distances, traffic, session duration, plugin namespace hints, exposed commands, and server-advertised channels. Lists accept a page number.
+- `serverinfo` — Server diagnostics with estimated uptime, TPS, host, brand/version, ping, players, world age, distances, traffic, session duration, plugin/mod hints, server commands, and channels. Command lists exclude client-only commands. `plugins` uses server tab completions when no hints are exposed; `plugins scan` retries explicitly. The general overview stays passive. Lists accept a page number.
 
 ## UI
 

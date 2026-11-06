@@ -49,6 +49,21 @@ The **Run** window shows a tree of every test class and method:
 Outside the IDE, the same results are in `build/reports/tests/test/index.html` after running
 `./gradlew test`. Open that file in a browser.
 
+`./gradlew build` runs the Java tests and `MinecraftStartupTest` on every build. Test failures
+fail the build; no separate test command or script is required.
+
+For a background build and test run on Linux, use `tools/scripts/test-async.sh`. It returns immediately
+and prints the log and result paths. The result file appears when finished: `0` means success.
+JUnit runs up to four test classes concurrently, with sequential methods inside each class.
+
+`MinecraftStartupTest` runs concurrently with the other Java tests. It starts a separate client
+under `build/client-startup/`, waits one second at the main menu, then closes it. A crash, early
+exit or three-minute startup timeout fails the test. Its console and Minecraft logs stay in that
+run's directory. The test mod is excluded from the shipped addon JAR.
+
+Run this test through Gradle so Loom prepares its launch command. A graphics display is required;
+CI uses `xvfb-run -a ./gradlew test` with Mesa. This checks OpenGL startup, not world or server behavior.
+
 ## What's covered
 
 | Test | What it checks |
@@ -62,5 +77,5 @@ Outside the IDE, the same results are in `build/reports/tests/test/index.html` a
 | `GhostBlockProbeTest` | Ghost-block check: packet pairing, verify, ghost and timeout handling. |
 | `ShaderCompatibilityTest` | OpenGL/Vulkan compilation and linking for all backgrounds and inline effects; rejects invalid GLSL and stage type mismatches. Skipped locally without `glslangValidator`; required in CI and `checkShaders`. No GPU context. |
 
-Tests run without a game, so they can't cover anything that needs a live world or Minecraft's
-registries. Test that in the client.
+Apart from the startup test, tests run without a game. World and server behavior still need
+separate client checks.

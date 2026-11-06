@@ -29,12 +29,12 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: gradle
-      - name: Install shader compiler
+      - name: Install graphics test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y glslang-tools
+          sudo apt-get install -y glslang-tools xvfb xauth libgl1-mesa-dri libglx-mesa0
       - name: Run all tests
-        run: ./gradlew --no-daemon clean test --console=plain
+        run: xvfb-run -a ./gradlew --no-daemon clean test --console=plain
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -43,4 +43,5 @@ jobs:
           path: |
             build/reports/tests/
             build/test-results/
+            build/client-startup/
           retention-days: 14

@@ -8,6 +8,14 @@
 
 This public guide explains the user-facing settings in `THM-HighwayBuilder` (`HighwayBuilderTHM`), `THM Highway Monitor` (`THMHwyMonitor`), and the Highway Profiles section of the THM Addon tab.
 
+## Kitbot road taxes
+
+Statistics report `main`, `ring`, `diamond` or `other` alongside official-network status.
+Axis Viewer uses the build direction at crossings; grid roads, extensions and unrecognized roads
+are `other`. Manual pause keeps the saved build position's classification.
+Kitbot can set separate taxes for each road type, official status and digging/paving mode.
+Existing rates apply until an admin sets road taxes under Admin Login → Set Multipliers.
+
 ## Highway Profiles
 
 Highway Profiles let you keep separate complete HighwayBuilder configurations for `None`, `HighwayBuilding`, and `HighwayDigging`.
@@ -87,6 +95,9 @@ flags are ignored, and older sessions without continuity metadata can submit aga
 must still be finite. Adventure-mode backup/lobby visits preserve the last main-server position;
 distance uses that checkpoint until Survival resumes.
 
+Reconnect restores Timer's saved multiplier before checking the Speed/Timer baseline. TPS changes
+in a transfer lobby do not cause a baseline mismatch. Active Timer overrides keep their saved value.
+
 Container restocking accepts replaceable blocks at the shulker/EChest position. If a solid block
 obstructs it, recovery keeps mining that block before tearing down the enclosure and retrying
 the restock. Unbreakable blocks or a 30-second clearing timeout stop with the block and position.
@@ -96,6 +107,9 @@ the restock. Unbreakable blocks or a 30-second clearing timeout stop with the bl
 During an armed Highway Monitor or Elytra Route reconnect, Adventure mode in the Overworld
 identifies the main lobby. Adventure mode in the End identifies the backup/transfer server,
 except while a trusted cracked-login prompt identifies the authentication flow.
+Detection uses the live local gamemode, since tab-list entries can stay in Survival during a
+transfer. Highway recovery and portal walking stay idle in the End backup lobby until transfer
+back to the main server. Survival mode in the End remains a normal main-server session.
 
 On lobby entry, reconnect chooses the nearest portal from the loaded chunks using the entry
 position, then uses Baritone to walk into its bottom row. It waits for chunks if no portal is
@@ -104,11 +118,16 @@ only a server-state change advances reconnect. Manual joins do not start portal 
 
 ### Basic Highway Shape
 
-On a fresh start, `align-first` walks to the nearest mapped Axis Viewer line at your current height and follows the direction closest to your facing. It needs a clear walk of at most 32 blocks. Resume paths handle their own direction.
+On a fresh start, `auto-align` walks to the nearest mapped Axis Viewer line at your current height
+and follows the direction closest to your facing. During grounded forward building it checks
+lateral drift once per second and realigns when more than 0.4 blocks off the working line.
+Periodic realignment preserves the working direction and statistics and waits through restocks
+and airborne movement. It needs a clear walk of at most 32 blocks. Saved `align-first` preferences
+migrate in module configs, Highway Profiles and custom presets.
 
 | Setting | Default / Range | What to change it for |
 | --- | --- | --- |
-| `align-first` | `true` | Lines up with a mapped highway before building. |
+| `auto-align` | `true` | Aligns to mapped highways before and during building. |
 | `width` | `5`, range `1-7` | Highway floor width. |
 | `height` | `3`, range `2-5` | Vertical clearance to mine. |
 | `floor` | `Replace`; options `Replace`, `PlaceMissing` | Use `Replace` for normal rebuilding; use `PlaceMissing` when you only want missing floor blocks filled. |
@@ -158,7 +177,8 @@ On a fresh start, `align-first` walks to the nearest mapped Axis Viewer line at 
 | `place-range` | `4.5`, slider max `5.5` | Maximum block placement reach. |
 | `place-delay` | `0`, minimum `0` | Delay between place actions. |
 | `packet-build` | `false` | Places with raw packets only: the client never sets a block itself, so what you see is always the server's state (no ghost blocks). |
-| `air-place-mode` | `Never`; options `Never`, `Smart`, `Always`; shown when `packet-build` is on | Controls packet-build air placement. |
+| `air-place-mode` | `Smart`; options `Never`, `Smart`, `Always`; shown when `packet-build` is on | Controls packet-build air placement. |
+| `legacy-air-place` | `false`; shown when Packet Build permits air placement | Uses the 1.21.11 target-center click with face `UP` for unsupported blocks. |
 | `packet-build-lookahead` | `true`; shown with unlimited `packet-build` | Also places upcoming rows in the same tick. |
 | `silent-forward-place-swap` | `true`; hidden in legacy mode | Restores your selected slot after scheduler placement. |
 | `silent-forward-tool-swap` | `true`; hidden in legacy mode | Restores your selected slot after scheduler mining. |
@@ -168,8 +188,6 @@ On a fresh start, `align-first` walks to the nearest mapped Axis Viewer line at 
 | Setting | Default / Range | What to change it for |
 | --- | --- | --- |
 | `enable-experimental` | `false` | Master switch: nothing else in this group does anything while it is off. |
-| `packet-budget` | `false` | Caps mining and placing per tick so the tick stays under the server's packet limit; Packet Build gives unused mining capacity to lookahead placement. |
-| `packets-per-tick` | `23`, range `4-200`; shown when `packet-budget` is on | Packets one tick may send. |
 | `packet-build-normal-rate` | `false`; shown when `packet-build` is on | Uses normal placement rate and delay while placing with packets and waiting for server updates. |
 | `packet-build-resend` | `20`, range `2-200`; shown when `packet-build-normal-rate` is on | Ticks before asking the server about an unanswered block. |
 | `choke-build` | `false`; shown when `enable-experimental` is on | Holds all outgoing C2S packets, then releases them in order. |
@@ -237,7 +255,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 
 | Setting | Default / Range / Options | Visible when | Behavior |
 | --- | --- | --- | --- |
-| `align-first` | `true` | Always | Walks to the nearest mapped highway before a fresh build. |
+| `auto-align` | `true` | Always | Aligns before building and checks lateral drift each second. |
 | `width` | `5`, range `1-7` | Always | Sets the highway floor width. |
 | `height` | `3`, range `2-5` | Always | Sets the vertical tunnel clearance. |
 | `floor` | `Replace`; options `Replace`, `PlaceMissing` | Always | `Replace` rebuilds floor blocks; `PlaceMissing` only fills gaps. |
@@ -257,6 +275,8 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `fall-save-distance` | `3`, range `3-5` | Monitor management and `fall-save-air-place` are on | Vertical distance below the hitbox used by fall-save placement. |
 | `autosetup-modules` | `true` | Always | Configures and enables Meteor Speed Mine, Reach, Velocity, and KillAura, enables Criticals, and sets HighwayBuilder place range. |
 | `packet-mode` | `false` | Always | Enables Packet Build and Packet Borer, leaving already-enabled pieces alone. |
+| `packet-budget` | `true` | Always | Caps mining and placing independently of Experimental. Disabling it removes this internal cap. Fast Packet Build uses the capacity left after mining in the same tick, including double mining. Active Paket Limiter Always Block rules exclude canceled packet types. |
+| `packets-per-tick` | `23`, range `4-200` | `packet-budget` is on | The tick's packet allowance, including movement and optional silent swaps. |
 | `check-behind` | `true` | Always | Repairs missing floor or railings behind the player, every row within `place-range` (Forward scheduler; legacy mode checks one row). |
 | `ghost-block-check` | `false` | `enable-experimental` and `check-behind` are on | Before moving into the next row, has the server confirm the floor/railings of the row behind (one use-on-block packet per two blocks, needs an empty hand, pickaxe or totem). A ghost block turns into a hole client-side and is re-placed first. Forward scheduler only. |
 | `advertise` | `false` | Always | Sends THM advertisement messages in chat. |
@@ -293,6 +313,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `tps-safety-enclosure` | `true` | Always | Builds a small enclosure during confirmed low or unknown TPS pauses after TPS settling. |
 | `packet-build` | `false` | Always | Ordinary highway placements use raw place packets and appear only after the server's block update. Restock/KitBot enclosures and block-entity containers use normal placement. Unless `packet-build-normal-rate` is on, it removes the per-tick placement cap and automatically enables Packet Limiter on activation. |
 | `air-place-mode` | `Smart`; options `Never`, `Smart`, `Always` | `packet-build` is on | `Never` skips no-face placements, `Smart` packet-air-places only when needed, and `Always` allows air placement. |
+| `legacy-air-place` | `false` | `packet-build` is on and air placement is allowed | Uses the 1.21.11 target-center click with face `UP` when no neighbor is available. Confirmation and duplicate protection stay active. |
 | `packet-build-lookahead` | `true` | Unlimited `packet-build` is on | Lets Packet Build place blocks from upcoming rows in the same tick. |
 | `packet-build-normal-rate` | `false` | `enable-experimental` and `packet-build` are on | Replaces Packet Build Once. Uses normal placement rate and delay without client-side block prediction; each target waits for a server answer before another place packet. |
 | `packet-build-resend` | `20`, range `2-200` | `packet-build-normal-rate` is on | Ticks before probing an unanswered placement. |
@@ -353,8 +374,6 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | --- | --- | --- | --- |
 | `enable-experimental` | `false` | Always | Master switch for this group: every setting below is ignored (and hidden) while it is off. |
 | `predictive-echest-rebreak` | `false` | Experimental enabled, offhand OnPlace mode | Sends three rebreak STOP packets per tick. |
-| `packet-budget` | `false` | `enable-experimental` is on | Caps mine and place actions each tick so their packet cost stays under `packets-per-tick`. Mining is served first; Packet Build gives unused mining capacity to lookahead placement. One mine action always goes through so the builder cannot stall. The budget excludes packets canceled by Paket Limiter's Always Block list. |
-| `packets-per-tick` | `23`, range `4-200` | `packet-budget` is on | The tick's packet allowance. Set it below the server's own limit. |
 
 ### THM-HighwayBuilder: Debugging
 
@@ -425,3 +444,12 @@ Every THM debug category also writes to `logs/thm/<start-time>/thm-debug-all.log
 | `recover-rubberband-ghostblocks` | `true` | `auto-recover` is on | Uses the selected recovery mode for long Forward rubberband or ghostblock stalls. |
 | `rubberband-recovery-mode` | `Reconnect`; `Reconnect`, `ChunkRefresh` | `auto-recover` and `recover-rubberband-ghostblocks` are on | Reconnect uses AutoReconnect. ChunkRefresh uses Baritone and a temporary reported view distance of 2. |
 | `recovery-cooldown` | `10`, range `1-100`, slider `1-40` | Always | Ticks to wait before checking again after a recovery attempt. |
+
+### Recovery across disconnects
+
+A disconnect during monitor-owned recovery preserves the builder's resume intent, even while the
+monitor has temporarily disabled it. Leaving the main server cancels recovery pathing. Normal
+misalignment correction applies the server-state and maximum-distance checks and waits until the
+player is grounded, so transient falling or jumping does not trigger a height-only correction.
+
+Packet placement version comparison: [1.21.11 versus 26.2](packet-airplace-comparison.md).

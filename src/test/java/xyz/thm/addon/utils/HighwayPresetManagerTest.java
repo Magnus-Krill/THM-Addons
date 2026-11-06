@@ -24,6 +24,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HighwayPresetManagerTest {
     @Test
+    void namedPresetsKeepTheDisabledLegacyAlignmentPreference() throws IOException {
+        CompoundTag decoded = HighwayPresetManager.decode("""
+            {"version":1,"settings":{"groups":[{"name":"General","settings":[{"name":"align-first","value":false}]}]}}
+            """);
+        CompoundTag group = (CompoundTag) decoded.getListOrEmpty("groups").getFirst();
+        CompoundTag setting = (CompoundTag) group.getListOrEmpty("settings").getFirst();
+        assertEquals("auto-align", setting.getStringOr("name", ""));
+        assertFalse(setting.getBooleanOr("value", true));
+        assertEquals(decoded, HighwayPresetManager.decode(HighwayPresetManager.encode(decoded)));
+    }
+
+    @Test
     void presetJsonRoundTripsSettings() throws IOException {
         CompoundTag settings = new CompoundTag();
         var groups = new ListTag();

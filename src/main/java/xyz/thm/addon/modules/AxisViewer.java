@@ -199,7 +199,28 @@ public class AxisViewer extends Module {
         3750000
     );
 
-    // Eligibility uses the full network, independent of rendering toggles and camera position.
+    // Build direction disambiguates roads where their mapped lines intersect.
+    public static String highwayType(double x, double z, boolean nether, HorizontalDirection direction) {
+        if (!Double.isFinite(x) || !Double.isFinite(z) || direction == null) return "other";
+        x -= 0.5;
+        z -= 0.5;
+        double ax = Math.abs(x), az = Math.abs(z);
+        if (Math.max(ax, az) >= 30_000_005) return "other";
+        int dx = direction.offsetX, dz = direction.offsetZ;
+        if (ax < 5 && dx == 0 || az < 5 && dz == 0
+            || Math.abs(x - z) < 5 && dx == dz || Math.abs(x + z) < 5 && dx == -dz) return "main";
+        if (!nether) return "other";
+        for (int radius : RING_ROADS) {
+            if (dx == 0 && Math.abs(ax - radius) < 5 && az < radius + 5
+                || dz == 0 && Math.abs(az - radius) < 5 && ax < radius + 5) return "ring";
+        }
+        for (int radius : DIAMONDS) {
+            if (dx != 0 && dz != 0 && Math.abs(ax + az - radius) < 5
+                && (ax < 5 || az < 5 || Math.signum(x) * dx + Math.signum(z) * dz == 0)) return "diamond";
+        }
+        return "other";
+    }
+
     public static boolean isOnHighway(double x, double z, boolean nether) {
         if (!Double.isFinite(x) || !Double.isFinite(z)) return false;
         x -= 0.5;
@@ -329,11 +350,20 @@ public class AxisViewer extends Module {
         }
     }
 
-    record StartAlignment(int x, int z, HorizontalDirection direction) {}
+    record StartAlignment(int x, int z, HorizontalDirection direction) {
+        double crossTrackDistance(double playerX, double playerZ) {
+            return Math.abs((playerX - x - 0.5) * direction.offsetZ - (playerZ - z - 0.5) * direction.offsetX)
+                / Math.hypot(direction.offsetX, direction.offsetZ);
+        }
+    }
 
     static StartAlignment nearestStartAlignment(double x, double z, float yaw, boolean nether, boolean allowDiagonal) {
+        return nearestStartAlignment(x, z, yaw, nether, allowDiagonal, null);
+    }
+
+    static StartAlignment nearestStartAlignment(double x, double z, float yaw, boolean nether, boolean allowDiagonal, HorizontalDirection requiredDirection) {
         if (!Double.isFinite(x) || !Double.isFinite(z) || !Float.isFinite(yaw)) return null;
-        var search = new HighwayAlignmentSearch(x, z, yaw);
+        var search = new HighwayAlignmentSearch(x, z, yaw, requiredDirection);
         visitHighwaySegments(0.5, true, allowDiagonal, nether, nether && allowDiagonal, nether, nether, search);
         return search.best;
     }
@@ -341,14 +371,16 @@ public class AxisViewer extends Module {
     private static final class HighwayAlignmentSearch implements HighwaySegmentConsumer {
         private final double x, z;
         private final float yaw;
+        private final HorizontalDirection requiredDirection;
         private double bestDistance = Double.POSITIVE_INFINITY;
         private float bestYawDifference = Float.POSITIVE_INFINITY;
         private StartAlignment best;
 
-        private HighwayAlignmentSearch(double x, double z, float yaw) {
+        private HighwayAlignmentSearch(double x, double z, float yaw, HorizontalDirection requiredDirection) {
             this.x = x;
             this.z = z;
             this.yaw = yaw;
+            this.requiredDirection = requiredDirection;
         }
 
         @Override
@@ -370,11 +402,12 @@ public class AxisViewer extends Module {
 
             HorizontalDirection forward = HorizontalDirection.get((float) Math.toDegrees(Math.atan2(-dx, dz)));
             HorizontalDirection backward = forward.opposite();
+            if (requiredDirection != null && requiredDirection != forward && requiredDirection != backward) return;
             float forwardTurn = Math.abs(Mth.wrapDegrees(yaw - forward.yaw));
             float backwardTurn = Math.abs(Mth.wrapDegrees(yaw - backward.yaw));
             boolean atStart = center == (from < to ? firstCenter : lastCenter);
             boolean atEnd = center == (from < to ? lastCenter : firstCenter);
-            boolean useForward = atStart || !atEnd && forwardTurn <= backwardTurn;
+            boolean useForward = requiredDirection != null ? requiredDirection == forward : atStart || !atEnd && forwardTurn <= backwardTurn;
             float turn = useForward ? forwardTurn : backwardTurn;
             if (distance == bestDistance && turn >= bestYawDifference) return;
             bestDistance = distance;

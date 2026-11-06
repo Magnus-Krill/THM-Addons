@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "thm-startup-test",
+  "version": "1.0.0",
+  "name": "THM Startup Test",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["xyz.thm.addon.test.StartupClient"]
+  },
+  "depends": {
+    "thm-addon": "*",
+    "fabric-lifecycle-events-v1": "*"
+  }
+}

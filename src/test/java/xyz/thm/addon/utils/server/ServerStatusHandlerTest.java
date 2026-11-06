@@ -20,6 +20,39 @@ import xyz.thm.addon.utils.server.ServerStatusHandler.ServerState;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ServerStatusHandlerTest {
+    @Test
+    void detectorReadsTheGameModeUpdatedByServerTransferPackets() throws Exception {
+        var listener = new ClassNode();
+        try (var input = getClass().getResourceAsStream("/net/minecraft/client/multiplayer/ClientPacketListener.class")) {
+            new ClassReader(input).accept(listener, ClassReader.SKIP_DEBUG);
+        }
+        String modeOwner = "net/minecraft/client/multiplayer/MultiPlayerGameMode";
+        for (String name : new String[]{"handleLogin", "handleRespawn", "handleGameEvent"}) {
+            var handler = listener.methods.stream().filter(m -> m.name.equals(name)).findFirst().orElseThrow();
+            boolean updatesLocalMode = false;
+            for (var instruction : handler.instructions) {
+                if (instruction instanceof MethodInsnNode call && call.owner.equals(modeOwner)
+                    && call.name.equals("setLocalMode")) updatesLocalMode = true;
+            }
+            assertTrue(updatesLocalMode, name + " must update the mode used for lobby detection.");
+        }
+
+        var detector = new ClassNode();
+        try (var input = getClass().getResourceAsStream("/xyz/thm/addon/utils/server/ServerStatusHandler.class")) {
+            new ClassReader(input).accept(detector, ClassReader.SKIP_DEBUG);
+        }
+        boolean readsLocalMode = false;
+        for (var method : detector.methods) {
+            for (var instruction : method.instructions) {
+                if (instruction instanceof MethodInsnNode call && call.owner.equals(modeOwner)
+                    && call.name.equals("getPlayerMode")) readsLocalMode = true;
+                if (instruction instanceof MethodInsnNode call && call.owner.equals("net/minecraft/client/multiplayer/PlayerInfo")
+                    && call.name.equals("getGameMode")) fail("Tab-list mode can remain Survival in the End backup lobby.");
+            }
+        }
+        assertTrue(readsLocalMode, "Lobby detection must read the mode updated by transfer packets.");
+    }
+
     @ParameterizedTest
     @CsvSource({
         "ADVENTURE,minecraft:overworld,false,false,MAIN_LOBBY",

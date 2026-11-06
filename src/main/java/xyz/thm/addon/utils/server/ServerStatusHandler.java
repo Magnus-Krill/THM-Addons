@@ -11,7 +11,6 @@ import meteordevelopment.meteorclient.events.game.GameJoinedEvent;
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
 import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.multiplayer.chat.GuiMessageTag;
 import net.minecraft.world.level.GameType;
 import xyz.thm.addon.THMAddon;
@@ -34,7 +33,7 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
  * <ul>
  *     <li>Sampling cadence: about every 100 ms on client thread.</li>
  *     <li>Commit stabilization: 3 consistent candidate samples with minimum confidence 3.</li>
- *     <li>Deterministic scoring source: self {@code PlayerListEntry} gamemode plus dimension.
+ *     <li>Deterministic scoring source: local interaction gamemode plus dimension.
  *     If the gamemode source is unavailable, state remains {@link ServerState#UNKNOWN}.</li>
  *     <li>System-message spoof hardening for cracked prompt:
  *     only system-indicated chat can arm cracked-login evidence.</li>
@@ -416,7 +415,7 @@ public final class ServerStatusHandler {
     }
 
     private EvidenceScore scoreStrictEvidence() {
-        GameType gm = resolvePlayerListGameMode();
+        GameType gm = resolveLocalGameMode();
         String dimensionId = "";
         if (mc != null && mc.level != null && mc.level.dimension() != null) {
             try {
@@ -436,11 +435,12 @@ public final class ServerStatusHandler {
     static EvidenceScore scoreStrictEvidence(GameType gm, String dimensionId, boolean crackedPromptSeen, boolean postLoginTeleported,
         boolean backupNoticeSeen) {
         EvidenceScore score = new EvidenceScore();
+        score.reasons.add("strict:dimension:" + dimensionId);
         if (gm == null) {
-            score.reasons.add("strict:missing-player-list-gamemode");
+            score.reasons.add("strict:missing-local-gamemode");
             return score;
         }
-        String gmSource = "player-list";
+        String gmSource = "local-player";
 
         if (backupNoticeSeen) {
             score.transfer = 100;
@@ -500,15 +500,10 @@ public final class ServerStatusHandler {
         return score;
     }
 
-    private GameType resolvePlayerListGameMode() {
-        if (mc == null || mc.player == null || mc.getConnection() == null) return null;
-        try {
-            PlayerInfo selfEntry = mc.getConnection().getPlayerInfo(mc.player.getUUID());
-            if (selfEntry == null) return null;
-            return selfEntry.getGameMode();
-        } catch (Throwable ignored) {
-            return null;
-        }
+    private GameType resolveLocalGameMode() {
+        if (mc == null || mc.player == null || mc.level == null || mc.gameMode == null || mc.getConnection() == null) return null;
+        // Game-mode changes and respawns update this before tab-list metadata catches up.
+        return mc.gameMode.getPlayerMode();
     }
 
     static ServerState resolveCandidate(EvidenceScore score) {

@@ -200,8 +200,54 @@ val generateApiEndpoints = tasks.register("generateApiEndpoints") {
     }
 }
 
+val startupClient = sourceSets.create("startupClient") {
+    java.srcDir("tools/tests/startup/java")
+    resources.srcDir("tools/tests/startup/resources")
+    compileClasspath += sourceSets.main.get().output + sourceSets.main.get().compileClasspath
+    runtimeClasspath += sourceSets.main.get().runtimeClasspath
+}
+
+loom {
+    mods {
+        register("thm-addon") { sourceSet(sourceSets.main.get()) }
+        register("thm-startup-test") { sourceSet(startupClient) }
+    }
+    runs {
+        register("startupTest") {
+            client()
+            sourceSet.set(startupClient.name)
+            runDirectory.set(layout.buildDirectory.dir("client-startup"))
+            generateRunConfig.set(false)
+        }
+    }
+}
+
+val startupLaunch = layout.buildDirectory.file("client-startup/command.txt")
+val prepareStartupTest = tasks.register("prepareStartupTest") {
+    val run = tasks.named<JavaExec>("runStartupTest")
+    dependsOn(provider { run.get().taskDependencies.getDependencies(run.get()) })
+    doLast {
+        val launch = run.get()
+        val command = listOf(launch.javaLauncher.get().executablePath.asFile.absolutePath) +
+            launch.allJvmArgs.filterNot { it.startsWith("@") } +
+            listOf("-cp", launch.classpath.asPath, launch.mainClass.get()) + launch.args.orEmpty() +
+            launch.argumentProviders.flatMap { it.asArguments() }
+        startupLaunch.get().asFile.apply {
+            parentFile.mkdirs()
+            writeText(command.joinToString("\n"))
+        }
+    }
+}
+
 tasks.test {
+    dependsOn(prepareStartupTest)
     useJUnitPlatform()
+    systemProperty("thm.startup.command", startupLaunch.get().asFile.absolutePath)
+    systemProperty("junit.jupiter.execution.parallel.enabled", "true")
+    systemProperty("junit.jupiter.execution.parallel.mode.classes.default", "concurrent")
+    systemProperty("junit.jupiter.execution.parallel.config.strategy", "fixed")
+    systemProperty("junit.jupiter.execution.parallel.config.fixed.parallelism", "4")
+    outputs.upToDateWhen { false }
     systemProperty("thm.requireShaderCompiler", providers.environmentVariable("CI").orElse("false").get().equals("true", ignoreCase = true))
 }
 

@@ -14,6 +14,8 @@ import meteordevelopment.meteorclient.commands.Command;
 import meteordevelopment.meteorclient.events.game.GameJoinedEvent;
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
+import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.mixin.ClientPacketListenerAccessor;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -23,9 +25,15 @@ import net.minecraft.network.protocol.BundlePacket;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.common.ClientboundKeepAlivePacket;
 import net.minecraft.network.protocol.game.ClientboundSetTimePacket;
+import net.minecraft.network.protocol.game.ClientboundCommandsPacket;
+import net.minecraft.network.protocol.game.ClientboundCommandSuggestionsPacket;
+import net.minecraft.network.protocol.game.ServerboundCommandSuggestionPacket;
+import net.minecraft.commands.CommandBuildContext;
+import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 import xyz.thm.addon.utils.server.ServerTelemetry;
+import xyz.thm.addon.utils.server.ServerPluginScan;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -33,6 +41,7 @@ import java.util.Locale;
 
 public class ServerInfoCommand extends Command {
     private final ServerTelemetry telemetry = new ServerTelemetry();
+    private final ServerPluginScan pluginScan = new ServerPluginScan();
     private volatile int generation;
     private long joinedNs;
     private ResourceKey<Level> timeDimension;
@@ -48,13 +57,17 @@ public class ServerInfoCommand extends Command {
         for (String section : new String[]{"all", "uptime", "tps", "host", "brand", "version", "ping", "players", "world", "network", "session"}) {
             builder.then(literal(section).executes(context -> show(section)));
         }
-        for (String section : new String[]{"plugins", "commands", "channels"}) {
+        builder.then(literal("plugins").executes(context -> show("plugins"))
+            .then(argument("page", IntegerArgumentType.integer(1)).executes(context -> show("plugins", IntegerArgumentType.getInteger(context, "page"))))
+            .then(literal("scan").executes(context -> scanPlugins())));
+        for (String section : new String[]{"commands", "channels"}) {
             builder.then(literal(section).executes(context -> show(section))
                 .then(argument("page", IntegerArgumentType.integer(1)).executes(context -> show(section, IntegerArgumentType.getInteger(context, "page")))));
         }
         builder.then(literal("help").executes(context -> {
             info("%s", "serverinfo [all|uptime|tps|host|brand|version|ping|players|world|network|session]");
             info("%s", "serverinfo [plugins|commands|channels] [page]");
+            info("%s", "serverinfo plugins scan: retry using server tab completions.");
             info("Uptime is inferred from keepalives; world age survives server restarts.");
             return SINGLE_SUCCESS;
         }));
@@ -74,25 +87,39 @@ public class ServerInfoCommand extends Command {
         joinedNs = 0;
         timeDimension = null;
         telemetry.reset();
+        pluginScan.reset();
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     private void onReceive(PacketEvent.Receive event) {
-        if (event.isCancelled()) return;
+        if (event.isCancelled() || !(event.connection.getPacketListener() instanceof ClientPacketListener connection)) return;
         if (event.packet instanceof BundlePacket<?> bundle) {
-            for (Packet<?> packet : bundle.subPackets()) observe(packet);
-        } else observe(event.packet);
+            for (Packet<?> packet : bundle.subPackets()) observe(packet, connection);
+        } else observe(event.packet, connection);
     }
 
-    private void observe(Packet<?> packet) {
-        if (!(packet instanceof ClientboundKeepAlivePacket) && !(packet instanceof ClientboundSetTimePacket)) return;
-        var connection = mc.getConnection();
-        if (connection == null) return;
+    private void observe(Packet<?> packet, ClientPacketListener connection) {
+        if (!(packet instanceof ClientboundKeepAlivePacket) && !(packet instanceof ClientboundSetTimePacket)
+            && !(packet instanceof ClientboundCommandsPacket) && !(packet instanceof ClientboundCommandSuggestionsPacket)) return;
         int expectedGeneration = generation;
         long receivedNs = System.nanoTime();
         mc.execute(() -> {
-            if (generation != expectedGeneration || connection != mc.getConnection() || mc.level == null) return;
-            if (packet instanceof ClientboundKeepAlivePacket keepalive) telemetry.observeKeepalive(keepalive.getId(), receivedNs);
+            if (connection != mc.getConnection() || mc.level == null) return;
+            // Command trees can arrive before the join event creates the player.
+            if (!(packet instanceof ClientboundCommandsPacket) && generation != expectedGeneration) return;
+            if (packet instanceof ClientboundCommandsPacket commands) {
+                var handler = (ClientPacketListenerAccessor) connection;
+                var root = commands.getRoot(CommandBuildContext.simple(handler.meteor$getRegistryAccess(), handler.meteor$getEnabledFeatures()),
+                    ClientPacketListenerAccessor.meteor$getCommandNodeFactory());
+                // The live dispatcher also contains Fabric client commands.
+                pluginScan.setCommands(root.getChildren().stream().map(CommandNode::getName).toList());
+            } else if (packet instanceof ClientboundCommandSuggestionsPacket suggestions) {
+                if (!pluginScan.running()) return;
+                ServerPluginScan.Request next = pluginScan.accept(suggestions.id(),
+                    suggestions.toSuggestions().getList().stream().map(suggestion -> suggestion.getText()).toList(), receivedNs);
+                if (next != null) sendScan(next);
+                else if (!pluginScan.running()) showScanResults();
+            } else if (packet instanceof ClientboundKeepAlivePacket keepalive) telemetry.observeKeepalive(keepalive.getId(), receivedNs);
             else if (packet instanceof ClientboundSetTimePacket time) {
                 updateTimeDimension();
                 telemetry.observeWorldTime(time.gameTime(), receivedNs);
@@ -112,12 +139,16 @@ public class ServerInfoCommand extends Command {
     }
 
     private int show(String section, int page) {
+        return show(section, page, true);
+    }
+
+    private int show(String section, int page, boolean allowScan) {
         if (mc.getConnection() == null || mc.level == null || mc.player == null) {
             warning("Join a server first.");
             return SINGLE_SUCCESS;
         }
         if (section.equals("all")) {
-            for (String part : new String[]{"host", "brand", "version", "uptime", "tps", "ping", "players", "world", "network", "session", "plugins", "commands", "channels"}) show(part);
+            for (String part : new String[]{"host", "brand", "version", "uptime", "tps", "ping", "players", "world", "network", "session", "plugins", "commands", "channels"}) show(part, 1, false);
             return SINGLE_SUCCESS;
         }
         var connection = mc.getConnection();
@@ -126,13 +157,12 @@ public class ServerInfoCommand extends Command {
         long now = System.nanoTime();
         switch (section) {
             case "plugins" -> {
-                var names = connection.getCommands().getRoot().getChildren().stream().map(CommandNode::getName).toList();
-                showList(section, "Plugin/mod namespace hints", ServerTelemetry.pluginHints(names), page);
-                info("Command namespaces are hints; hidden plugins and versions cannot be determined.");
+                if (pluginScan.names().isEmpty() && allowScan && page == 1) return scanPlugins();
+                showList(section, "Server plugin/mod hints", pluginScan.names(), page);
+                info("%s", "Server namespaces are hints. Retry with " + toString("plugins", "scan") + ".");
             }
             case "commands" -> {
-                var names = connection.getCommands().getRoot().getChildren().stream().map(CommandNode::getName).sorted().toList();
-                showList(section, "Server-advertised commands", names, page);
+                showList(section, "Server-advertised commands", pluginScan.commands(), page);
                 info("Availability depends on server permissions and filtering.");
             }
             case "channels" -> {
@@ -183,6 +213,38 @@ public class ServerInfoCommand extends Command {
             case "session" -> info("%s", joinedNs == 0 ? "Session duration: unavailable." : "Connected for: " + ServerTelemetry.duration((now - joinedNs) / 1_000_000));
         }
         return SINGLE_SUCCESS;
+    }
+
+    private int scanPlugins() {
+        if (mc.getConnection() == null || mc.level == null || mc.player == null) {
+            warning("Join a server first.");
+            return SINGLE_SUCCESS;
+        }
+        ServerPluginScan.Request request = pluginScan.start(System.nanoTime());
+        if (request == null) info("A plugin scan is already running.");
+        else {
+            info("Checking server plugin/mod suggestions...");
+            sendScan(request);
+        }
+        return SINGLE_SUCCESS;
+    }
+
+    private void sendScan(ServerPluginScan.Request request) {
+        if (mc.getConnection() != null) mc.getConnection().send(new ServerboundCommandSuggestionPacket(request.id(), request.command()));
+    }
+
+    @EventHandler
+    private void onTick(TickEvent.Post event) {
+        if (!pluginScan.running()) return;
+        ServerPluginScan.Request next = pluginScan.tick(System.nanoTime());
+        if (next != null) sendScan(next);
+        else if (!pluginScan.running()) showScanResults();
+    }
+
+    private void showScanResults() {
+        if (pluginScan.timedOut()) info("Plugin scan timed out; showing available server hints.");
+        showList("plugins", "Server plugin/mod hints", pluginScan.names(), 1);
+        info("Only server-exposed names are visible; hidden plugins and mods may be missing.");
     }
 
     private void showList(String section, String label, List<String> values, int page) {

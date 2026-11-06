@@ -54,11 +54,11 @@ public final class HighwayPresetManager {
 
         CompoundTag previous = module.settings.toTag().copy();
         try {
-            module.settings.fromTag(settings.copy());
+            module.loadSettingsSnapshot(settings.copy());
             module.normalizeAfterThmProfileLoad();
             return true;
         } catch (RuntimeException e) {
-            module.settings.fromTag(previous);
+            module.loadSettingsSnapshot(previous);
             module.normalizeAfterThmProfileLoad();
             THMAddon.LOG.warn("Failed to apply HighwayBuilder preset {}: {}", name, e.getMessage());
             return false;
@@ -115,7 +115,8 @@ public final class HighwayPresetManager {
             validateSettings(settingsJson, validateModuleSettings);
             Tag settings = JsonOps.INSTANCE.convertTo(NbtOps.INSTANCE, settingsJson);
             if (!(settings instanceof CompoundTag compound)) throw new IOException("Settings must be an object.");
-            return new DecodedPreset(compound, migrated);
+            CompoundTag alignment = HighwayBuilderTHM.migrateAlignmentSettings(compound);
+            return new DecodedPreset(alignment, migrated || alignment != compound);
         } catch (IOException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -278,7 +279,8 @@ public final class HighwayPresetManager {
                 if (!settingElement.isJsonObject()) throw new IOException("Preset setting must be an object.");
                 JsonObject settingJson = settingElement.getAsJsonObject();
                 String settingName = requiredString(settingJson, "name", "setting");
-                if (group != null && group.get(settingName) == null) throw new IOException("Unknown setting: " + settingName);
+                if (group != null && group.get(settingName) == null
+                    && !(settingName.equals("align-first") && group.get("auto-align") != null)) throw new IOException("Unknown setting: " + settingName);
                 if (!seenSettings.add(settingName)) throw new IOException("Duplicate setting: " + settingName);
             }
         }

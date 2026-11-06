@@ -31,7 +31,12 @@ why, or which other settings it interacts with. If it needs more than one senten
 
 The wrapper uses Gradle 9.8.2 with Loom 1.19.3. Dependency versions live in `gradle/libs.versions.toml`.
 
-- `./gradlew build` — full build, jar lands in `build/libs`.
+- `./gradlew build` — full build with parallel JUnit tests and the Minecraft startup test on every run;
+  failures fail the build. The jar lands in `build/libs`.
+- `tools/scripts/test-async.sh` — background build and JUnit tests; prints the log and exit-code paths.
+  `MinecraftStartupTest` runs concurrently with the Java tests, opens an isolated OpenGL client,
+  waits one second at the main menu and closes it. Missing startup, crashes and a three-minute timeout fail.
+  JUnit runs up to four test classes concurrently; methods within each class stay sequential.
 - `./gradlew checkBuildRules` — standalone block-state checks for Baritone build rules; initializes vanilla registries without starting a client.
 - `./gradlew checkShaders` — OpenGL/Vulkan compiler and linker tests for backgrounds, blur, and
   trip shaders. Requires `glslangValidator` on PATH (`glslang` on Arch, `glslang-tools` on Ubuntu).
@@ -39,8 +44,8 @@ The wrapper uses Gradle 9.8.2 with Loom 1.19.3. Dependency versions live in `gra
   No GPU or client is started.
 - `./gradlew runClient` — launch a dev client with the addon loaded (via Fabric Loom). Autonomous
   client tests, including creating and joining local test worlds, are allowed for this repository.
-- `./gradlew test` — JUnit 6 unit tests in `src/test/java` (also run by `build`). They run without
-  a game instance: only test code that doesn't need Minecraft's bootstrap/registries (vanilla value
+- `./gradlew test` — JUnit 6 tests in `src/test/java` (also run by `build`). Apart from
+  `MinecraftStartupTest`, they run without a game or Minecraft's bootstrap/registries (vanilla value
   classes like `BlockPos` are fine). Pull testable logic out of modules into `utils/` classes
   (e.g. `AdaptiveRate`, `GhostBlockProbe`) instead of testing a `Module`. Check runtime behavior
   with client tests. IntelliJ setup: `docs/running-tests-intellij.md`.
@@ -72,8 +77,9 @@ Queued requests use the current configured token; the server still validates own
 `THMSystem` publishes credential changes through volatile snapshots for worker reads.
 
 Highway status and PoW append the loaded addon version through `APIUtils`. PoW also reports
-Axis Viewer's mapped-network eligibility, independent of render toggles; manual pause preserves
-the build position's eligibility. Keep this separate from the main-axis flag and KitBot `$update` guards.
+Axis Viewer's mapped-network eligibility and `road=main|ring|diamond|other`, independent of render toggles.
+Build direction disambiguates road intersections; manual pause preserves the build position's eligibility
+and road type. Keep this separate from KitBot `$update` guards.
 
 Every outbound request — API calls and player-configured webhooks alike — goes through
 `TrustedHttp`, not raw `HttpURLConnection`: it rejects non-http(s) schemes, resolves the hostname
@@ -146,6 +152,13 @@ addon-specific settings screen — don't confuse the two when adding a new modul
 
 **Highway restock inventory:** HighwayBuilder owns supply slots 5-9 through `Manage-hotbar`. Trash limits include hotbar stacks. Offhand refills preserve reserved hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
 
+**Highway packet budget:** The General toggle alone controls budgeting. Reset it before tick early
+returns and initialize it before double mining. Fast Packet Build uses the allowance actually
+left after mining, independently of Experimental. Preserve pending-target duplicate protection.
+
+**Highway legacy airplace:** Paving's default-off `legacy-air-place` restores the 1.21.11
+center/UP click only for unsupported packet placements. Keep confirmation and duplicate guards.
+
 **Highway autosetup:** HighwayBuilder configures and enables Speed Mine, Reach, Velocity, and KillAura on startup and resume. It also enables Criticals with its existing settings. KillAura setup leaves addon settings such as Smart Timing alone.
 
 **THMScaffold:** Replaces the legacy `scaffold-THM` module. `modules/THMScaffold` owns settings and
@@ -178,6 +191,7 @@ Movement uses collision-checked sub-block steps and cancels for manual input, wo
 
 **Reconnect lobby portals:** Only armed reconnects walk to portals. Adventure Overworld is the main lobby; Adventure End is backup/transfer unless trusted cracked-auth evidence applies. Choose the nearest loaded portal from lobby entry and advance only on server-state changes.
 6b6t's backup server can run in Survival; its system notice ("sent you back to the backup server") marks the connection as transfer.
+Read gamemode from `mc.gameMode`, since tab-list mode can remain stale across transfers.
 
 **Stats screenshots:** Capture after `Minecraft.renderFrame` draws the GUI. Disconnect proof must match the expected reason/stats and complete two visible frames; keep disconnect captures alive across `GameLeftEvent`.
 
@@ -192,7 +206,14 @@ Enable before starting a build to attach its schematic wrapper; keep an axe in t
 
 **Axis Viewer:** Nether highways include XaeroPlus rings, diamonds, the 50k grid, and 125k extensions.
 Clip lines to the render camera's horizontal render distance before calling `RenderUtilsTHM`; reuse clipping scratch storage.
-HighwayBuilder's default-on `align-first` uses the same segments at startup and preserves resume directions.
+HighwayBuilder's default-on `auto-align` uses the same segments at startup and checks lateral drift
+each second during grounded forward building. Realignment preserves direction and statistics.
+Migrate legacy `align-first` in module configs, profiles and named presets before applying settings.
+
+**Monitor recovery:** Capture monitor-owned builder pause intent before disconnect cleanup. Cancel
+Baritone on leaving the main server and prepare reconnect even when the monitor paused the builder.
+Normal grounded drift uses `Misalignment`, including its server-state and maximum-distance gates;
+airborne height changes alone do not trigger correction.
 
 **Online player names:** `utils/server/OnlinePlayers.getNames()` merges known profiles with fresh
 `/msg ` completion names for HUDs, friend sync, and KitBot. Requests are shared and demand-driven
@@ -207,8 +228,11 @@ No Fabric payload registration is needed. `BlockedServersMixin` bypasses Mojang'
 **Server diagnostics:** `.serverinfo` passively samples keepalives and world-time packets.
 `utils/server/ServerTelemetry` keeps bounded clock/TPS samples. Uptime is a host-clock estimate,
 not proof of OS/process uptime; epoch/random IDs remain unavailable. World age is separate.
-`plugins`, `commands`, and `channels` read exposed metadata with pagination; namespaces are hints,
-not a complete installed-plugin list. Do not send discovery commands or payload probes.
+`plugins` and `commands` use snapshots decoded from incoming server command packets, never the live
+Fabric-merged dispatcher. Namespaces are hints, not an installed-plugin list. `plugins` falls back to
+server version/about and root tab completions when empty; `plugins scan` explicitly retries. Match
+request IDs, stop after two five-second attempts and clear connection state. General `all` stays
+passive. Do not execute discovery chat commands or send payload probes. `channels` lists exposed metadata.
 
 **Channel Logger:** Observe the client-side Netty packet codecs to preserve unknown payload bytes.
 Copy payloads before asynchronous logging and keep the packet buffer's indices and reference count untouched.

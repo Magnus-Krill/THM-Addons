@@ -433,7 +433,7 @@ public class THMSystem extends System<THMSystem> {
             return;
         }
 
-        hwBuilder.settings.fromTag(copyTag(snapshot));
+        hwBuilder.loadSettingsSnapshot(copyTag(snapshot));
         hwBuilder.normalizeAfterThmProfileLoad();
     }
 
