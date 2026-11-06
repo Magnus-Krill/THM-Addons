@@ -72,3 +72,6 @@
 
 - `ItemContainerContents.nonEmptyItems()` returns `ItemStackTemplate`s in 26.2. Use `nonEmptyItemCopyStream()` where code needs `ItemStack` methods such as `is`/`getCount`.
 - `ChunkPos` is a record in 26.2: its `x`/`z` fields are private, use `x()`/`z()`. `migrateMappings` does not rewrite these field accesses.
+
+- Minecraft 26.2 item holders need bound default components before constructing `ItemStack`s in standalone checks. After vanilla bootstrap/lookup creation, apply `BuiltInRegistries.DATA_COMPONENT_INITIALIZERS.build(lookup)`; game startup already performs component loading. Use registry-aware `ItemStack.CODEC` for saved loadouts.
+- `GuiGraphicsExtractor.item` funnels through its private `(LivingEntity, Level, ItemStack, int, int, int)` overload in 26.2. Contents badges must prevent recursion and render through `RenderUtilsTHM`, without OpenGL calls.

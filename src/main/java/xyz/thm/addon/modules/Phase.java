@@ -78,20 +78,25 @@ public class Phase extends Module {
                     float[] angles = RotationUtils.getRotationsTo(mc.player.getEyePosition(), hitPos);
                     InteractionHand hand = offhand ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
                     RotationUtils rotation = RotationUtils.getInstance();
-                    if (!offhand) InventoryManager.swapTo(webSlot, false, true);
-                    try {
+                    boolean[] placedWeb = {false};
+                    Runnable placeWeb = () -> {
                         rotation.setRotationSilent(angles[0], angles[1]);
-                        var result = mc.gameMode.useItemOn(mc.player, hand,
-                            new BlockHitResult(hitPos, side.getOpposite(), neighbor, false));
-                        if (!result.consumesAction() || !mc.level.getBlockState(head).is(Blocks.COBWEB)) {
-                            warning("Could not place the head cobweb.");
-                            return;
+                        try {
+                            var result = mc.gameMode.useItemOn(mc.player, hand,
+                                new BlockHitResult(hitPos, side.getOpposite(), neighbor, false));
+                            if (!result.consumesAction() || !mc.level.getBlockState(head).is(Blocks.COBWEB)) {
+                                warning("Could not place the head cobweb.");
+                                return;
+                            }
+                            mc.player.swing(hand);
+                            placedWeb[0] = true;
+                        } finally {
+                            rotation.setRotationSilentSync();
                         }
-                        mc.player.swing(hand);
-                    } finally {
-                        if (!offhand) InventoryManager.swapBack(false);
-                        rotation.setRotationSilentSync();
-                    }
+                    };
+                    if (offhand) placeWeb.run();
+                    else if (!InventoryManager.withItem(this, webSlot, false, xyz.thm.addon.utils.SwapManager.PEARL, placeWeb)) return;
+                    if (!placedWeb[0]) return;
                 }
             }
             pearl.throwPearl(null, selfWeb.get());

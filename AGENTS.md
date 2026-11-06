@@ -156,11 +156,19 @@ and packet budgets. Successful sends keep their per-tick reservation across radi
 Meteor Scaffold is unmodified. The budget reserves complete placement transactions;
 `PaketLimiter` always allows hotbar slot changes to preserve swap recovery.
 
+**Shared inventory swaps:** `SwapManager` owns silent hotbar holds and nested temporary actions. `DeepSwapManager` stages inventory items with checked restoration and preserves managed HighwayBuilder slots. Use `InventoryManager.withItem` for temporary item use; do not add another global swap-back record. Inventory swaps never stop movement. Packet slot tracking advances on `PacketEvent.Sent`; multi-click inventory transactions check the limiter budget first.
+
+**Loadouts:** New saves store stack components and minimum quantities through the 26.2 registry codec. Read legacy item-ID strings without inventing components. Preserve unreadable files and write replacements atomically. `checkInventoryRules` verifies item components, shulker contents and queue-through rays without a client.
+
+**Optional utilities:** `ShulkerOverview` uses `RenderUtilsTHM.renderItemBadge` and bounds its component cache. `CatchUpPacing` carries deferred ticks through `DeltaTracker.Timer`; it defaults off. AutoArmor mending rotation, AutoTotem pop refill and Speedmine tool-latency checks are also opt-in.
+
 **Meteor Offhand:** `OffhandMixin` adds `held-item-filter`: Off, Only when holding, or Only when not holding. `held-items` supplies the whitelist/blocklist. Filtering includes Offhand's totem swaps and releases its lock when blocked. `ModuleMixin` migrates the old toggle.
 
 **Meteor AutoFish:** `AutoFishMixin` adds default-off `random-rotate` and `random-move` after fish reels.
 Wait for the bobber to disappear, step back and return, look away and back, then permit recasting.
 Movement uses collision-checked sub-block steps and cancels for manual input, world changes, or timeout.
+
+**Distant Horizons:** The optional `DistantHorizonsLightmapMixin` binds the level lightmap when DH requests it. Meteor Fullbright Gamma skips DH's normal lightmap hook; preserve both Blaze3D textures and native OpenGL IDs.
 
 **Highway pause:** Manual pause checkpoints stats and fully deactivates the builder. An independent return listener uses Baritone before reactivation; failures retain the pause. Return positions last for the client session and require the original world and dimension.
 

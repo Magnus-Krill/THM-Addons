@@ -399,10 +399,16 @@ public class Nuker extends Module {
                     silentSyncTicks = 1;
                 }
             } else if (doInvSwap) {
-                InventoryManager.swapTo(bestSlot, invSwapSilent, true);
+                InventoryManager.withItem(this, bestSlot, invSwapSilent, xyz.thm.addon.utils.SwapManager.WEAPON,
+                    () -> mineSelectedBlock(blockPos));
+                return;
             }
         }
 
+        mineSelectedBlock(blockPos);
+    }
+
+    private void mineSelectedBlock(BlockPos blockPos) {
         Direction dir = clickFace(blockPos);
 
         if (packetMine.get()) {
@@ -426,9 +432,6 @@ public class Nuker extends Module {
             if (swing.get()) mc.player.swing(InteractionHand.MAIN_HAND);
         }
 
-        if (doInvSwap) {
-            InventoryManager.swapBack(invSwapSilent);
-        }
     }
 
     private void tickSilentSwap() {

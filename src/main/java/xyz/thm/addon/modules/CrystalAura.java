@@ -228,6 +228,8 @@ public class CrystalAura extends Module {
 
     @Override
     public void onDeactivate() {
+        xyz.thm.addon.utils.DeepSwapManager.get().restore(this);
+        xyz.thm.addon.utils.SwapManager.get().release(this);
         stopScheduler();
         reset();
     }
@@ -558,22 +560,15 @@ public class CrystalAura extends Module {
                 || mc.player.getEyePosition().distanceTo(hit) > placeRange.get()) return;
             InteractionHand hand = item.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
             InventoryManager inventory = InventoryManager.getInstance();
-            int previousSlot = inventory.getServerSlot();
-            int previousClientSlot = mc.player.getInventory().getSelectedSlot();
             if (hand == InteractionHand.MAIN_HAND && !swap.get() && !mc.player.getMainHandItem().is(Items.OBSIDIAN)) return;
-            boolean switched = hand == InteractionHand.MAIN_HAND;
-            if (switched) {
-                // Vanilla placement prediction reads the client-held item.
-                inventory.setClientSlot(item.slot());
-                if (inventory.getServerSlot() != item.slot()) inventory.setSlotForced(item.slot());
-            }
-            try {
-                BlockUtils.interact(new BlockHitResult(hit, face, neighbour, false), hand, true);
-            } finally {
-                if (switched && silentSwap.get()) {
-                    inventory.setClientSlot(previousClientSlot);
-                    if (inventory.getServerSlot() != previousSlot) inventory.setSlotForced(previousSlot);
-                }
+            Runnable place = () -> BlockUtils.interact(new BlockHitResult(hit, face, neighbour, false), hand, true);
+            if (hand == InteractionHand.OFF_HAND) place.run();
+            else if (silentSwap.get()) {
+                if (!xyz.thm.addon.utils.SwapManager.get().withSlot(this, item.slot(),
+                    xyz.thm.addon.utils.SwapManager.CRYSTAL, false, place)) return;
+            } else {
+                inventory.setClientSlot(item.slot(), xyz.thm.addon.utils.SwapManager.CRYSTAL);
+                place.run();
             }
             supportTicks = supportDelay.get();
             supportRetryAfterMs = System.currentTimeMillis() + 500;
@@ -602,7 +597,7 @@ public class CrystalAura extends Module {
             if (!item.found()) return null;
             if (item.slot() >= 9) {
                 if (mc.player.containerMenu != mc.player.inventoryMenu) return null;
-                InvUtils.move().from(item.slot()).toHotbar(mc.player.getInventory().getSelectedSlot());
+                if (xyz.thm.addon.utils.DeepSwapManager.get().stage(this, item.slot()) < 0) return null;
             }
             return InteractionHand.MAIN_HAND;
         }
@@ -613,22 +608,7 @@ public class CrystalAura extends Module {
     }
 
     private void placeInternal(Opportunity opportunity, InteractionHand hand) {
-        InventoryManager inventory = InventoryManager.getInstance();
-        int previousSlot = inventory.getServerSlot();
-        boolean swapped = false;
-        if (hand == InteractionHand.MAIN_HAND) {
-            var crystals = InvUtils.findInHotbar(Items.END_CRYSTAL);
-            if (!crystals.found() || crystals.isOffhand()) return;
-            int slot = mc.player.getMainHandItem().is(Items.END_CRYSTAL)
-                ? mc.player.getInventory().getSelectedSlot() : crystals.slot();
-            if (silentSwap.get()) {
-                if (slot != previousSlot) { inventory.setSlotForced(slot); swapped = true; }
-            } else {
-                inventory.setClientSlot(slot);
-                if (inventory.getServerSlot() != slot) inventory.setSlotForced(slot);
-            }
-        }
-        try {
+        Runnable place = () -> {
             Direction side = placeSide(opportunity.base);
             BlockHitResult hit = new BlockHitResult(crystalPosition(opportunity.base), side, opportunity.base, false);
             ((ClientPlayerInteractionManagerTHMAccessor) mc.gameMode).thm$sendSequencedPacket(mc.level,
@@ -637,9 +617,22 @@ public class CrystalAura extends Module {
             lastPlace = opportunity.base;
             lastPlaceMs = System.currentTimeMillis();
             waitingForCrystal = true;
-        } finally {
-            if (swapped) inventory.setSlotForced(previousSlot);
-        }
+        };
+        try {
+            if (hand == InteractionHand.OFF_HAND) place.run();
+            else {
+                var crystals = InvUtils.findInHotbar(Items.END_CRYSTAL);
+                if (!crystals.found() || crystals.isOffhand()) return;
+                int slot = mc.player.getMainHandItem().is(Items.END_CRYSTAL)
+                    ? mc.player.getInventory().getSelectedSlot() : crystals.slot();
+                if (silentSwap.get()) xyz.thm.addon.utils.SwapManager.get().withSlot(this, slot,
+                    xyz.thm.addon.utils.SwapManager.CRYSTAL, true, place);
+                else {
+                    InventoryManager.getInstance().setClientSlot(slot, xyz.thm.addon.utils.SwapManager.CRYSTAL);
+                    place.run();
+                }
+            }
+        } finally { xyz.thm.addon.utils.DeepSwapManager.get().restore(this); }
     }
 
     private Direction placeSide(BlockPos base) {

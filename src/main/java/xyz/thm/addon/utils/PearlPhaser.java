@@ -17,14 +17,12 @@ import net.minecraft.network.protocol.game.ServerboundUseItemPacket;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.decoration.ItemFrame;
-import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.ScaffoldingBlock;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
-import xyz.thm.addon.mixin.accessor.PlayerInventoryAccessor;
 import xyz.thm.addon.settings.DescribedOption;
 
 import java.util.function.BooleanSupplier;
@@ -38,7 +36,7 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
  */
 public class PearlPhaser {
 
-    private final InventoryManager inventoryManager = InventoryManager.getInstance();
+    private final Object selfPlaceOwner = new Object();
 
     public final Setting<Boolean> autoPitch;
     public final Setting<Integer> pitch;
@@ -210,40 +208,20 @@ public class PearlPhaser {
             performSelfPlace(false);
         }
 
+        if (pearlSlot >= 9 && !swapAlternative.get()) return;
         RotationUtils rotationManager = RotationUtils.getInstance();
-        int targetSlot;
-        if (swapAlternative.get()) {
-            targetSlot = ((PlayerInventoryAccessor) mc.player.getInventory()).getSelectedSlot();
-            performInventorySwapPVP(pearlSlot);
-        } else if (pearlSlot < 9) {
-            targetSlot = pearlSlot;
-        } else {
-            return;
-        }
-
-        inventoryManager.setSlot(targetSlot, InventoryManager.Priority.PEARL_PHASE);
-        rotationManager.setRotationSilent(yaw, throwPitch);
-        // Optimized: pearl is swapped in and rotation is set; self-place reuses that rotation.
-        if (selfPlace.get() && optimize.get()) {
-            performSelfPlace(true);
-        }
-        mc.getConnection().send(new ServerboundUseItemPacket(InteractionHand.MAIN_HAND, 0, yaw, throwPitch));
-
-        if (swing.get()) {
-            mc.player.swing(InteractionHand.MAIN_HAND);
-        } else {
-            mc.getConnection().send(new ServerboundSwingPacket(InteractionHand.MAIN_HAND));
-        }
-
-        if (swapAlternative.get()) {
-            performInventorySwapPVP(pearlSlot);
-        }
-
-        inventoryManager.syncToClient();
-        rotationManager.setRotationSilentSync();
+        InventoryManager.withItem(this, pearlSlot, true, SwapManager.PEARL, () -> {
+            rotationManager.setRotationSilent(yaw, throwPitch);
+            try {
+                if (selfPlace.get() && optimize.get()) performSelfPlace(true);
+                ((xyz.thm.addon.mixin.accessor.ClientPlayerInteractionManagerTHMAccessor) mc.gameMode)
+                    .thm$sendSequencedPacket(mc.level, sequence -> new ServerboundUseItemPacket(InteractionHand.MAIN_HAND, sequence, yaw, throwPitch));
+                if (swing.get()) mc.player.swing(InteractionHand.MAIN_HAND);
+                else mc.getConnection().send(new ServerboundSwingPacket(InteractionHand.MAIN_HAND));
+            } finally { rotationManager.setRotationSilentSync(); }
+        });
     }
 
-    /** A setting left out by {@code extras = false} is simply off. */
     private static boolean on(Setting<Boolean> setting) {
         return setting != null && setting.get();
     }
@@ -318,51 +296,34 @@ public class PearlPhaser {
         int itemSlot = findSelfPlaceItem();
         if (itemSlot == -1) return;
 
-        int targetSlot;
-        if (swapAlternative.get()) {
-            targetSlot = ((PlayerInventoryAccessor) mc.player.getInventory()).getSelectedSlot();
-            performInventorySwapPVP(itemSlot);
-        } else if (itemSlot < 9) {
-            targetSlot = itemSlot;
-        } else {
-            return;
-        }
-
-        inventoryManager.setSlot(targetSlot, InventoryManager.Priority.PEARL_PHASE);
+        if (itemSlot >= 9 && !swapAlternative.get()) return;
         RotationUtils rotationManager = RotationUtils.getInstance();
-
-        if (selfPlaceType.get() == SelfPlaceType.Fire) {
-            BlockPos belowPos = mc.player.blockPosition().below();
-            Vec3 hitVec = Vec3.atCenterOf(belowPos).add(0, 0.5, 0);
-            if (!optimized && selfPlaceRotate.get()) {
-                rotationManager.setRotationSilent(mc.player.getYRot(), 90.0f);
+        InventoryManager.withItem(selfPlaceOwner, itemSlot, false, SwapManager.PEARL + 1, () -> {
+            try {
+                if (selfPlaceType.get() == SelfPlaceType.Fire) {
+                    BlockPos belowPos = mc.player.blockPosition().below();
+                    Vec3 hitVec = Vec3.atCenterOf(belowPos).add(0, 0.5, 0);
+                    if (!optimized && selfPlaceRotate.get()) {
+                        rotationManager.setRotationSilent(mc.player.getYRot(), 90.0f);
+                    }
+                    interact(new BlockHitResult(hitVec, Direction.UP, belowPos, false));
+                } else {
+                    BlockPos feetPos = mc.player.blockPosition();
+                    Direction side = PlacementUtils.getPlaceSide(feetPos);
+                    if (side == null) side = Direction.DOWN;
+                    BlockPos neighbor = feetPos.relative(side);
+                    Direction opposite = side.getOpposite();
+                    Vec3 hitVec = Vec3.atCenterOf(neighbor).add(Vec3.atLowerCornerOf(opposite.getUnitVec3i()).scale(0.5));
+                    if (!optimized && selfPlaceRotate.get()) {
+                        float[] rot = RotationUtils.getRotationsTo(mc.player.getEyePosition(), hitVec);
+                        rotationManager.setRotationSilent(rot[0], rot[1]);
+                    }
+                    interact(new BlockHitResult(hitVec, opposite, neighbor, false));
+                }
+            } finally {
+                if (!optimized && selfPlaceRotate.get()) rotationManager.setRotationSilentSync();
             }
-            interact(new BlockHitResult(hitVec, Direction.UP, belowPos, false));
-        } else {
-            BlockPos feetPos = mc.player.blockPosition();
-            Direction side = PlacementUtils.getPlaceSide(feetPos);
-            if (side == null) side = Direction.DOWN;
-            BlockPos neighbor = feetPos.relative(side);
-            Direction opposite = side.getOpposite();
-            Vec3 hitVec = Vec3.atCenterOf(neighbor).add(Vec3.atLowerCornerOf(opposite.getUnitVec3i()).scale(0.5));
-            if (!optimized && selfPlaceRotate.get()) {
-                float[] rot = RotationUtils.getRotationsTo(mc.player.getEyePosition(), hitVec);
-                rotationManager.setRotationSilent(rot[0], rot[1]);
-            }
-            interact(new BlockHitResult(hitVec, opposite, neighbor, false));
-        }
-
-        if (swapAlternative.get()) {
-            performInventorySwapPVP(itemSlot);
-        }
-
-        // In the optimized path the pearl flow owns the final sync; don't duplicate it here.
-        if (!optimized) {
-            inventoryManager.syncToClient();
-            if (selfPlaceRotate.get()) {
-                rotationManager.setRotationSilentSync();
-            }
-        }
+        });
     }
 
     /**
@@ -373,12 +334,6 @@ public class PearlPhaser {
     private void interact(BlockHitResult hitResult) {
         mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND, hitResult);
         mc.getConnection().send(new ServerboundSwingPacket(InteractionHand.MAIN_HAND));
-    }
-
-    private void performInventorySwapPVP(int pearlSlot) {
-        mc.gameMode.handleContainerInput(0, pearlSlot < 9 ? pearlSlot + 36 : pearlSlot, 0, ContainerInput.PICKUP, mc.player);
-        mc.gameMode.handleContainerInput(0, ((PlayerInventoryAccessor) mc.player.getInventory()).getSelectedSlot() + 36, 0, ContainerInput.PICKUP, mc.player);
-        mc.gameMode.handleContainerInput(0, pearlSlot < 9 ? pearlSlot + 36 : pearlSlot, 0, ContainerInput.PICKUP, mc.player);
     }
 
     public enum SelfPlaceType implements DescribedOption {

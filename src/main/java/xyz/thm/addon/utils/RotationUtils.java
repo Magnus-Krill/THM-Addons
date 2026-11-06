@@ -8,11 +8,13 @@ package xyz.thm.addon.utils;
 
 import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
+import meteordevelopment.meteorclient.events.game.GameLeftEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.ClipContext;
@@ -50,7 +52,7 @@ public class RotationUtils {
         return INSTANCE;
     }
     @EventHandler
-    public void onPacketSend(PacketEvent.Send event) {
+    public void onPacketSend(PacketEvent.Sent event) {
         if (mc.player == null || mc.level == null) return;
         if (event.packet instanceof ServerboundMovePlayerPacket packet && packet.hasRotation()) {
             float packetYaw = packet.getYRot(0.0f);
@@ -58,6 +60,24 @@ public class RotationUtils {
             serverYaw = packetYaw;
             serverPitch = packetPitch;
         }
+    }
+    @EventHandler
+    private void onCorrection(PacketEvent.Receive event) {
+        if (!(event.packet instanceof ClientboundPlayerPositionPacket packet)) return;
+        var connection = event.connection;
+        mc.execute(() -> {
+            if (mc.player == null || mc.getConnection() == null || mc.getConnection().getConnection() != connection) return;
+            clearRotations();
+            serverYaw = lastServerYaw = packet.change().yRot() + (packet.relatives().contains(net.minecraft.world.entity.Relative.Y_ROT) ? serverYaw : 0);
+            serverPitch = lastServerPitch = packet.change().xRot() + (packet.relatives().contains(net.minecraft.world.entity.Relative.X_ROT) ? serverPitch : 0);
+        });
+    }
+
+    @EventHandler
+    private void onLeave(GameLeftEvent event) {
+        clearRotations();
+        serverYaw = lastServerYaw = serverPitch = lastServerPitch = 0;
+        webJumpFix = preJumpFix = false;
     }
     @EventHandler(priority = EventPriority.LOWEST)
     public void onTick(TickEvent.Pre event) {

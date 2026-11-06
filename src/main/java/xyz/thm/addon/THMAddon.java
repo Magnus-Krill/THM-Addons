@@ -148,6 +148,9 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         TotemTracker.initialize();
         ChunkResync.init();
         PacketPlaceTracker.init();
+        InventoryManager.getInstance();
+        SwapManager.get();
+        DeepSwapManager.get();
 
         LOG.info("[THM/Init] Services initialized; registering modules");
 
@@ -160,6 +163,8 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         Modules.get().add(new DiscordNotifs());
         Modules.get().add(new AntiDrop());
         Modules.get().add(new THMScaffold());
+        Modules.get().add(new CatchUpPacing());
+        Modules.get().add(new ShulkerOverview());
         Modules.get().add(new Nuker());
         Modules.get().add(new PaketLimiter());
         Modules.get().add(new PacketLoggerTHM());

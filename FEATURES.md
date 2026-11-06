@@ -23,7 +23,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 ## Mining and Building
 - `better-baritone-build` — Index opened storage, fetch missing build materials with Baritone, and manage block replacement/acceptance rules, dirt/grass equivalence, and log stripping in a custom screen.
 - `tunnel-miner` — Mines a tunnel block-by-block to target XZ coordinates at the same Y.
-- `Speedmine`: Packet mining with early packet rebreaks and client-world fallback, Off/Strict/Strong/Bypass modes, a server-confirmed rebreak-rate monitor, tool swap timing, TPS sync, client prediction, tick-based mining progress with smooth rendering, and optional multitasking while using items. Auto Mine can independently continue bedrock mining while eating with `bedrock-while-eating` (off by default). Optional `debug-auto-mine` reports targets and idle reasons in chat. Strong retries completed targets without an air confirmation. Active and automatic mining continue with the inventory open. Optional Air Miner removes the airborne speed penalty and claims ground around mining actions, with a speed cap and opt-in gliding.
+- `Speedmine`: Optional queue-through clicks and latency-aware tool efficiency. Packet mining with early packet rebreaks and client-world fallback, Off/Strict/Strong/Bypass modes, a server-confirmed rebreak-rate monitor, tool swap timing, TPS sync, client prediction, tick-based mining progress with smooth rendering, and optional multitasking while using items. Auto Mine can independently continue bedrock mining while eating with `bedrock-while-eating` (off by default). Optional `debug-auto-mine` reports targets and idle reasons in chat. Strong retries completed targets without an air confirmation. Active and automatic mining continue with the inventory open. Optional Air Miner removes the airborne speed penalty and claims ground around mining actions, with a speed cap and opt-in gliding.
 - `BlockCounter` — Counts the selected blocks.
 - `Better-echest-farmer` — Better echest farmer that uses instant rebreak exploit.
 - `sign-render` — Renders sign text through walls with advanced clustering.
@@ -31,7 +31,12 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `block-marker` — Renders selected block types nearby; left- or right-click a match to hide it.
 
 ## Inventory and Utility
+- `Loadouts` — Saves item components and quantities, restores inventory layouts, and refills them from open containers. Legacy item-only saves remain supported.
+- `auto-totem` — Meteor AutoTotem with atomic offhand swaps and optional pop-triggered refill.
+- `auto-armor` — Meteor AutoArmor with optional mending equipment rotation.
 - `auto-fish` — Meteor AutoFish with optional post-catch random look-around and short backward/return movement before recasting.
+- `shulker-overview` — Shows the dominant contents on shulker item icons, with a bounded component cache.
+- `catch-up-pacing` — Optionally spreads client catch-up ticks after freezes.
 - `offhand` — Meteor Offhand with main-hand item whitelist and blocklist modes for swaps.
 - `offhand-manager` — Automatically manages your offhand (optimized for highway work).
 - `chest-tracker` — Track items in containers.

@@ -9,6 +9,7 @@ package xyz.thm.addon.utils;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonParser;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -17,19 +18,39 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HighwayPresetManagerTest {
     @Test
     void presetJsonRoundTripsSettings() throws IOException {
         CompoundTag settings = new CompoundTag();
-        settings.putString("profile", "fast-paving");
-        settings.putInt("placements", 7);
+        var groups = new ListTag();
+        for (boolean expanded : new boolean[]{true, false}) {
+            var group = new CompoundTag();
+            group.putString("name", expanded ? "Paving" : "General");
+            group.putBoolean("sectionExpanded", expanded);
+            groups.add(group);
+        }
+        settings.put("groups", groups);
 
         CompoundTag decoded = HighwayPresetManager.decode(HighwayPresetManager.encode(settings));
 
-        assertEquals("fast-paving", decoded.getStringOr("profile", ""));
-        assertEquals(7, decoded.getIntOr("placements", 0));
+        assertEquals(settings, decoded);
+    }
+
+    @Test
+    void groupExpansionAcceptsJsonBooleansAndRejectsOtherValues() throws IOException {
+        String preset = """
+            {"version":1,"settings":{"groups":[{"name":"Paving","sectionExpanded":%s}]}}
+            """;
+        var group = (CompoundTag) HighwayPresetManager.decode(preset.formatted("true")).getListOrEmpty("groups").getFirst();
+        assertTrue(group.getBooleanOr("sectionExpanded", false));
+        group = (CompoundTag) HighwayPresetManager.decode(preset.formatted("false")).getListOrEmpty("groups").getFirst();
+        assertFalse(group.getBooleanOr("sectionExpanded", true));
+        assertThrows(IOException.class, () -> HighwayPresetManager.decode(preset.formatted("2")));
+        assertThrows(IOException.class, () -> HighwayPresetManager.decode(preset.formatted("\"1\"")));
     }
 
     @Test
@@ -44,7 +65,8 @@ class HighwayPresetManagerTest {
             {"version":1,"settings":{"groups":[
               {"name":"Experimental","settings":[
                 {"name":"mine-lookahead","value":0},
-                {"name":"predictive-echest-replace","value":1}
+                {"name":"predictive-echest-replace","value":1},
+                {"name":"packet-budget","value":0}
               ]},
               {"name":"Digging","settings":[]},
               {"name":"Ender Chests","settings":[]}
@@ -66,6 +88,11 @@ class HighwayPresetManagerTest {
             .get(0).getAsJsonObject().get("value").getAsInt());
         assertEquals("predictive-echest-replace", groups.get(2).getAsJsonObject().getAsJsonArray("settings")
             .get(0).getAsJsonObject().get("name").getAsString());
+        var general = groups.get(3).getAsJsonObject();
+        assertEquals("General", general.get("name").getAsString());
+        var budget = general.getAsJsonArray("settings").get(0).getAsJsonObject();
+        assertEquals("packet-budget", budget.get("name").getAsString());
+        assertEquals(0, budget.get("value").getAsInt());
     }
 
     @Test

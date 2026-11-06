@@ -94,12 +94,17 @@
     "ClientChunkCacheSurroundMixin",
     "ClientConnectionChokeMixin",
     "ClientLevelBlockUpdateMixin",
+    "DistantHorizonsLightmapMixin",
     "InventoryScreenMixin",
     "KeyboardMixin",
     "LevelLoadingScreenMixin",
     "PlayerAirMiningMixin",
     "PlayerListHudMixin",
     "PlayerListMapMixin",
-    "accessor.ClientLevelPredictionAccessor"
+    "accessor.ClientLevelPredictionAccessor",
+    "ShulkerOverviewMixin",
+    "accessor.DeltaTrackerTimerAccessor",
+    "meteor.AutoTotemMixin",
+    "meteor.AutoArmorMixin"
   ]
 }

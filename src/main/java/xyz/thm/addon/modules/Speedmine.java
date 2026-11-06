@@ -57,6 +57,8 @@ import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.system.THMSystem;
 import xyz.thm.addon.utils.InventoryManager;
 import xyz.thm.addon.utils.RangeUtils;
+import xyz.thm.addon.utils.SwapManager;
+import xyz.thm.addon.utils.ToolLatency;
 import xyz.thm.addon.utils.RenderUtilsTHM;
 import xyz.thm.addon.utils.ThmMembers;
 
@@ -230,6 +232,18 @@ public class Speedmine extends Module {
         .description("Queue extra blocks when both break slots are occupied.")
         .defaultValue(true)
         .build());
+
+    private final Setting<Boolean> queueThrough = sgMine.add(new BoolSetting.Builder()
+        .name("queue-through").description("Clicks through queued blocks to queue the next block.")
+        .defaultValue(false).visible(queueEnabled::get).build());
+    private final Setting<Integer> queueLimit = sgMine.add(new IntSetting.Builder()
+        .name("queue-limit").description("Maximum queued mining targets.")
+        .defaultValue(32).range(1, 200).sliderRange(1, 64).visible(queueEnabled::get).build());
+    private final Setting<Boolean> toolLatencyCheck = sgMine.add(new BoolSetting.Builder()
+        .name("tool-latency-check").description("Accounts for delayed tool efficiency after silent swaps.")
+        .defaultValue(false).build());
+    private final ToolLatency toolLatency = new ToolLatency();
+    private boolean queueClickConsumed;
 
     public final Setting<Double> breakThreshold = sgMine.add(new DoubleSetting.Builder()
         .name("break-threshold")
@@ -444,6 +458,8 @@ public class Speedmine extends Module {
         warnedSwingBlocked = false;
         pendingBreaks.clear();
         queue.clear();
+        toolLatency.clear();
+        queueClickConsumed = false;
     }
 
     @EventHandler
@@ -534,14 +550,25 @@ public class Speedmine extends Module {
     private void onStartBreaking(StartBreakingBlockEvent event) {
         if (mc.level == null || mc.player == null) return;
         // Hands manual clicks straight back to vanilla — auto-mine owns the module
-        if (autoMine.get() && autoMineOnly.get()) return;
+        if (!interceptsManualBreak(event.blockPos)) return;
         BlockState state = mc.level.getBlockState(event.blockPos);
         if (!BlockUtils.canBreak(event.blockPos, state)) return;
-        if (outOfRange(event.blockPos)) return;
         event.cancel();
-        if (!isMining(event.blockPos)) {
-            handleBlockClick(event.blockPos, state);
+        BlockPos target = event.blockPos;
+        if (isMining(target)) {
+            if (!queueEnabled.get() || !queueThrough.get() || queueClickConsumed) return;
+            var eye = mc.player.getEyePosition();
+            var end = eye.add(mc.player.getLookAngle().scale(range.get()));
+            var context = new net.minecraft.world.level.ClipContext(eye, end,
+                net.minecraft.world.level.ClipContext.Block.OUTLINE, net.minecraft.world.level.ClipContext.Fluid.NONE, mc.player);
+            var hit = RangeUtils.clipSkipping(mc.level, context, this::isMining);
+            if (hit == null) return;
+            target = hit.getBlockPos();
+            state = mc.level.getBlockState(target);
+            if (!BlockUtils.canBreak(target, state) || outOfRange(target)) return;
         }
+        queueClickConsumed = true;
+        handleBlockClick(target, state);
     }
 
     @EventHandler
@@ -549,6 +576,9 @@ public class Speedmine extends Module {
         if (mc.level == null || mc.player == null) return;
 
         clientTick++;
+        if (!mc.options.keyAttack.isDown()) queueClickConsumed = false;
+        if (toolLatencyCheck.get()) toolLatency.record(System.nanoTime(),
+            efficiency(InventoryManager.getInstance().getServerItem()), toolLatencyWindow());
         if (airClaimLeft > 0 && (--airClaimLeft == 0 || !liftsAirMiningPenalty())) restoreAirGround();
         long now = System.currentTimeMillis();
         startCredit = replenishStartCredit(startCredit, now - lastStartCreditMs, effectiveTps());
@@ -681,8 +711,12 @@ public class Speedmine extends Module {
     }
 
     private void handleBlockClick(BlockPos pos, BlockState state) {
+        handleBlockClick(pos, state, true);
+    }
+
+    private void handleBlockClick(BlockPos pos, BlockState state, boolean allowRebreak) {
         if (isMining(pos)) return;
-        if (autoRebreak.get() && rebreakMode.get() != RebreakMode.Off && rebreakMode.get().isPrimed(lastBreakConfirmed)
+        if (allowRebreak && autoRebreak.get() && rebreakMode.get() != RebreakMode.Off && rebreakMode.get().isPrimed(lastBreakConfirmed)
             && pos.equals(lastBrokenPos) && pos.equals(lastStartedPos)) {
             boolean packet = rebreakTrigger.get() == RebreakTrigger.onPacket;
             if (packet && packetReplacement != null) tryRebreak(pos, packetReplacement, true);
@@ -691,12 +725,12 @@ public class Speedmine extends Module {
         }
         if (shouldPauseMining()) return;
         if (hasPendingNormalBreak()) {
-            if (queueEnabled.get()) queue.addLast(pos.immutable());
+            if (queueEnabled.get()) enqueue(pos);
             return;
         }
 
         if (!canStart()) {
-            queue.addLast(pos.immutable());
+            enqueue(pos);
             return;
         }
 
@@ -707,7 +741,7 @@ public class Speedmine extends Module {
             sendStart(primary);
         } else if (canAddSecondary) {
             if (!stopWithTool(primary, silentSwap.get())) {
-                if (queueEnabled.get() && !queue.contains(pos)) queue.addLast(pos.immutable());
+                if (queueEnabled.get()) enqueue(pos);
                 return;
             }
             secondary = primary;
@@ -715,8 +749,23 @@ public class Speedmine extends Module {
             primary   = new MineContext(pos, state, true);
             sendStart(primary);
         } else {
-            if (queueEnabled.get() && !queue.contains(pos)) queue.addLast(pos);
+            if (queueEnabled.get()) enqueue(pos);
         }
+    }
+
+    private void enqueue(BlockPos pos) {
+        if (queue.size() < queueLimit.get() && !queue.contains(pos)) queue.addLast(pos.immutable());
+    }
+
+    private long toolLatencyWindow() {
+        var info = mc.getConnection() == null ? null : mc.getConnection().getPlayerInfo(mc.player.getUUID());
+        int ping = info == null ? 200 : Math.clamp(info.getLatency(), 0, 2000);
+        return (ping * 3L / 2 + 200) * 1_000_000L;
+    }
+
+    private static int efficiency(ItemStack stack) {
+        for (var entry : stack.getEnchantments().entrySet()) if (entry.getKey().is(Enchantments.EFFICIENCY)) return entry.getIntValue();
+        return 0;
     }
 
     private void pruneCompletedOrInvalid() {
@@ -814,8 +863,8 @@ public class Speedmine extends Module {
             releaseHeldSlot();
             withSilentTool(ctx.state, action);
         } else {
-            if (silent) holdTool(ctx.startSlot);
-            else equipBestTool(ctx.state);
+            if (silent && !holdTool(ctx.startSlot)) return;
+            if (!silent) equipBestTool(ctx.state);
             action.run();
         }
         int validationSlot = validationToolSlot();
@@ -834,15 +883,7 @@ public class Speedmine extends Module {
     public void withSilentTool(BlockState state, Runnable action) {
         if (mc.player == null) { action.run(); return; }
         int best = findBestHotbarSlot(state);
-        InventoryManager inventory = InventoryManager.getInstance();
-        int prev = inventory.getServerSlot();
-        boolean swap = best != -1 && best != prev;
-        if (swap) inventory.setSlotForced(best);
-        try {
-            action.run();
-        } finally {
-            if (swap && inventory.getServerSlot() != prev) inventory.setSlotForced(prev);
-        }
+        if (best != -1) SwapManager.get().withSlot(this, best, SwapManager.MINING, true, multitask.get(), action);
     }
 
     // ── Auto Mine ─────────────────────────────────────────────────────────────
@@ -1076,21 +1117,15 @@ public class Speedmine extends Module {
 
     record PendingBreak(BlockPos pos, int toolSlot, boolean normal, boolean secondary, long deadlineMs) {}
 
-    private void holdTool(int slot) {
-        if (slot < 0 || mc.player == null) return;
-
-        InventoryManager inventory = InventoryManager.getInstance();
-        if (inventory.getServerSlot() != slot) inventory.setSlotForced(slot);
+    private boolean holdTool(int slot) {
+        if (slot < 0 || !SwapManager.get().hold(this, slot, SwapManager.MINING, multitask.get())) return false;
         heldSlot = slot;
+        return true;
     }
 
     private void releaseHeldSlot() {
-        InventoryManager inventory = InventoryManager.getInstance();
-        if (heldSlot != -1 && mc.player != null && inventory.getServerSlot() == heldSlot
-            && inventory.getServerSlot() != mc.player.getInventory().getSelectedSlot()) {
-            inventory.setSlotForced(mc.player.getInventory().getSelectedSlot());
-        }
-        heldSlot  = -1;
+        SwapManager.get().release(this);
+        heldSlot = -1;
         idleTicks = 0;
     }
 
@@ -1244,6 +1279,16 @@ public class Speedmine extends Module {
         BlockState state = mc.level.getBlockState(pos);
         if (state.isAir()) return;
         if (!isMining(pos)) handleBlockClick(pos, state);
+    }
+
+    void requestFreshBreak(BlockPos pos) {
+        if (mc.level == null || mc.player == null) return;
+        BlockState state = mc.level.getBlockState(pos);
+        if (!state.isAir()) handleBlockClick(pos, state, false);
+    }
+
+    boolean interceptsManualBreak(BlockPos pos) {
+        return isActive() && !(autoMine.get() && autoMineOnly.get()) && !outOfRange(pos);
     }
 
     public boolean isMining(BlockPos pos) {
@@ -1476,6 +1521,7 @@ public class Speedmine extends Module {
                         break;
                     }
                 }
+                if (toolLatencyCheck.get()) effLevel = toolLatency.minimum(System.nanoTime(), toolLatencyWindow(), effLevel);
                 if (effLevel > 0) speed += effLevel * effLevel + 1;
             }
 

@@ -53,6 +53,7 @@ dependencies {
     runtimeOnly(libs.baritone)
 
     // Inspect optional mixin targets without loading these mods into the dev client.
+    testRuntimeOnly(libs.distant.horizons)
     testRuntimeOnly(libs.sodium)
     testRuntimeOnly(libs.xaeros.minimap)
     testRuntimeOnly(libs.xaeros.world.map)
@@ -212,6 +213,18 @@ tasks.register<JavaExec>("checkBuildRules") {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = file("tools/tests/BuildSchematicCheck.java").absolutePath
     workingDir = layout.buildDirectory.dir("build-rules-check").get().asFile
+    doFirst { workingDir.mkdirs() }
+    systemProperty("java.awt.headless", "true")
+}
+
+tasks.register<JavaExec>("checkInventoryRules") {
+    group = "verification"
+    description = "Check inventory components and loadout compatibility without starting a client."
+    dependsOn(tasks.classes)
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = file("tools/tests/InventoryUtilitiesCheck.java").absolutePath
+    workingDir = layout.buildDirectory.dir("inventory-rules-check").get().asFile
     doFirst { workingDir.mkdirs() }
     systemProperty("java.awt.headless", "true")
 }
