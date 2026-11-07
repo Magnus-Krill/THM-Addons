@@ -228,6 +228,25 @@ class HighwayBuilderTHMTest {
     }
 
     @Test
+    void declaredRoadTypeAppliesToUnmappedAndOverlappingGridSegments() {
+        assertEquals("unlisted-ring", HighwayBuilderTHM.UnmappedRoad.Ring.reportRoute("other"));
+        assertEquals("unlisted-ring", HighwayBuilderTHM.UnmappedRoad.Ring.reportRoute("grid"));
+        assertEquals("unlisted-diamond", HighwayBuilderTHM.UnmappedRoad.Diamond.reportRoute("other"));
+        assertEquals("grid", HighwayBuilderTHM.UnmappedRoad.Auto.reportRoute("grid"));
+        assertEquals("main", HighwayBuilderTHM.UnmappedRoad.Ring.reportRoute("main"));
+        assertEquals("ring-62500", HighwayBuilderTHM.UnmappedRoad.Diamond.reportRoute("ring-62500"));
+        assertEquals("diamond-25000", HighwayBuilderTHM.UnmappedRoad.Ring.reportRoute("diamond-25000"));
+    }
+
+    @Test
+    void unlistedStatusUsesTheRadiusFromTheWorkingSide() {
+        assertEquals("unlisted-ring-35000", HighwayBuilderTHM.UnmappedRoad.Ring.statusRoute("grid", -34999.5, 100.5, HorizontalDirection.South));
+        assertEquals("unlisted-ring-35000", HighwayBuilderTHM.UnmappedRoad.Ring.statusRoute("other", 100.5, 35000.5, HorizontalDirection.East));
+        assertEquals("unlisted-diamond-35000", HighwayBuilderTHM.UnmappedRoad.Diamond.statusRoute("other", 10000.5, -24999.5, HorizontalDirection.SouthEast));
+        assertEquals("ring-62500", HighwayBuilderTHM.UnmappedRoad.Ring.statusRoute("ring-62500", 62500.5, 100.5, HorizontalDirection.South));
+    }
+
+    @Test
     void adventureBackupVisitPreservesTheMainServerCheckpoint() {
         var mainPosition = new Vec3(100000, 120, -100000);
         var continuity = new HighwayBuilderTHM.StatsContinuity(mainPosition, "test", "minecraft:the_nether", true);

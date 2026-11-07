@@ -413,6 +413,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `sends-statistics(Webhook)` | `false` | `print-statistics` is on | Sends HighwayBuilder statistics to a webhook when the module disables. |
 | `webhook` | `MyWebhookInHere` | `print-statistics` and `sends-statistics(Webhook)` are on | Webhook URL used for statistics delivery. |
 | `sends-statistics(API)` | `false` | `print-statistics` is on | Sends statistics to the API when the module disables. |
+| `unmapped-road` | `Auto` | API statistics are on | Select `Ring` or `Diamond` for an unlisted route, including where it overlaps the grid. Main highways and listed rings and diamonds are detected automatically. |
 
 Proof screenshots wait for two completed visible frames. Disconnect captures wait up to 30 seconds
 for the matching reason and statistics screen, with loading overlays cleared. Chat captures wait

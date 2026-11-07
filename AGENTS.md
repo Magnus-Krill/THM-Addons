@@ -76,10 +76,9 @@ existing Bearer API token, with membership enforced by the server.
 Queued requests use the current configured token; the server still validates ownership and membership.
 `THMSystem` publishes credential changes through volatile snapshots for worker reads.
 
-Highway status and PoW append the loaded addon version through `APIUtils`. PoW also reports
-Axis Viewer's mapped-network eligibility and `road=main|ring|diamond|other`, independent of render toggles.
-Build direction disambiguates road intersections; manual pause preserves the build position's eligibility
-and road type. Keep this separate from KitBot `$update` guards.
+Highway status and PoW send a compact `report` through `APIUtils`, with the token in the Bearer header.
+Status sends the current road ID. PoW sends the road ID for the built segment. Both include the loaded addon version.
+Manual pause uses the saved build endpoint. Keep exact coordinates out of API reports.
 
 Every outbound request — API calls and player-configured webhooks alike — goes through
 `TrustedHttp`, not raw `HttpURLConnection`: it rejects non-http(s) schemes, resolves the hostname

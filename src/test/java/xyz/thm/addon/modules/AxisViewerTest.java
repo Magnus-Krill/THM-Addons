@@ -7,6 +7,7 @@
 package xyz.thm.addon.modules;
 
 import meteordevelopment.meteorclient.utils.misc.HorizontalDirection;
+import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -83,6 +84,22 @@ class AxisViewerTest {
                 }
             }
         }
+    }
+
+    @Test
+    void reportsOnlyTheSharedRoadIdForTheBuildSegment() {
+        var start = new Vec3(62500.5, 120, 1000.5);
+        assertEquals("ring-62500", AxisViewer.highwayRoute(start, new Vec3(62500.5, 120, 2000.5), true, HorizontalDirection.South));
+        assertEquals("other", AxisViewer.highwayRoute(start, new Vec3(75000.5, 120, 2000.5), true, HorizontalDirection.South));
+        assertEquals("other", AxisViewer.highwayRoute(start, new Vec3(-62500.5, 120, 2000.5), true, HorizontalDirection.South));
+        assertEquals("other", AxisViewer.highwayRoute(new Vec3(15000000.5, 120, 1000.5),
+            new Vec3(15000000.5, 120, 2000.5), true, HorizontalDirection.South));
+        assertEquals("diamond-25000", AxisViewer.highwayRoute(new Vec3(5000.5, 120, 20000.5),
+            new Vec3(10000.5, 120, 15000.5), true, HorizontalDirection.NorthEast));
+        assertEquals("grid", AxisViewer.highwayRoute(new Vec3(5000.5, 120, 30000.5),
+            new Vec3(5000.5, 120, 20000.5), true, HorizontalDirection.North));
+        assertEquals("grid", AxisViewer.highwayRoute(new Vec3(50000.5, 120, 45000.5),
+            new Vec3(50000.5, 120, 90000.5), true, HorizontalDirection.South));
     }
 
     @Test

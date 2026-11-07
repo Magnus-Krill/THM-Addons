@@ -1772,6 +1772,14 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
+    private final Setting<UnmappedRoad> unmappedRoad = sgStatistics.add(new EnumSetting.Builder<UnmappedRoad>()
+        .name("unmapped-road")
+        .description("Declares the type of an unmapped road for status and statistics.")
+        .defaultValue(UnmappedRoad.Auto)
+        .visible(() -> statuslog.get() || printStatistics.get() && sendStatisticsapi.get())
+        .build()
+    );
+
     private final Setting<Boolean> desktopNotifies = sgNotifies.add(new BoolSetting.Builder()
         .name("desktop-notifies")
         .description("Sends desktop notifications while Highway Builder is running.")
@@ -2363,6 +2371,34 @@ public class HighwayBuilderTHM extends Module {
         }
     }
 
+    public enum UnmappedRoad {
+        Auto("other"),
+        Ring("unlisted-ring"),
+        Diamond("unlisted-diamond");
+
+        private final String routeId;
+
+        UnmappedRoad(String routeId) {
+            this.routeId = routeId;
+        }
+
+        String reportRoute(String detected) {
+            return this != Auto && (detected.equals("other") || detected.equals("grid")) ? routeId : detected;
+        }
+
+        String statusRoute(String detected, double x, double z, HorizontalDirection direction) {
+            String route = reportRoute(detected);
+            double radius;
+            if (route.equals("unlisted-ring") && !direction.diagonal) {
+                radius = Math.abs((direction.offsetX == 0 ? x : z) - 0.5);
+            } else if (route.equals("unlisted-diamond") && direction.diagonal) {
+                radius = Math.abs(x - 0.5) + Math.abs(z - 0.5);
+            } else return route;
+            long rounded = Math.round(radius);
+            return rounded > 0 && rounded <= 30_000_000 ? route + "-" + rounded : route;
+        }
+    }
+
     public enum WebhookContent implements DescribedOption {
         Text,
         Image,
@@ -2709,7 +2745,7 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private void sendStatusLog() {
-        if (!statuslog.get() || mc.player == null || dir == null) return;
+        if (!statuslog.get() || mc.player == null || mc.level == null || dir == null) return;
 
         // Silent on purpose — see enforceCreativeStatisticsGuard().
         if (mc.player.isCreative()) {
@@ -2721,10 +2757,6 @@ public class HighwayBuilderTHM extends Module {
             warning("Status not sent. You are not on 6B6T");
             return;
         }
-        if (!isOnMainHighway()) {
-            warning("Status wont get send. You are not on a main highway");
-            return;
-        }
         if (THMSystem.get() == null || !THMSystem.get().hasApiToken()) {
             warning("Status not sent. No valid API token set - get one from the Discord bot's player panel.");
             return;
@@ -2734,16 +2766,17 @@ public class HighwayBuilderTHM extends Module {
         String axis = dir.toString();
 
         String mode = apiModeSuffix(THMSystem.get().getMode());
-        String statusMessage = String.format("%s:%s:%s:%d:%d:%s%s:official=%s:road=%s",
-            THMSystem.get().getApiToken(),
+        double x = mc.player.getX(), z = mc.player.getZ();
+        String detectedRoute = AxisViewer.highwayRouteAt(x, z, mc.level.dimension() == Level.NETHER, dir);
+        String route = unmappedRoad.get().statusRoute(detectedRoute, x, z, dir);
+        String statusMessage = String.format("%s:%s:%d:%d:%s%s:route=%s",
             playerName,
             axis,
             blocksBroken,
             blocksPlaced,
             generateTimestamp(),
             mode,
-            AxisViewer.isOnHighway(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER),
-            AxisViewer.highwayType(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER, dir)
+            route
         );
 
         sendStatus(statusMessage);
@@ -11654,7 +11687,11 @@ public class HighwayBuilderTHM extends Module {
         }
 
         if (sendStatisticsapi.get() && !working.apiSendCommitted()) {
-            double distance = statsDistance(report.startPos());
+            Vec3 start = report.startPos();
+            StatsContinuity continuity = snapshot.continuity();
+            Vec3 end = manualPause != null ? manualPause.position()
+                : continuity != null ? continuity.position() : mc.player.position();
+            double distance = statsDistance(start) > 0 ? Math.hypot(end.x - start.x, end.z - start.z) : 0;
             if (distance > 1) {
                 String playerName = mc.player.getName().tryCollapseToString();
                 ThmMembers.Member selfMember = ThmMembers.getMemberByMcName(playerName);
@@ -11683,10 +11720,11 @@ public class HighwayBuilderTHM extends Module {
                         );
                         if (committed != null) {
                             String server = mc.getCurrentServer() != null ? mc.getCurrentServer().ip : "singleplayer";
-                            String roadType = manualPause != null ? manualPause.roadType()
-                                : AxisViewer.highwayType(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER, dir);
-                            String statsMessageapi = String.format("%s:%s:%s:%.0f:%s:%s:%s:%s:%s%s:official=%s:road=%s",
-                                THMSystem.get().getApiToken(),
+                            String dimension = manualPause != null ? manualPause.dimension()
+                                : continuity != null ? continuity.dimension() : mc.level.dimension().identifier().toString();
+                            String detectedRoute = AxisViewer.highwayRoute(start, end, dimension.equals("minecraft:the_nether"), dir);
+                            String route = unmappedRoad.get().reportRoute(detectedRoute);
+                            String statsMessageapi = String.format(Locale.ROOT, "%s:%s:%.0f:%s:%s:%s:%s%s:route=%s",
                                 playerName,
                                 server,
                                 distance,
@@ -11694,11 +11732,8 @@ public class HighwayBuilderTHM extends Module {
                                 report.blocksPlaced(),
                                 dir,
                                 generateTimestamp(),
-                                roadType.equals("main"),
                                 apiModeSuffix(THMSystem.get().getMode()),
-                                manualPause != null ? manualPause.mappedHighway()
-                                    : AxisViewer.isOnHighway(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER),
-                                roadType
+                                route
                             );
                             sendStatistics(statsMessageapi);
                             working = committed;

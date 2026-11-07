@@ -17,6 +17,7 @@ import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.world.Dimension;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.util.Mth;
+import net.minecraft.world.phys.Vec3;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.utils.RenderUtilsTHM;
@@ -199,8 +200,26 @@ public class AxisViewer extends Module {
         3750000
     );
 
-    // Build direction disambiguates roads where their mapped lines intersect.
     public static String highwayType(double x, double z, boolean nether, HorizontalDirection direction) {
+        String route = highwayRouteAt(x, z, nether, direction);
+        if (route.startsWith("ring-")) return "ring";
+        if (route.startsWith("diamond-")) return "diamond";
+        return route.equals("main") ? "main" : "other";
+    }
+
+    static String highwayRoute(Vec3 start, Vec3 end, boolean nether, HorizontalDirection direction) {
+        if (direction == null) return "other";
+        double crossTrack = (end.x - start.x) * direction.offsetZ - (end.z - start.z) * direction.offsetX;
+        if (Math.abs(crossTrack) >= 10) return "other";
+        String route = highwayRouteAt(start.x, start.z, nether, direction);
+        if (route.equals(highwayRouteAt(end.x, end.z, nether, direction))) return route;
+        if (nether && isOnGridLine(start.x - 0.5, start.z - 0.5, direction)
+            && isOnGridLine(end.x - 0.5, end.z - 0.5, direction)) return "grid";
+        return "other";
+    }
+
+    // Build direction disambiguates roads where their mapped lines intersect.
+    static String highwayRouteAt(double x, double z, boolean nether, HorizontalDirection direction) {
         if (!Double.isFinite(x) || !Double.isFinite(z) || direction == null) return "other";
         x -= 0.5;
         z -= 0.5;
@@ -212,13 +231,22 @@ public class AxisViewer extends Module {
         if (!nether) return "other";
         for (int radius : RING_ROADS) {
             if (dx == 0 && Math.abs(ax - radius) < 5 && az < radius + 5
-                || dz == 0 && Math.abs(az - radius) < 5 && ax < radius + 5) return "ring";
+                || dz == 0 && Math.abs(az - radius) < 5 && ax < radius + 5) return "ring-" + radius;
         }
         for (int radius : DIAMONDS) {
             if (dx != 0 && dz != 0 && Math.abs(ax + az - radius) < 5
-                && (ax < 5 || az < 5 || Math.signum(x) * dx + Math.signum(z) * dz == 0)) return "diamond";
+                && (ax < 5 || az < 5 || Math.signum(x) * dx + Math.signum(z) * dz == 0)) return "diamond-" + radius;
         }
-        return "other";
+        return isOnGridLine(x, z, direction) ? "grid" : "other";
+    }
+
+    private static boolean isOnGridLine(double x, double z, HorizontalDirection direction) {
+        if (direction.diagonal) return false;
+        double line = direction.offsetX == 0 ? x : z;
+        double along = Math.abs(direction.offsetX == 0 ? z : x);
+        return (Math.abs(line) < GRID_RADIUS + 5 && along < GRID_RADIUS + 5
+                && Math.abs(line - Math.round(line / GRID_STEP) * GRID_STEP) < 5)
+            || (Math.abs(Math.abs(line) - GRID_RADIUS) < 5 && along < EXTENSION_RADIUS + 5);
     }
 
     public static boolean isOnHighway(double x, double z, boolean nether) {

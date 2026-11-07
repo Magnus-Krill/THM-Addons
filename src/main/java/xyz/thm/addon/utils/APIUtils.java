@@ -123,24 +123,24 @@ public class APIUtils {
         if (canRequest()) THMUtils.async(name, () -> TrustedHttp.postJson(url, json, TrustedHttp.Kind.API, apiToken()));
     }
 
-    private static String jsonContent(String message) {
+    private static String jsonMessage(String field, String message) {
         JsonObject payload = new JsonObject();
-        payload.addProperty("content", message);
+        payload.addProperty(field, message);
         return payload.toString();
     }
 
     public static void sendStatus(String message) {
-        apiPost("status", GeneratedApiEndpoints.statusUrl(), jsonContent(message + ":v" + THMAddon.VERSION));
+        apiPost("status", GeneratedApiEndpoints.statusUrl(), jsonMessage("report", message + ":v" + THMAddon.VERSION));
     }
 
     public static void sendStatistics(String message) {
-        apiPost("statistics", GeneratedApiEndpoints.highwayUrl(), jsonContent(message + ":v" + THMAddon.VERSION));
+        apiPost("statistics", GeneratedApiEndpoints.highwayUrl(), jsonMessage("report", message + ":v" + THMAddon.VERSION));
     }
 
     // Discord webhook URL, supplied by the player at runtime - never attach our API token to it.
     public static void sendToWebhook(String url, String message) {
         THMUtils.async("webhook", () ->
-            TrustedHttp.postJson(url, jsonContent(message), TrustedHttp.Kind.USER_WEBHOOK, null));
+            TrustedHttp.postJson(url, jsonMessage("content", message), TrustedHttp.Kind.USER_WEBHOOK, null));
     }
 
     private static String stringField(JsonObject o, String field) {
@@ -209,7 +209,8 @@ public class APIUtils {
 
     public static Map<String, String> fetchHighwayStatusFromApi() {
         try {
-            String body = apiGet(GeneratedApiEndpoints.highwayStatusUrl());
+            String url = GeneratedApiEndpoints.highwayStatusUrl();
+            String body = apiGet(url + (url.contains("?") ? "&" : "?") + "routes=1");
             if (body == null) return null;
 
             JsonObject root = GSON.fromJson(body, JsonObject.class);
@@ -245,7 +246,11 @@ public class APIUtils {
                     Long existing = newestTimestampByName.get(name);
                     if (existing == null || timestamp >= existing) {
                         newestTimestampByName.put(name, timestamp);
-                        highwayByName.put(name, entry.getKey());
+                        String route = stringField(worker, "routeLabel");
+                        String direction = stringField(value, "direction");
+                        String mode = "dug".equals(stringField(value, "mode")) ? "Dug " : "";
+                        highwayByName.put(name, route.isBlank() || route.length() > 80 || direction.length() > 2
+                            ? entry.getKey() : route + " · " + mode + direction);
                     }
                 } catch (RuntimeException ignored) {
                     // A malformed worker must not hide the rest of the board.
