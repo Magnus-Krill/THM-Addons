@@ -7,6 +7,7 @@
 import com.google.gson.JsonElement;
 import com.mojang.serialization.JsonOps;
 import net.minecraft.SharedConstants;
+import net.minecraft.core.Direction;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.data.registries.VanillaRegistries;
@@ -19,6 +20,7 @@ import net.minecraft.world.item.enchantment.Enchantments;
 import xyz.thm.addon.modules.Loadouts;
 import xyz.thm.addon.modules.ShulkerOverview;
 import xyz.thm.addon.utils.ItemSignature;
+import xyz.thm.addon.utils.PlacementUtils;
 
 import java.util.List;
 
@@ -83,6 +85,18 @@ public class InventoryUtilitiesCheck {
         check(xyz.thm.addon.utils.RangeUtils.clipSkipping(world, ray, pos -> false).getBlockPos().equals(first), "normal queue ray hits the first solid block");
         check(xyz.thm.addon.utils.RangeUtils.clipSkipping(world, ray, first::equals).getBlockPos().equals(second), "queue-through skips an already queued block");
         check(xyz.thm.addon.utils.RangeUtils.clipSkipping(world, ray, pos -> true) == null, "queue-through cannot invent an out-of-range target");
+        var edge = PlacementUtils.visibleFaceHit(first, Direction.WEST, point -> point.y < 0.4
+            ? new net.minecraft.world.phys.BlockHitResult(point, Direction.WEST, first, false)
+            : new net.minecraft.world.phys.BlockHitResult(point, Direction.WEST, second, false));
+        check(edge != null && edge.getLocation().y < 0.4, "a visible edge can be clicked when the face center is occluded");
+        check(PlacementUtils.visibleFaceHit(first, Direction.WEST,
+            point -> new net.minecraft.world.phys.BlockHitResult(point, Direction.UP, first, false)) == null,
+            "hitting the right block on the wrong face does not support placement");
+        var directions = new Direction[]{Direction.EAST, Direction.WEST};
+        check(PlacementUtils.findSupportStep(first, directions, 2, pos -> true,
+            pos -> pos.equals(first.east(2)) || pos.equals(first.west())).equals(first.west()), "prefer a shorter support path");
+        check(PlacementUtils.findSupportStep(first, directions, 2, pos -> !pos.equals(second),
+            pos -> pos.equals(first.east(2))) == null, "do not build through a blocked support path");
         System.out.println("Inventory utility checks passed: " + checks);
     }
 }

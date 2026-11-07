@@ -158,6 +158,14 @@ left after mining, independently of Experimental. Preserve pending-target duplic
 **Highway legacy airplace:** Paving's default-off `legacy-air-place` restores the 1.21.11
 center/UP click only for unsupported packet placements. Keep confirmation and duplicate guards.
 
+**Highway KitBot stock guard:** Remaining supplies or an unchecked bank trigger bounded local
+restock recovery before order entry. Reopen enabled sources and preserve the configured bank order;
+do not treat the stock veto itself as a fatal error.
+
+**Highway KitBot updates:** Send periodic and finish updates through `KitbotFrontend.sendUpdate`
+to share the request window with restock orders. Defer during queued/active restock and collection;
+update outcomes must not finish or fail a kit order. Skip finish updates when stopping in restock.
+
 **Highway autosetup:** HighwayBuilder configures and enables Speed Mine, Reach, Velocity, and KillAura on startup and resume. It also enables Criticals with its existing settings. KillAura setup leaves addon settings such as Smart Timing alone.
 
 **THMScaffold:** Replaces the legacy `scaffold-THM` module. `modules/THMScaffold` owns settings and
@@ -169,6 +177,8 @@ Meteor Scaffold is unmodified. The budget reserves complete placement transactio
 `PaketLimiter` always allows hotbar slot changes to preserve swap recovery.
 
 **Shared inventory swaps:** `SwapManager` owns silent hotbar holds and nested temporary actions. `DeepSwapManager` stages inventory items with checked restoration and preserves managed HighwayBuilder slots. Use `InventoryManager.withItem` for temporary item use; do not add another global swap-back record. Inventory swaps never stop movement. Packet slot tracking advances on `PacketEvent.Sent`; multi-click inventory transactions check the limiter budget first.
+
+**Placement helpers:** `PlacementUtils` finds real support faces, samples visible click points for strict placements, and finds short support paths one step at a time. Placement modules keep their own packet budgets and confirmation rules.
 
 **Loadouts:** New saves store stack components and minimum quantities through the 26.2 registry codec. Read legacy item-ID strings without inventing components. Preserve unreadable files and write replacements atomically. `checkInventoryRules` verifies item components, shulker contents and queue-through rays without a client.
 
@@ -238,6 +248,10 @@ Copy payloads before asynchronous logging and keep the packet buffer's indices a
 Log to `logs/thm-channels/` with a separate file per connection and apply redaction before file or chat output.
 
 **Crystal Aura:** `modules/CrystalAura` ports Lambda's opportunity scoring and prediction modes. Its visible title is THMcrystal aura; `thmcrystal-aura` keeps Meteor's registry intact. Async work stays bounded and runs world operations on the client thread. Source and adaptations: `docs/crystal-aura-lambda-port.md`.
+
+**Auto Mine Sync:** Crystal Aura can rank Speedmine Auto Mine targets by safe crystal openings. Simulate air only for target selection, then use the server block update for the actual crystal action.
+
+**Mainhand:** Refills one hotbar slot through checked inventory swaps. Gapple Bind respects item use and interactive blocks, and temporary apple selection restores the previous slot unless the player changed it.
 
 **Chunk refresh recovery:** `THMHwyMonitor` uses Baritone backsteps and `ChunkResync` to lower and restore the reported view distance. Resume requires server unload/reload evidence; never delete local chunks to force a resend. Vanilla clamps the server-side radius to 2.
 Retreat uses the server's reported radius plus its tracking margin; travel and hold timeouts scale with distance.

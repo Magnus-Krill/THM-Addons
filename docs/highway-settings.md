@@ -10,11 +10,9 @@ This public guide explains the user-facing settings in `THM-HighwayBuilder` (`Hi
 
 ## Kitbot road taxes
 
-Statistics report `main`, `ring`, `diamond` or `other` alongside official-network status.
-Axis Viewer uses the build direction at crossings; grid roads, extensions and unrecognized roads
-are `other`. Manual pause keeps the saved build position's classification.
-Kitbot can set separate taxes for each road type, official status and digging/paving mode.
-Existing rates apply until an admin sets road taxes under Admin Login → Set Multipliers.
+HighwayBuilder identifies the road locally and sends a road ID such as `ring-62500`.
+Kitbot validates the ID against its own approved roads. Start and end coordinates stay on the client.
+Reports without an ID use the general unofficial rate. Admin Login → Set Multipliers edits the rates.
 
 ## Highway Profiles
 
@@ -62,7 +60,7 @@ With `Manage-hotbar` enabled, HighwayBuilder keeps food in slot 5, trash blocks 
 
 Carried shulkers are checked before external restock sources. Exhausting loose ender chests does not hide ender chests still inside shulkers; `search-shulkers` and `mine-ender-chests` must be enabled to use them for obsidian.
 
-KitBot orders for ender chests or obsidian always check your inventory first. `EnderChestThenKitBot` also checks the ender chest bank before ordering. `KitBotThenEnderChest` skips the bank for these orders, including after a failed order.
+KitBot orders for ender chests or obsidian always check your inventory first. `EnderChestThenKitBot` also checks the ender chest bank before ordering. `KitBotThenEnderChest` skips the bank for these orders, including after a failed order. If stock remains or the bank still needs checking, the builder reopens local source selection through bounded restock recovery instead of immediately disconnecting. Existing recovery limits still stop persistent failures.
 
 After KitBot confirms delivery, HighwayBuilder waits up to two minutes to collect every ordered shulker. Matching shulkers in the inventory, offhand, and cursor count toward the order. Once all are collected, it continues after the optional two-second `kitbot-collect-delay`. An incomplete delivery reports the collected and expected counts when the timeout expires.
 
@@ -229,6 +227,11 @@ migrate in module configs, Highway Profiles and custom presets.
 | `kitbot-update-on-finish` | `true` | Sends `$update` to KitBot1 with the current direction when the module finishes, then disconnects. |
 | `kitbot-periodic-update` | `true` | Sends periodic `$update` requests while building, deferred during restock. |
 | `kitbot-update-interval-minutes` | `30`, range `30-60` | Minutes between automatic updates (minimum 30 so KitBot1 is not flooded). Changing it restarts the countdown unless an update is pending. The countdown uses real time and survives relogs; it only starts fresh after the builder was inactive for more than 10 minutes. |
+
+Periodic and finish `$update` requests share KitBot Frontend's request window with kit orders.
+Updates wait during queued or active restocks and collection. A restock order waits for an
+outstanding update's request window to close. Periodic update failures report a warning and leave
+the restock order alone. Stopping during restock skips the finish update.
 
 ### Highway Monitor Recovery
 

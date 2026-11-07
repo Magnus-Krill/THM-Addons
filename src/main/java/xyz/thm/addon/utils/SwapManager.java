@@ -33,11 +33,13 @@ public final class SwapManager {
     public boolean hold(Object owner, int slot, int priority, boolean allowItemUse) {
         if (!available(priority, allowItemUse) || slot < 0 || slot > 8) return false;
         checkDrift();
-        Lease lease = ownership.acquire(owner, slot, priority, InventoryManager.getInstance().getServerSlot(), false);
+        InventoryManager inventory = InventoryManager.getInstance();
+        Lease previous = ownership.current;
+        int previousSlot = inventory.getServerSlot();
+        Lease lease = ownership.acquire(owner, slot, priority, previousSlot, false);
         if (lease == null) return false;
-        InventoryManager.getInstance().setSlotForced(slot);
-        if (InventoryManager.getInstance().getServerSlot() == slot) return true;
-        ownership.clear();
+        if (inventory.setSlotForced(slot)) return true;
+        ownership.cancelHold(lease, previous, previousSlot, inventory.getServerSlot());
         return false;
     }
 
@@ -55,9 +57,8 @@ public final class SwapManager {
         var level = mc.level;
         int clientSlot = player.getInventory().getSelectedSlot();
         try {
+            if (!inventory.setSlotForced(slot)) return false;
             if (!silent) player.getInventory().setSelectedSlot(slot);
-            inventory.setSlotForced(slot);
-            if (inventory.getServerSlot() != slot) return false;
             action.run();
             return true;
         } finally {
@@ -142,6 +143,12 @@ public final class SwapManager {
             if (serverSlot != lease.slot) { clear(); return -1; }
             current = lease.parent;
             return lease.previous;
+        }
+
+        void cancelHold(Lease lease, Lease previous, int previousSlot, int serverSlot) {
+            if (current != lease) return;
+            if (previous == lease && previousSlot == serverSlot) lease.slot = previousSlot;
+            else clear();
         }
 
         void clear() { current = null; }

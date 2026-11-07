@@ -334,9 +334,7 @@ class HighwayBuilderTHMTest {
     @Test
     void pausedReturnRequiresTheSavedHeightAndPositionBeforeResuming() {
         var pause = new HighwayBuilderTHM.ManualPause(new Vec3(-16.9, 119.875, 23.9),
-            HorizontalDirection.North, 20, "test", "minecraft:the_nether", true, "ring");
-        assertEquals("ring", pause.roadType(), "a paused build keeps its road type away from the build position");
-        assertTrue(pause.mappedHighway(), "a paused ring-road build keeps its network eligibility");
+            HorizontalDirection.North, 20, "test", "minecraft:the_nether");
         assertTrue(pause.arrived(pause.position()));
         assertTrue(pause.arrived(new Vec3(-16.5, 120, 23.5)));
         assertFalse(pause.arrived(new Vec3(-16.9, 120.875, 23.9)));

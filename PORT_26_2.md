@@ -6,6 +6,40 @@
 
 # Minecraft 26.2 port progress
 
+## 2026-11-06: Remaining-stock veto uses restock recovery
+
+The player's disconnect screenshot identifies `enterKitbotRestockWithAvailabilityGate` calling
+`failActiveTaskHard` when the existing-stock guard vetoes an order. This is separate from the
+update/order request-window overlap. The veto now reopens inventory shulkers and enabled mining
+and bank sources, then starts the existing bounded local recovery. No order is submitted and the
+KitBot phase is not marked tried. KitBot-first continues to skip the bank. Existing cleanup and
+retry limits remain active; persistently unusable supplies can still stop recovery.
+
+Validation: the asynchronous full build passed all 700 tests with no failures, errors or skips,
+including the stock-guard decision tests and isolated OpenGL startup checks. Source inspection
+confirmed the veto returns before marking KitBot tried or submitting an order. Recovery uses the
+existing three-retry limit, with an assertion against interrupting an in-flight order. The JAR
+was installed in the Meteor 26.2 instance with a backup. The screenshot identifies the fatal
+branch; it does not establish which inventory/source condition led the player into it.
+
+
+## 2026-11-06: KitBot update and restock isolation
+
+Automatic periodic and finish updates now use KitBot Frontend's shared request window instead
+of sending raw chat commands. Periodic updates defer during queued/active restock, collection
+and other KitBot requests. Restock orders wait for an already submitted update's window.
+Update outcomes clear only periodic-update tracking; failures warn and continue. Finish updates
+are skipped when stopping during restock, and activation clears stale finish-disconnect intent.
+Frontend handles periodic teleport acceptance, removing the duplicate acceptance path.
+
+The startup regression check exercises the loaded builder against a reserved kit-order window,
+restock-state deferral, and both successful and failed update outcomes during order tracking.
+The final asynchronous full build passed all 700 tests without failures, errors or skips,
+including the isolated OpenGL startup and these module checks. The release JAR was installed
+in the Meteor 26.2 instance with a backup; test-mod classes remain excluded.
+It sends no KitBot commands. The reported player disconnect has no supplied log excerpt yet;
+the request-window overlap was established from the actual send and delivery-proof paths.
+
 ## 2026-11-06: Legacy airplace comparison toggle
 
 Paving's default-off `legacy-air-place` uses the 1.21.11 target-center click with face `UP`

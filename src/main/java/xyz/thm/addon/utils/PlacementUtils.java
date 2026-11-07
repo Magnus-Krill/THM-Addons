@@ -17,15 +17,18 @@ import net.minecraft.network.protocol.game.ServerboundSwingPacket;
 import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 import static meteordevelopment.meteorclient.MeteorClient.mc;
@@ -76,7 +79,7 @@ public class PlacementUtils {
     public static boolean canPlace(BlockPos pos, boolean strictDirection) {
         if (!mc.level.getBlockState(pos).canBeReplaced()) return false;
         if (!mc.level.isUnobstructed(Blocks.OBSIDIAN.defaultBlockState(), pos, net.minecraft.world.phys.shapes.CollisionContext.empty())) return false;
-        AABB checkBox = AABB.unitCubeFromLowerCorner(Vec3.atCenterOf(pos));
+        AABB checkBox = new AABB(pos);
         List<net.minecraft.world.entity.Entity> entities = mc.level.getEntities(null, checkBox);
         for (net.minecraft.world.entity.Entity entity : entities) {
             if (!entity.isSpectator() && entity.isAlive()) {
@@ -104,15 +107,71 @@ public class PlacementUtils {
     }
 
     private static boolean isSolidFace(BlockPos pos) {
-        BlockState state = mc.level.getBlockState(pos);
+        return isSolidFace(mc.level.getBlockState(pos));
+    }
+
+    private static boolean isSolidFace(BlockState state) {
         return !state.canBeReplaced() && !BlockUtils.isClickable(state.getBlock());
     }
 
-    /**
-     * {@code BlockUtils.place} with {@link #getPlaceSide} in place of Meteor's air-only side check —
-     * same rotation priority, swap and swap-back behaviour, just aimed at a face that works.
-     */
-    public static boolean placeOnSolidSide(BlockPos pos, FindItemResult item, boolean rotate, int rotationPriority, boolean swapBack) {
+    public static boolean isSupportBlock(BlockState state) {
+        return state.getFluidState().isEmpty() && isSolidFace(state);
+    }
+
+    public static BlockHitResult findSupportHit(BlockPos target, boolean strict) {
+        Vec3 eye = mc.player.getEyePosition();
+        double reach = mc.player.blockInteractionRange();
+        for (Direction side : Direction.values()) {
+            BlockPos support = target.relative(side);
+            if (!isSupportBlock(mc.level.getBlockState(support))) continue;
+            if (!strict) return packetPlacementHit(target, side);
+            BlockHitResult hit = visibleFaceHit(support, side.getOpposite(), point -> {
+                BlockHitResult ray = mc.level.clip(new ClipContext(eye, point, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, mc.player));
+                return eye.distanceToSqr(ray.getLocation()) <= reach * reach ? ray : null;
+            });
+            if (hit != null) return hit;
+        }
+        return null;
+    }
+
+    public static BlockHitResult visibleFaceHit(BlockPos support, Direction face, Function<Vec3, BlockHitResult> trace) {
+        Vec3 normal = Vec3.atLowerCornerOf(face.getUnitVec3i());
+        Vec3 center = Vec3.atCenterOf(support).add(normal.scale(0.4999));
+        Vec3 first = face.getAxis() == Direction.Axis.X ? new Vec3(0, 0, 0.3) : new Vec3(0.3, 0, 0);
+        Vec3 second = face.getAxis() == Direction.Axis.Y ? new Vec3(0, 0, 0.3) : new Vec3(0, 0.3, 0);
+        BlockHitResult hit = trace.apply(center);
+        if (hitsFace(hit, support, face)) return hit;
+        for (int a = -1; a <= 1; a += 2) {
+            for (int b = -1; b <= 1; b += 2) {
+                hit = trace.apply(center.add(first.scale(a)).add(second.scale(b)));
+                if (hitsFace(hit, support, face)) return hit;
+            }
+        }
+        return null;
+    }
+
+    private static boolean hitsFace(BlockHitResult hit, BlockPos support, Direction face) {
+        return hit != null && hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(support) && hit.getDirection() == face;
+    }
+
+    public static BlockPos findSupportStep(BlockPos target, Direction[] sides, int maxDistance,
+                                           Predicate<BlockPos> canFill, Predicate<BlockPos> hasSupport) {
+        BlockPos best = null;
+        int distanceLimit = maxDistance;
+        for (Direction side : sides) {
+            for (int distance = 1; distance <= distanceLimit; distance++) {
+                BlockPos step = target.relative(side, distance);
+                if (!canFill.test(step)) break;
+                if (!hasSupport.test(step)) continue;
+                best = step;
+                distanceLimit = distance - 1;
+                break;
+            }
+        }
+        return best;
+    }
+
+    public static boolean placeOnSolidSide(Object owner, BlockPos pos, FindItemResult item, boolean rotate, int rotationPriority) {
         if (!item.found() || !BlockUtils.canPlace(pos)) return false;
 
         Direction side = getPlaceSide(pos);
@@ -121,20 +180,24 @@ public class PlacementUtils {
         InteractionHand hand = item.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
         if (hand == InteractionHand.MAIN_HAND && !item.isHotbar()) return false;
 
-        Vec3 hitPos = Vec3.atCenterOf(pos)
-            .add(side.getStepX() * 0.5, side.getStepY() * 0.5, side.getStepZ() * 0.5);
-        BlockHitResult hit = new BlockHitResult(hitPos, side.getOpposite(), pos.relative(side), false);
-
-        Runnable place = () -> {
-            boolean swap = hand == InteractionHand.MAIN_HAND;
-            if (swap) InvUtils.swap(item.slot(), swapBack);
+        BlockHitResult hit = packetPlacementHit(pos, side);
+        var player = mc.player;
+        var world = mc.level;
+        var intended = (item.isOffhand() ? player.getOffhandItem() : player.getInventory().getItem(item.slot())).getItem();
+        if (!(intended instanceof net.minecraft.world.item.BlockItem)) return false;
+        BooleanSupplier place = () -> {
+            if (mc.player != player || mc.level != world || !BlockUtils.canPlace(pos) || !isSolidFace(hit.getBlockPos())) return false;
+            var current = item.isOffhand() ? player.getOffhandItem() : player.getInventory().getItem(item.slot());
+            if (!current.is(intended)) return false;
+            if (hand == InteractionHand.MAIN_HAND) {
+                return InventoryManager.withItem(owner, item.slot(), false, SwapManager.SURROUND, () -> BlockUtils.interact(hit, hand, true));
+            }
             BlockUtils.interact(hit, hand, true);
-            if (swap && swapBack) InvUtils.swapBack();
+            return true;
         };
 
-        if (rotate) Rotations.rotate(Rotations.getYaw(hitPos), Rotations.getPitch(hitPos), rotationPriority, place);
-        else place.run();
-
+        if (!rotate) return place.getAsBoolean();
+        Rotations.rotate(Rotations.getYaw(hit.getLocation()), Rotations.getPitch(hit.getLocation()), rotationPriority, place::getAsBoolean);
         return true;
     }
     public static BlockPos getDirectionalPlacement(float yaw, BlockPos basePos) {

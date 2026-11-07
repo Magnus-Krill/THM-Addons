@@ -142,26 +142,27 @@ public class InventoryManager {
     }
     public void setSlot(final int barSlot, int priority) {
         if (mc.player == null || mc.getConnection() == null || priority < currentPriority || !Inventory.isHotbarSlot(barSlot)) return;
-        setSlotForced(barSlot);
-        if (getServerSlot() == barSlot) currentPriority = priority;
+        if (setSlotForced(barSlot)) currentPriority = priority;
     }
     public void setClientSlot(final int barSlot) {
         setClientSlot(barSlot, Priority.NORMAL);
     }
-    public void setClientSlot(final int barSlot, int priority) {
-        if (mc.player == null || priority < currentPriority || !Inventory.isHotbarSlot(barSlot)) return;
+    public boolean setClientSlot(final int barSlot, int priority) {
+        if (mc.player == null || priority < currentPriority || !setSlotForced(barSlot)) return false;
         mc.player.getInventory().setSelectedSlot(barSlot);
-        setSlotForced(barSlot);
-        if (getServerSlot() == barSlot) currentPriority = priority;
+        currentPriority = priority;
+        return true;
     }
-    public void setSlotForced(final int barSlot) {
-        if (mc.getConnection() == null || !Inventory.isHotbarSlot(barSlot) || getServerSlot() == barSlot) return;
+    public boolean setSlotForced(final int barSlot) {
+        if (mc.getConnection() == null || !Inventory.isHotbarSlot(barSlot)) return false;
+        if (serverSlot == barSlot) return true;
         sendingPacket = true;
         try {
             mc.getConnection().send(new ServerboundSetCarriedItemPacket(barSlot));
         } finally {
             sendingPacket = false;
         }
+        return serverSlot == barSlot;
     }
     public void syncToClient() {
         if (mc.player == null) return;

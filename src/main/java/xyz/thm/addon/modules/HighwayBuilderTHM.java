@@ -1973,8 +1973,6 @@ public class HighwayBuilderTHM extends Module {
     private long kitbotUpdateOnFinishStartTick;
     private boolean kitbotUpdateOnFinishTpAccepted;
     private boolean kitbotPeriodicUpdateActive;
-    private long kitbotPeriodicUpdateStartTick;
-    private boolean kitbotPeriodicUpdateTpAccepted;
     private boolean kitbotPeriodicUpdatePending;
     private long kitbotPeriodicUpdateNextAtMs;
     private long kitbotLastActiveAtMs;
@@ -2478,9 +2476,7 @@ public class HighwayBuilderTHM extends Module {
         }
 
         ManualPause saved = new ManualPause(mc.player.position(), dir, mc.player.getXRot(),
-            Utils.getWorldName(), mc.level.dimension().identifier().toString(),
-            AxisViewer.isOnHighway(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER),
-            AxisViewer.highwayType(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER, dir));
+            Utils.getWorldName(), mc.level.dimension().identifier().toString());
         resumeStatsSessionOnNextActivate = true;
         // Travel handoffs already release controls without finalizing statistics.
         travelHandoffDeactivateArmed = true;
@@ -2562,8 +2558,7 @@ public class HighwayBuilderTHM extends Module {
             && manualPause.dimension().equals(mc.level.dimension().identifier().toString());
     }
 
-    record ManualPause(Vec3 position, HorizontalDirection direction, float pitch, String world, String dimension,
-                       boolean mappedHighway, String roadType) {
+    record ManualPause(Vec3 position, HorizontalDirection direction, float pitch, String world, String dimension) {
         boolean arrived(Vec3 current) {
             double dx = current.x - position.x;
             double dz = current.z - position.z;
@@ -3141,6 +3136,8 @@ public class HighwayBuilderTHM extends Module {
         statusLogTimer = 6000;
         nextAdvertisementIndex = 0;
         nextAdvertisementAtTick = 0L;
+        kitbotUpdateOnFinishActive = false;
+        kitbotUpdateOnFinishTpAccepted = false;
         kitbotPeriodicUpdateActive = false;
         kitbotPeriodicUpdatePending = false;
         // Keep the countdown across relogs (backup-server kicks re-run onActivate); only a long break starts it fresh.
@@ -3214,6 +3211,7 @@ public class HighwayBuilderTHM extends Module {
     }
     @Override
     public void onDeactivate() {
+        boolean restockingAtStop = kitbotRestockBusy();
         initialAlignmentTarget = null;
         initialAlignmentLevel = null;
         pendingBlockPlacements.clear();
@@ -3344,7 +3342,9 @@ public class HighwayBuilderTHM extends Module {
         }
 
         if (kitbotUpdateOnFinish.get() && !isReconnectFailureDeactivate && !isAutoLogTerminalDeactivate) {
-            if (!isOnOfficialHighway()) {
+            if (restockingAtStop || KitbotFrontend.hasActiveWindow()) {
+                info("Skipping finish $update while restock or another KitBot request is active.");
+            } else if (!isOnOfficialHighway()) {
                 info("Not on an official highway - skipping KitBot $update.");
             } else if (isAtHighwayEnd()) {
                 String kitbotDir = directionToKitbotCommand(dir);
@@ -3354,11 +3354,14 @@ public class HighwayBuilderTHM extends Module {
                         info("Too close to origin (%.0f blocks) - skipping KitBot $update.", distFromOrigin);
                     } else {
                         buildKitbotUpdateEnclosure();
-                        ChatUtils.sendPlayerMsg("/msg KitBot1 $update " + kitbotDir);
-                        info("Sent $update %s to KitBot1. Waiting up to 60s for teleport...", kitbotDir);
-                        kitbotUpdateOnFinishActive = true;
-                        kitbotUpdateOnFinishStartTick = mc.level.getGameTime();
-                        kitbotUpdateOnFinishTpAccepted = false;
+                        if (KitbotFrontend.sendUpdate(kitbotDir)) {
+                            info("Sent $update %s to KitBot1. Waiting for KitBot...", kitbotDir);
+                            kitbotUpdateOnFinishActive = true;
+                            kitbotUpdateOnFinishStartTick = mc.level.getGameTime();
+                            kitbotUpdateOnFinishTpAccepted = false;
+                        } else {
+                            info("Skipping finish $update because another KitBot request is active.");
+                        }
                     }
                 }
             } else {
@@ -3902,17 +3905,11 @@ public class HighwayBuilderTHM extends Module {
     private void tickKitbotPeriodicUpdate() {
         if (!kitbotPeriodicUpdate.get() || mc.level == null || dir == null) return;
 
-        if (kitbotPeriodicUpdateActive) {
-            if (mc.level.getGameTime() - kitbotPeriodicUpdateStartTick >= 1200) {
-                info("No response from KitBot1 after 60s (periodic update). Continuing build.");
-                kitbotPeriodicUpdateActive = false;
-            }
-            return;
-        }
+        if (kitbotPeriodicUpdateActive) return;
 
         if (System.currentTimeMillis() < kitbotPeriodicUpdateNextAtMs) return;
 
-        if (isRestockState(state)) {
+        if (kitbotRestockBusy()) {
             kitbotPeriodicUpdatePending = true;
             kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
             return;
@@ -3925,7 +3922,17 @@ public class HighwayBuilderTHM extends Module {
         return kitbotUpdateIntervalMinutes.get() * 60_000L;
     }
 
+    private boolean kitbotRestockBusy() {
+        return isRestockState(state) || restockTask.isSequenceActive() || !restockTask.tasksInactive()
+            || restockTask.hasPendingRestockTasks() || kitbotOrderInFlight || kitbotOrderFrontendSucceeded;
+    }
+
     private void sendKitbotPeriodicUpdate() {
+        if (kitbotRestockBusy() || KitbotFrontend.hasActiveWindow()) {
+            kitbotPeriodicUpdatePending = true;
+            kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + Math.max(1_000L, KitbotFrontend.getRemainingWindowMs());
+            return;
+        }
         if (!isOnOfficialHighway() || dir == null || mc.level == null) {
             kitbotPeriodicUpdatePending = false;
             kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
@@ -3937,11 +3944,13 @@ public class HighwayBuilderTHM extends Module {
             kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
             return;
         }
-        ChatUtils.sendPlayerMsg("/msg KitBot1 $update " + kitbotDir);
-        info("Sent periodic $update %s to KitBot1. Waiting up to 60s for teleport...", kitbotDir);
+        if (!KitbotFrontend.sendUpdate(kitbotDir)) {
+            kitbotPeriodicUpdatePending = true;
+            kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + Math.max(1_000L, KitbotFrontend.getRemainingWindowMs());
+            return;
+        }
+        info("Sent periodic $update %s to KitBot1. Waiting for KitBot...", kitbotDir);
         kitbotPeriodicUpdateActive = true;
-        kitbotPeriodicUpdateStartTick = mc.level.getGameTime();
-        kitbotPeriodicUpdateTpAccepted = false;
         kitbotPeriodicUpdatePending = false;
         kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
     }
@@ -5758,11 +5767,10 @@ public class HighwayBuilderTHM extends Module {
 
     @EventHandler
     private void onMessageReceive(ReceiveMessageEvent event) {
-        if (!isExecutionAllowedOnCurrentServer(getCommittedServerState())) return;
+        if (!kitbotUpdateOnFinishActive || !isExecutionAllowedOnCurrentServer(getCommittedServerState())) return;
 
         String msg = event.getMessage().getString();
 
-        // Weird ahh fix to it never accepting
         if (msg.contains(KITBOT_NAME + " wants to teleport to you")) {
             ChatUtils.sendPlayerMsg("/tpy " + KITBOT_NAME);
             kitbotUpdateOnFinishTpAccepted = true;
@@ -5771,29 +5779,25 @@ public class HighwayBuilderTHM extends Module {
 
         boolean youMayTeleport = msg.contains(KITBOT_NAME + " whispers: Bot has arrived at highway")
             || msg.contains("you may teleport");
-        if (kitbotUpdateOnFinishActive) {
-            if (youMayTeleport) {
-                info("KitBot1 has arrived. Disconnecting.");
-                kitbotUpdateOnFinishActive = false;
-                disconnect("KitBot update complete");
-            }
-            return;
-        }
-
-        if (kitbotPeriodicUpdateActive) {
-            if (msg.contains(KITBOT_NAME + " wants to teleport to you")) {
-                ChatUtils.sendPlayerMsg("/tpy " + KITBOT_NAME);
-                kitbotPeriodicUpdateTpAccepted = true;
-                info("Accepted " + KITBOT_NAME + " teleport request (periodic update).");
-            }
-            if (youMayTeleport) {
-                info("KitBot1 has arrived (periodic update). Continuing build.");
-                kitbotPeriodicUpdateActive = false;
-            }
+        if (youMayTeleport) {
+            info("KitBot1 has arrived. Disconnecting.");
+            kitbotUpdateOnFinishActive = false;
+            disconnect("KitBot update complete");
         }
     }
 
     private void onKitbotRestockLifecycle(KitbotFrontend.LifecycleEvent event) {
+        if (event != null && event.origin() == KitbotFrontend.RequestOrigin.API
+            && event.mode() == KitbotFrontend.Mode.Update && kitbotPeriodicUpdateActive) {
+            if (event.state() == KitbotFrontend.LifecycleState.Succeeded) {
+                kitbotPeriodicUpdateActive = false;
+                info("Periodic KitBot update completed.");
+            } else if (event.state() == KitbotFrontend.LifecycleState.Failed) {
+                kitbotPeriodicUpdateActive = false;
+                warning("Periodic KitBot update failed: %s. Continuing build.", event.detail());
+            }
+            return;
+        }
         if (!shouldProcessKitbotRestockLifecycle(event)) return;
 
         switch (event.state()) {
@@ -5920,7 +5924,17 @@ public class HighwayBuilderTHM extends Module {
         if (!canUseKitbotForActiveRestock()) return false;
 
         String stockBlock = eChestKitbotOrderBlockReason();
-        if (stockBlock != null) return restockTask.failActiveTaskHard(stockBlock);
+        if (stockBlock != null) {
+            assert !kitbotOrderInFlight : "Local supply recovery must not interrupt a KitBot order";
+            restockTask.reopenSourcePhase(RestockTask.SourcePhase.InventoryShulkers);
+            if (mineEnderChests.get()) restockTask.reopenSourcePhase(RestockTask.SourcePhase.MineEnderChests);
+            if (searchEnderChest.get() && !skipsEnderChestBankForActiveRestock()) {
+                restockTask.reopenSourcePhase(RestockTask.SourcePhase.EnderChest);
+            }
+            warning("%s Rechecking local restock sources.", stockBlock);
+            restockWatchdog.beginRecovery(stockBlock);
+            return true;
+        }
 
         restockTask.markKitbotTried();
         restockTask.notePhase(RestockTask.SourcePhase.Kitbot);

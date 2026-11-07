@@ -477,7 +477,7 @@ public class THMScaffold extends Module {
     private Direction thm$placeSide(BlockPos pos) {
         for (Direction side : SUPPORT_SIDES) {
             var state = mc.level.getBlockState(pos.relative(side));
-            if (!state.canBeReplaced() && state.getFluidState().isEmpty() && !BlockUtils.isClickable(state.getBlock())) return side;
+            if (xyz.thm.addon.utils.PlacementUtils.isSupportBlock(state)) return side;
         }
         return null;
     }

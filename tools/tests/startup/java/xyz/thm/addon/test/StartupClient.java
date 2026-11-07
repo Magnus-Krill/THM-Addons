@@ -11,12 +11,14 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.gui.screens.TitleScreen;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
+import xyz.thm.addon.modules.KitbotFrontend;
 import xyz.thm.addon.utils.PacketBudget;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
+import java.util.LinkedHashMap;
 
 public final class StartupClient implements ClientModInitializer {
     private long readyAt;
@@ -32,11 +34,12 @@ public final class StartupClient implements ClientModInitializer {
             closing = true;
             try {
                 verifyPacketBudget();
+                verifyKitbotUpdateIsolation();
                 Files.writeString(client.gameDirectory.toPath().resolve("startup-ok"), Long.toString(now - readyAt));
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             } catch (ReflectiveOperationException e) {
-                throw new IllegalStateException("Packet budget regression check failed", e);
+                throw new IllegalStateException("Module regression check failed", e);
             }
             client.stop();
         });
@@ -84,6 +87,77 @@ public final class StartupClient implements ClientModInitializer {
             }
         } finally {
             builder.loadSettingsSnapshot(saved);
+        }
+    }
+
+    private static void verifyKitbotUpdateIsolation() throws ReflectiveOperationException {
+        HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
+        Field runtimeField = KitbotFrontend.class.getDeclaredField("RUNTIME");
+        runtimeField.setAccessible(true);
+        Object runtime = runtimeField.get(null);
+        Field request = runtime.getClass().getDeclaredField("windowRequest");
+        Field deadline = runtime.getClass().getDeclaredField("windowEndsAtMs");
+        request.setAccessible(true);
+        deadline.setAccessible(true);
+        Object previousRequest = request.get(runtime);
+        long previousDeadline = deadline.getLong(runtime);
+        var saved = new LinkedHashMap<Field, Object>();
+        for (String name : new String[]{"state", "kitbotPeriodicUpdateActive", "kitbotPeriodicUpdatePending",
+            "kitbotPeriodicUpdateNextAtMs", "kitbotOrderInFlight", "kitbotOrderFrontendSucceeded"}) {
+            Field field = field(name);
+            saved.put(field, field.get(builder));
+        }
+        try {
+            Field state = field("state"), active = field("kitbotPeriodicUpdateActive");
+            Field inFlight = field("kitbotOrderInFlight"), succeeded = field("kitbotOrderFrontendSucceeded");
+            Object forward = null, restock = null;
+            for (Object value : state.getType().getEnumConstants()) {
+                if (((Enum<?>) value).name().equals("Forward")) forward = value;
+                if (((Enum<?>) value).name().equals("KitbotOrder")) restock = value;
+            }
+            if (forward == null || restock == null) throw new IllegalStateException("Missing builder states");
+            state.set(builder, forward);
+            active.setBoolean(builder, false);
+            inFlight.setBoolean(builder, false);
+            succeeded.setBoolean(builder, false);
+            var kit = Class.forName("xyz.thm.addon.modules.KitbotFrontend$ManagedRequest")
+                .getDeclaredMethod("kitRequest", KitbotFrontend.Mode.class, String.class, int.class, boolean.class);
+            kit.setAccessible(true);
+            Object order = kit.invoke(null, KitbotFrontend.Mode.Kit, "echest", 6, true);
+            request.set(runtime, order);
+            deadline.setLong(runtime, System.currentTimeMillis() + 100_000L);
+            var send = HighwayBuilderTHM.class.getDeclaredMethod("sendKitbotPeriodicUpdate");
+            send.setAccessible(true);
+            field("kitbotPeriodicUpdatePending").setBoolean(builder, false);
+            send.invoke(builder);
+            if (!field("kitbotPeriodicUpdatePending").getBoolean(builder) || active.getBoolean(builder)
+                || request.get(runtime) != order) {
+                throw new IllegalStateException("Periodic update did not defer to the active KitBot order");
+            }
+            request.set(runtime, null);
+            deadline.setLong(runtime, 0L);
+            state.set(builder, restock);
+            inFlight.setBoolean(builder, true);
+            field("kitbotPeriodicUpdatePending").setBoolean(builder, false);
+            send.invoke(builder);
+            if (!field("kitbotPeriodicUpdatePending").getBoolean(builder) || active.getBoolean(builder)) {
+                throw new IllegalStateException("Periodic update was not deferred during restock");
+            }
+            var lifecycle = HighwayBuilderTHM.class.getDeclaredMethod("onKitbotRestockLifecycle", KitbotFrontend.LifecycleEvent.class);
+            lifecycle.setAccessible(true);
+            for (var result : new KitbotFrontend.LifecycleState[]{KitbotFrontend.LifecycleState.Succeeded, KitbotFrontend.LifecycleState.Failed}) {
+                active.setBoolean(builder, true);
+                lifecycle.invoke(builder, new KitbotFrontend.LifecycleEvent(result, KitbotFrontend.RequestOrigin.API,
+                    KitbotFrontend.Mode.Update, KitbotFrontend.FailureReason.PermissionDenied, "Update result", 0));
+                if (active.getBoolean(builder) || !inFlight.getBoolean(builder) || succeeded.getBoolean(builder)
+                    || state.get(builder) != restock) {
+                    throw new IllegalStateException("Update outcome changed the restock order");
+                }
+            }
+        } finally {
+            request.set(runtime, previousRequest);
+            deadline.setLong(runtime, previousDeadline);
+            for (var entry : saved.entrySet()) entry.getKey().set(builder, entry.getValue());
         }
     }
 

@@ -538,7 +538,7 @@ public class AutoTrapPlus extends Module {
     private boolean tryPlaceWithSupports(BlockPos placePos, FindItemResult block) {
         if (isBlockedByOtherEntity(placePos, target)) return false;
         // Direct place if allowed
-        if (airPlace.get()) {
+        if (airPlace.get() || PlacementUtils.getPlaceSide(placePos) != null) {
             if (placeBlock(placePos, block)) {
                 markPlaced(placePos);
                 return true;
@@ -546,14 +546,6 @@ public class AutoTrapPlus extends Module {
             return false;
         }
 
-        // Need a neighbor face; first try direct
-        if (BlockUtils.getPlaceSide(placePos) != null) {
-            if (placeBlock(placePos, block)) {
-                markPlaced(placePos);
-                return true;
-            }
-            return false;
-        }
         if (!mc.level.getBlockState(placePos).canBeReplaced()) return false;
 
         // Build candidate directions with outward first, then others
@@ -573,34 +565,25 @@ public class AutoTrapPlus extends Module {
             outward.getOpposite()
         };
 
-        // Optimize supports: place exactly one side support adjacent to target, preferring outward first
-        for (net.minecraft.core.Direction d : dirs) {
-            BlockPos s = placePos.relative(d);
-            // don't block the feet gap column
-            if (gapPos != null && s.below().equals(gapPos)) continue;
-            if (isBlockedByOtherEntity(s, target)) continue;
-            if (BlockUtils.getPlaceSide(s) == null) continue;
-            if (placeBlock(s, block)) {
-                markPlaced(s);
-                if (BlockUtils.getPlaceSide(placePos) != null && placeBlock(placePos, block)) {
-                    markPlaced(placePos);
-                    return true;
-                }
-                return false;
-            }
-        }
-
-        return false;
+        BlockPos support = PlacementUtils.findSupportStep(placePos, dirs, 2, pos ->
+            (gapPos == null || !pos.atY(gapPos.getY()).equals(gapPos))
+                && mc.level.getWorldBorder().isWithinBounds(pos) && !isOutOfRange(pos)
+                && BlockUtils.canPlace(pos) && !isBlockedByOtherEntity(pos, target),
+            pos -> PlacementUtils.getPlaceSide(pos) != null);
+        if (support == null || !placeBlock(support, block)) return false;
+        markPlaced(support);
+        return true;
     }
 
     private boolean placeBlock(BlockPos pos, FindItemResult block) {
         if (packet.get()) {
             if (packetOnce.get() && !PacketPlaceTracker.canSend(pos)) return false;
-            boolean placed = PlacementUtils.placeBlockPacket(pos, block, rotate.get(), 50);
+            boolean placed = PlacementUtils.placeBlockPacket(pos, block, rotate.get(), 50, airPlace.get());
             if (placed && packetOnce.get()) PacketPlaceTracker.markSent(pos, PacketPlaceTracker.DEFAULT_RESEND_TICKS);
             return placed;
         }
-        return BlockUtils.place(pos, block, rotate.get(), 50, true);
+        if (airPlace.get() && PlacementUtils.getPlaceSide(pos) == null) return BlockUtils.place(pos, block, rotate.get(), 50, true);
+        return PlacementUtils.placeOnSolidSide(this, pos, block, rotate.get(), 50);
     }
 
     // Removed old helper methods for broad support search to keep logic minimal
@@ -778,7 +761,7 @@ public class AutoTrapPlus extends Module {
     }
 
     private boolean isBlockedByOtherEntity(BlockPos pos, Player allowed) {
-        AABB checkBox = AABB.unitCubeFromLowerCorner(Vec3.atCenterOf(pos));
+        AABB checkBox = new AABB(pos);
         List<net.minecraft.world.entity.Entity> entities = mc.level.getEntities(null, checkBox);
         for (net.minecraft.world.entity.Entity entity : entities) {
             if (entity == allowed) continue;

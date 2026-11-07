@@ -35,7 +35,6 @@ import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -44,7 +43,6 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import xyz.thm.addon.THMAddon;
@@ -476,20 +474,8 @@ public class Surround extends Module {
     }
 
     private BlockHitResult hit(BlockPos pos) {
-        Vec3 eyes = mc.player.getEyePosition();
-        for (Direction side : Direction.values()) {
-            BlockPos neighbor = pos.relative(side);
-            BlockState state = world.getBlockState(neighbor);
-            if (state.canBeReplaced() || BlockUtils.isClickable(state.getBlock()) || !state.getFluidState().isEmpty()) continue;
-            Vec3 location = Vec3.atCenterOf(pos).add(side.getStepX() * .5, side.getStepY() * .5, side.getStepZ() * .5);
-            BlockHitResult hit = new BlockHitResult(location, side.getOpposite(), neighbor, false);
-            if (strict.get()) {
-                Vec3 inside = location.add(side.getStepX() * 1e-4, side.getStepY() * 1e-4, side.getStepZ() * 1e-4);
-                BlockHitResult ray = world.clip(new ClipContext(eyes, inside, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, mc.player));
-                if (ray.getType() != HitResult.Type.BLOCK || !ray.getBlockPos().equals(neighbor) || ray.getDirection() != side.getOpposite()) continue;
-            }
-            return hit;
-        }
+        BlockHitResult hit = PlacementUtils.findSupportHit(pos, strict.get());
+        if (hit != null) return hit;
         return airplace.get() && !strict.get()
             ? new BlockHitResult(Vec3.atCenterOf(pos), Direction.UP, pos, false) : null;
     }

@@ -31,6 +31,7 @@ import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.entity.DamageUtils;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
@@ -55,8 +56,11 @@ import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.mixin.accessor.ClientPlayerInteractionManagerTHMAccessor;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.system.THMSystem;
+import xyz.thm.addon.utils.DeepSwapManager;
 import xyz.thm.addon.utils.InventoryManager;
+import xyz.thm.addon.utils.PlacementUtils;
 import xyz.thm.addon.utils.RenderUtilsTHM;
+import xyz.thm.addon.utils.SwapManager;
 import xyz.thm.addon.utils.ThmMembers;
 
 import java.util.*;
@@ -64,6 +68,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 /** Java/Meteor port of Lambda's CrystalAura at e8eb261c9d605cc2312ea05063d0cb74d005ce46. */
@@ -116,6 +121,9 @@ public class CrystalAura extends Module {
     private final Setting<Double> minTargetDamage = sgPlace.add(new DoubleSetting.Builder()
         .name("min-target-damage").description("Minimum damage to the target.").defaultValue(8.0).min(0).sliderRange(0, 20).build());
 
+    private final Setting<Boolean> lethalFinisher = sgPlace.add(new BoolSetting.Builder()
+        .name("lethal-finisher").description("Allow lethal hits below the minimum target damage or advantage.").defaultValue(true).build());
+
     private final Setting<Double> maxSelfDamage = sgPlace.add(new DoubleSetting.Builder()
         .name("max-self-damage").description("Maximum damage to yourself.").defaultValue(8.0).min(0).sliderRange(0, 36).build());
 
@@ -139,6 +147,10 @@ public class CrystalAura extends Module {
 
     private final Setting<Integer> explodeDelay = sgBreak.add(new IntSetting.Builder()
         .name("explode-delay").description("Milliseconds between crystal attacks.").defaultValue(10).min(0).sliderRange(0, 1000).build());
+
+    private final Setting<Boolean> autoMineSync = sgPrediction.add(new BoolSetting.Builder()
+        .name("auto-mine-sync").description("Coordinate crystal attacks with Speedmine's Auto Mine.")
+        .defaultValue(false).onChanged(enabled -> this.miningOpenings.clear()).build());
 
     private final Setting<PredictionMode> prediction = sgPrediction.add(new EnumSetting.Builder<PredictionMode>()
         .name("prediction").description("When to predict unconfirmed crystal IDs.").defaultValue(PredictionMode.None).build());
@@ -202,6 +214,8 @@ public class CrystalAura extends Module {
         .name("secondary-fill").description("Color at the bottom of the placement box.").defaultValue(new SettingColor(THMAddon.THMSideColor.getPacked())).visible(render::get).build());
 
     private final Map<BlockPos, Opportunity> blueprint = new LinkedHashMap<>();
+    private final SequencedSet<BlockPos> miningOpenings = new LinkedHashSet<>(2);
+    private final Predicate<BlockPos> airAt = pos -> mc.level.getBlockState(pos).isAir();
     private final ArrayDeque<Long> removals = new ArrayDeque<>();
     private final AtomicInteger frameBudget = new AtomicInteger();
     private ScheduledExecutorService scheduler;
@@ -236,6 +250,7 @@ public class CrystalAura extends Module {
 
     private void reset() {
         blueprint.clear();
+        miningOpenings.clear();
         removals.clear();
         currentTarget = null;
         activeOpportunity = null;
@@ -326,6 +341,58 @@ public class CrystalAura extends Module {
             && inventory.getCurrentPriority() <= InventoryManager.Priority.NORMAL;
     }
 
+    static CrystalAura activeMiningSync() {
+        CrystalAura aura = Modules.get().get(CrystalAura.class);
+        return aura != null && aura.isActive() && aura.autoMineSync.get() ? aura : null;
+    }
+
+    void awaitMiningOpening(BlockPos pos) {
+        if (miningOpenings.add(pos.immutable()) && miningOpenings.size() > 2) miningOpenings.removeFirst();
+    }
+
+    void onMiningOpeningConfirmed(BlockPos pos) {
+        if (miningOpenings.remove(pos)) lastUpdateMs = 0;
+    }
+
+    BlockPos findMiningOpening(List<BlockPos> candidates) {
+        if (candidates.isEmpty() || !canAct()) return null;
+        LivingEntity target = selectTarget();
+        if (target == null) return null;
+        boolean haveCrystal = mc.player.isHolding(Items.END_CRYSTAL) || swap.get() && InvUtils.find(Items.END_CRYSTAL).found();
+        for (BlockPos opening : candidates) {
+            if (mc.level.getBlockState(opening).is(Blocks.BEDROCK)) continue;
+            BlockPos base = opening.below();
+            if (improvesCrystalAttack(target, base, opening, haveCrystal)) return opening;
+            if (oldPlace.get() && improvesCrystalAttack(target, base.below(), opening, haveCrystal)) return opening;
+            for (Direction side : Direction.Plane.HORIZONTAL) {
+                if (improvesCrystalAttack(target, base.relative(side), opening, haveCrystal)) return opening;
+            }
+        }
+        return null;
+    }
+
+    private boolean improvesCrystalAttack(LivingEntity target, BlockPos base, BlockPos opening, boolean haveCrystal) {
+        if (!isCrystalBase(base)) return false;
+        Vec3 position = crystalPosition(base);
+        Vec3 eye = mc.player.getEyePosition();
+        if (eye.distanceTo(position) > Math.max(placeRange.get(), explodeRange.get())) return false;
+
+        var occupants = mc.level.getEntities((Entity) null, crystalBox(base), entity -> !entity.isSpectator());
+        for (Entity entity : occupants) {
+            if (entity instanceof EndCrystal crystal && crystal.isAlive() && base.equals(baseOf(crystal))
+                && eye.distanceTo(crystal.position()) <= explodeRange.get() && improvesDamage(target, crystal.position(), opening, false)) return true;
+        }
+        return haveCrystal && occupants.isEmpty() && eye.distanceTo(position) <= placeRange.get()
+            && eye.distanceTo(position) <= explodeRange.get() && hasCrystalSpace(base, opening)
+            && improvesDamage(target, position, opening, !hasCrystalSpace(base, null));
+    }
+
+    private boolean improvesDamage(LivingEntity target, Vec3 position, BlockPos opening, boolean opensPlacement) {
+        double targetDamage = damage(target, position, null, opening);
+        if (!opensPlacement && targetDamage <= damage(target, position, null, null)) return false;
+        return acceptsDamage(target, targetDamage, damage(mc.player, position, null, opening));
+    }
+
     private void tickAura() {
         if (!canAct() || actionPending) return;
         currentTarget = selectTarget();
@@ -388,11 +455,9 @@ public class CrystalAura extends Module {
         for (BlockPos mutable : BlockPos.betweenClosed(center.offset(-radius, -radius, -radius), center.offset(radius, radius, radius))) {
             BlockPos base = mutable.immutable();
             if (blueprint.containsKey(base) || mc.player.getEyePosition().distanceTo(crystalPosition(base)) > placeRange.get()) continue;
-            var state = mc.level.getBlockState(base);
-            boolean needsSupport = !state.is(Blocks.OBSIDIAN) && !state.is(Blocks.BEDROCK);
+            boolean needsSupport = !isCrystalBase(base);
             if ((needsSupport && (!canSupport || !BlockUtils.canPlace(base) || !mc.level.getWorldBorder().isWithinBounds(base)))
-                || !mc.level.getBlockState(base.above()).isAir()
-                || (oldPlace.get() && !mc.level.getBlockState(base.above(2)).isAir())) continue;
+                || !hasCrystalSpace(base, null)) continue;
             AABB box = crystalBox(base);
             if (!mc.level.getEntities((Entity) null, box, entity -> !(entity instanceof EndCrystal) && !entity.isSpectator()).isEmpty()) continue;
             EndCrystal crystal = null, blocker = null;
@@ -407,25 +472,33 @@ public class CrystalAura extends Module {
     }
 
     private Opportunity opportunity(BlockPos base, Vec3 position, EndCrystal crystal, EndCrystal blocker, boolean support) {
-        double target = damage(currentTarget, position, support ? base : null), self = damage(mc.player, position, support ? base : null);
-        if (!allowedDamage(target, self, mc.player.getHealth() + mc.player.getAbsorptionAmount(), minTargetDamage.get(),
-            maxSelfDamage.get(), minPlaceHealth.get(), preventDeath.get(), priorityMode.get(), minDamageAdvantage.get())) return null;
+        BlockPos supportBase = support ? base : null;
+        double target = damage(currentTarget, position, supportBase, null), self = damage(mc.player, position, supportBase, null);
+        if (!acceptsDamage(currentTarget, target, self)) return null;
         return new Opportunity(base, target, self, priorityMode.get().score(target, self), crystal, blocker, support);
     }
 
+    private boolean acceptsDamage(LivingEntity target, double targetDamage, double self) {
+        double lethalThreshold = lethalFinisher.get() ? target.getHealth() + target.getAbsorptionAmount() : Double.POSITIVE_INFINITY;
+        return allowedDamage(targetDamage, self, mc.player.getHealth() + mc.player.getAbsorptionAmount(), minTargetDamage.get(),
+            maxSelfDamage.get(), minPlaceHealth.get(), preventDeath.get(), priorityMode.get(), minDamageAdvantage.get(),
+            lethalThreshold);
+    }
+
     static boolean allowedDamage(double target, double self, double health, double minTarget, double maxSelf,
-                                 double minHealth, boolean preventDeath, Priority priority, double advantage) {
-        return Double.isFinite(target) && Double.isFinite(self) && target >= minTarget && self <= maxSelf
+                                 double minHealth, boolean preventDeath, Priority priority, double advantage, double lethalThreshold) {
+        return Double.isFinite(target) && Double.isFinite(self) && self <= maxSelf
             && health - self > minHealth && (!preventDeath || health - self > 0)
-            && (priority != Priority.Advantage || priority.score(target, self) >= advantage);
+            && (target >= lethalThreshold || target >= minTarget && (priority != Priority.Advantage || priority.score(target, self) >= advantage));
     }
 
     private boolean safeDamage(Vec3 position) {
         return currentTarget != null && currentTarget.isAlive() && opportunity(BlockPos.containing(position).below(), position, null, null, false) != null;
     }
 
-    private double damage(LivingEntity entity, Vec3 position, BlockPos supportBase) {
+    private double damage(LivingEntity entity, Vec3 position, BlockPos supportBase, BlockPos opening) {
         return DamageUtils.crystalDamage(entity, entity.position(), entity.getBoundingBox(), position, (context, pos) -> {
+            if (pos.equals(opening)) return null;
             var state = pos.equals(supportBase) ? Blocks.OBSIDIAN.defaultBlockState() : mc.level.getBlockState(pos);
             return state.getCollisionShape(mc.level, pos).clip(context.start(), context.end(), pos);
         });
@@ -494,7 +567,7 @@ public class CrystalAura extends Module {
         EndCrystal crystal = opportunity.crystal;
         if (crystal == null || !crystal.isAlive() || mc.player.getEyePosition().distanceTo(crystal.position()) > explodeRange.get()
             || System.currentTimeMillis() - lastExplodeMs < explodeDelay.get()) return;
-        runRotated(opportunity, () -> {
+        runRotated(opportunity, crystal.getBoundingBox().getCenter(), () -> {
             if (!crystal.isAlive() || mc.player.getEyePosition().distanceTo(crystal.position()) > explodeRange.get()) return;
             attackId(crystal.getId());
             lastEntityId = Math.max(lastEntityId, crystal.getId());
@@ -530,8 +603,7 @@ public class CrystalAura extends Module {
     private void placeCrystal(Opportunity opportunity) {
         if (supportTicks > 0 || !validPlacement(opportunity.base)) return;
         InteractionHand hand = crystalHand();
-        if (hand == null) return;
-        placeInternal(opportunity, hand);
+        if (hand == null || !placeInternal(opportunity, hand)) return;
         safeToPlaceInstantly = false;
         lastHit = null;
         if (prediction.get().onPlace && System.currentTimeMillis() - lastSpawnMs <= packetLifetime.get()) {
@@ -545,29 +617,29 @@ public class CrystalAura extends Module {
     private void placeSupport(Opportunity opportunity) {
         long now = System.currentTimeMillis();
         if (!support.get() || now < supportRetryAfterMs || now - lastPlaceMs < placeDelay.get()) return;
-        Direction side = BlockUtils.getPlaceSide(opportunity.base);
-        BlockPos neighbour = side == null ? opportunity.base : opportunity.base.relative(side);
-        Vec3 hit = side == null ? Vec3.atCenterOf(opportunity.base) : hitPosition(opportunity.base, side);
-        Direction face = side == null ? Direction.DOWN : side.getOpposite();
+        Direction side = PlacementUtils.getPlaceSide(opportunity.base);
+        BlockHitResult placement = side == null
+            ? new BlockHitResult(Vec3.atCenterOf(opportunity.base), Direction.DOWN, opportunity.base, false)
+            : PlacementUtils.packetPlacementHit(opportunity.base, side);
+        Vec3 hit = placement.getLocation();
         if (mc.player.getEyePosition().distanceTo(hit) > placeRange.get()) return;
         runRotated(opportunity, hit, () -> {
             var item = InvUtils.findInHotbar(Items.OBSIDIAN);
             if (!support.get() || !item.found() || !BlockUtils.canPlace(opportunity.base)
+                || PlacementUtils.getPlaceSide(opportunity.base) != side
                 || !mc.level.getWorldBorder().isWithinBounds(opportunity.base)
-                || !mc.level.getBlockState(opportunity.base.above()).isAir()
-                || (oldPlace.get() && !mc.level.getBlockState(opportunity.base.above(2)).isAir())
+                || !hasCrystalSpace(opportunity.base, null)
                 || !mc.level.getEntities((Entity) null, crystalBox(opportunity.base), entity -> !entity.isSpectator()).isEmpty()
                 || mc.player.getEyePosition().distanceTo(hit) > placeRange.get()) return;
             InteractionHand hand = item.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
             InventoryManager inventory = InventoryManager.getInstance();
             if (hand == InteractionHand.MAIN_HAND && !swap.get() && !mc.player.getMainHandItem().is(Items.OBSIDIAN)) return;
-            Runnable place = () -> BlockUtils.interact(new BlockHitResult(hit, face, neighbour, false), hand, true);
+            Runnable place = () -> BlockUtils.interact(placement, hand, true);
             if (hand == InteractionHand.OFF_HAND) place.run();
             else if (silentSwap.get()) {
-                if (!xyz.thm.addon.utils.SwapManager.get().withSlot(this, item.slot(),
-                    xyz.thm.addon.utils.SwapManager.CRYSTAL, false, place)) return;
+                if (!InventoryManager.withItem(this, item.slot(), false, SwapManager.CRYSTAL, place)) return;
             } else {
-                inventory.setClientSlot(item.slot(), xyz.thm.addon.utils.SwapManager.CRYSTAL);
+                if (!inventory.setClientSlot(item.slot(), SwapManager.CRYSTAL)) return;
                 place.run();
             }
             supportTicks = supportDelay.get();
@@ -579,11 +651,25 @@ public class CrystalAura extends Module {
     }
 
     private boolean validPlacement(BlockPos base) {
-        var state = mc.level.getBlockState(base);
-        if ((!state.is(Blocks.OBSIDIAN) && !state.is(Blocks.BEDROCK)) || !mc.level.getBlockState(base.above()).isAir()
-            || (oldPlace.get() && !mc.level.getBlockState(base.above(2)).isAir())
+        if (!isCrystalBase(base) || !hasCrystalSpace(base, null)
             || mc.player.getEyePosition().distanceTo(crystalPosition(base)) > placeRange.get()) return false;
         return mc.level.getEntities((Entity) null, crystalBox(base), entity -> !entity.isSpectator()).isEmpty();
+    }
+
+    private boolean isCrystalBase(BlockPos base) {
+        var state = mc.level.getBlockState(base);
+        return state.is(Blocks.OBSIDIAN) || state.is(Blocks.BEDROCK);
+    }
+
+    private boolean hasCrystalSpace(BlockPos base, BlockPos opening) {
+        return hasCrystalSpace(base, opening, oldPlace.get(), airAt);
+    }
+
+    static boolean hasCrystalSpace(BlockPos base, BlockPos opening, boolean oldPlace, Predicate<BlockPos> isAir) {
+        BlockPos lower = base.above();
+        if (!lower.equals(opening) && !isAir.test(lower)) return false;
+        BlockPos upper = lower.above();
+        return !oldPlace || upper.equals(opening) || isAir.test(upper);
     }
 
     private InteractionHand crystalHand() {
@@ -591,26 +677,16 @@ public class CrystalAura extends Module {
         if (mc.player.getItemInHand(preferred).is(Items.END_CRYSTAL)) return preferred;
         if (!swap.get()) return null;
         if (mc.player.getOffhandItem().is(Items.END_CRYSTAL)) return InteractionHand.OFF_HAND;
-        if (preferred == InteractionHand.MAIN_HAND) {
-            if (mc.player.getMainHandItem().is(Items.END_CRYSTAL)) return preferred;
-            var item = InvUtils.find(Items.END_CRYSTAL);
-            if (!item.found()) return null;
-            if (item.slot() >= 9) {
-                if (mc.player.containerMenu != mc.player.inventoryMenu) return null;
-                if (xyz.thm.addon.utils.DeepSwapManager.get().stage(this, item.slot()) < 0) return null;
-            }
-            return InteractionHand.MAIN_HAND;
-        }
+        if (preferred == InteractionHand.MAIN_HAND) return InteractionHand.MAIN_HAND;
         var item = InvUtils.find(Items.END_CRYSTAL);
-        if (!item.found() || mc.player.containerMenu != mc.player.inventoryMenu) return null;
-        InvUtils.move().from(item.slot()).toOffhand();
+        if (!item.found() || !DeepSwapManager.get().swapIntoOffhand(item.slot())) return null;
         return mc.player.getOffhandItem().is(Items.END_CRYSTAL) ? InteractionHand.OFF_HAND : null;
     }
 
-    private void placeInternal(Opportunity opportunity, InteractionHand hand) {
+    private boolean placeInternal(Opportunity opportunity, InteractionHand hand) {
         Runnable place = () -> {
             Direction side = placeSide(opportunity.base);
-            BlockHitResult hit = new BlockHitResult(crystalPosition(opportunity.base), side, opportunity.base, false);
+            BlockHitResult hit = new BlockHitResult(hitPosition(opportunity.base, side), side, opportunity.base, false);
             ((ClientPlayerInteractionManagerTHMAccessor) mc.gameMode).thm$sendSequencedPacket(mc.level,
                 sequence -> new ServerboundUseItemOnPacket(hand, hit, sequence));
             mc.player.swing(hand);
@@ -618,21 +694,15 @@ public class CrystalAura extends Module {
             lastPlaceMs = System.currentTimeMillis();
             waitingForCrystal = true;
         };
-        try {
-            if (hand == InteractionHand.OFF_HAND) place.run();
-            else {
-                var crystals = InvUtils.findInHotbar(Items.END_CRYSTAL);
-                if (!crystals.found() || crystals.isOffhand()) return;
-                int slot = mc.player.getMainHandItem().is(Items.END_CRYSTAL)
-                    ? mc.player.getInventory().getSelectedSlot() : crystals.slot();
-                if (silentSwap.get()) xyz.thm.addon.utils.SwapManager.get().withSlot(this, slot,
-                    xyz.thm.addon.utils.SwapManager.CRYSTAL, true, place);
-                else {
-                    InventoryManager.getInstance().setClientSlot(slot, xyz.thm.addon.utils.SwapManager.CRYSTAL);
-                    place.run();
-                }
-            }
-        } finally { xyz.thm.addon.utils.DeepSwapManager.get().restore(this); }
+        if (hand == InteractionHand.MAIN_HAND) {
+            int slot = mc.player.getMainHandItem().is(Items.END_CRYSTAL)
+                ? mc.player.getInventory().getSelectedSlot() : InvUtils.find(Items.END_CRYSTAL).slot();
+            if (slot < 0 || slot >= 36) return false;
+            if (silentSwap.get() || slot >= 9) return InventoryManager.withItem(this, slot, silentSwap.get(), SwapManager.CRYSTAL, place);
+            if (!InventoryManager.getInstance().setClientSlot(slot, SwapManager.CRYSTAL)) return false;
+        }
+        place.run();
+        return true;
     }
 
     private Direction placeSide(BlockPos base) {

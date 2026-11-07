@@ -184,6 +184,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         Modules.get().add(new Surround());
         Modules.get().add(new AntiPhase());
         Modules.get().add(new CrystalAura());
+        Modules.get().add(new Mainhand());
         Modules.get().add(new Phase());
         Modules.get().add(new AutoPortal());
         Modules.get().add(new DiscordRPC());

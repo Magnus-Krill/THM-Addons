@@ -23,7 +23,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 ## Mining and Building
 - `better-baritone-build` — Index opened storage, fetch missing build materials with Baritone, and manage block replacement/acceptance rules, dirt/grass equivalence, and log stripping in a custom screen.
 - `tunnel-miner` — Mines a tunnel block-by-block to target XZ coordinates at the same Y.
-- `Speedmine`: Optional queue-through clicks and latency-aware tool efficiency. Packet mining with early packet rebreaks and client-world fallback, Off/Strict/Strong/Bypass modes, a server-confirmed rebreak-rate monitor, tool swap timing, TPS sync, client prediction, tick-based mining progress with smooth rendering, and optional multitasking while using items. Auto Mine can independently continue bedrock mining while eating with `bedrock-while-eating` (off by default). Optional `debug-auto-mine` reports targets and idle reasons in chat. Strong retries completed targets without an air confirmation. Active and automatic mining continue with the inventory open. Optional Air Miner removes the airborne speed penalty and claims ground around mining actions, with a speed cap and opt-in gliding.
+- `Speedmine`: Optional queue-through clicks and latency-aware tool efficiency. Packet mining with early packet rebreaks and client-world fallback, Off/Strict/Strong/Bypass modes, a server-confirmed rebreak-rate monitor, tool swap timing, TPS sync, client prediction, tick-based mining progress with smooth rendering, and optional multitasking while using items. Auto Mine targets the surround around the enemy's full footprint and can continue bedrock mining while eating with `bedrock-while-eating` (off by default). Optional `debug-auto-mine` reports targets and idle reasons in chat. Strong retries completed targets without an air confirmation. Active and automatic mining continue with the inventory open. Optional Air Miner removes the airborne speed penalty and claims ground around mining actions, with a speed cap and opt-in gliding.
 - `BlockCounter` — Counts the selected blocks.
 - `Better-echest-farmer` — Better echest farmer that uses instant rebreak exploit.
 - `sign-render` — Renders sign text through walls with advanced clustering.
@@ -64,7 +64,8 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `AntiConcreteDetection` — Breaks buttons and torches inside enemy hit-box.
 - `AntiFeetPlace` — Interrupts enemies FeetPlace with a chosen block (ender chest by default).
 - `armor-notify` — Notifies you when your armor pieces are low.
-- **THMcrystal aura** (`thmcrystal-aura`) — Lambda-based crystal PvP with opportunity scoring, obsidian support, five prediction modes, and THM colors.
+- **THMcrystal aura** (`thmcrystal-aura`) — Lambda-based crystal PvP with obsidian support, five prediction modes, lethal finishers, and optional Speedmine Auto Mine coordination.
+- `mainhand` — Refills a hotbar slot with totems, with optional danger-based selection and a golden-apple bind. Based on [Open Zio](https://github.com/minecraftlover74/open-zio).
 - `anti-mine` — Phases or clips when your surround gets mined out.
 - `hole-jitter` — Random sub-block clips to break enemy crystal aura prediction.
 - `Loadouts` — Save and load inventory configurations.

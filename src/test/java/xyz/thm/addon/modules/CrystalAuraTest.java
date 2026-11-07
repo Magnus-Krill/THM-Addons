@@ -57,6 +57,13 @@ class CrystalAuraTest {
         assertTrue(CrystalAura.PredictionMode.Mixed.onPacket && CrystalAura.PredictionMode.Mixed.onPlace);
     }
 
+    @Test void lethalFinisherBypassesTargetThresholdsButKeepsSelfProtection() {
+        assertTrue(CrystalAura.allowedDamage(3, 2, 20, 8, 8, 5, true, CrystalAura.Priority.Advantage, 4, 3));
+        assertFalse(CrystalAura.allowedDamage(3, 2, 20, 8, 8, 5, true, CrystalAura.Priority.Advantage, 4, 4));
+        assertFalse(CrystalAura.allowedDamage(3, 9, 20, 8, 8, 5, true, CrystalAura.Priority.Advantage, 4, 3));
+        assertFalse(CrystalAura.allowedDamage(3, 4, 9, 8, 8, 5, true, CrystalAura.Priority.Advantage, 4, 3));
+    }
+
     @Test void placementVolumeMatchesTwoBlocksAboveTheBase() {
         var base = new BlockPos(5, 64, -2);
         var position = CrystalAura.crystalPosition(base);
@@ -70,7 +77,20 @@ class CrystalAuraTest {
         assertEquals(1, box.getZsize());
     }
 
+    @Test void minePlanningMayIgnoreOnlyTheSelectedBlockWhilePlacementNeedsRealAir() {
+        BlockPos base = new BlockPos(5, 64, -2);
+        BlockPos lower = base.above();
+        BlockPos upper = base.above(2);
+
+        assertTrue(CrystalAura.hasCrystalSpace(base, lower, false, pos -> false));
+        assertFalse(CrystalAura.hasCrystalSpace(base, null, false, pos -> false));
+        assertFalse(CrystalAura.hasCrystalSpace(base, lower.east(), false, pos -> false));
+        assertFalse(CrystalAura.hasCrystalSpace(base, lower, true, pos -> false));
+        assertTrue(CrystalAura.hasCrystalSpace(base, upper, true, lower::equals));
+        assertTrue(CrystalAura.hasCrystalSpace(base, null, true, pos -> true));
+    }
+
     private static boolean allowed(double target, double self, double health, CrystalAura.Priority priority) {
-        return CrystalAura.allowedDamage(target, self, health, 8, 8, 5, true, priority, 4);
+        return CrystalAura.allowedDamage(target, self, health, 8, 8, 5, true, priority, 4, Double.POSITIVE_INFINITY);
     }
 }

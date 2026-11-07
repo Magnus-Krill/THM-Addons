@@ -12,6 +12,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.network.protocol.game.GamePacketTypes;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.world.phys.AABB;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -24,6 +25,16 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SpeedmineTest {
+    @Test
+    void autoMineSurroundCoversBothSidesOfThePlayersFootprint() {
+        var targets = Speedmine.surroundTargets(new AABB(-0.2, 64.8, 0.2, 0.4, 66, 0.8), new BlockPos(0, 64, 0));
+
+        assertTrue(targets.containsAll(Set.of(new BlockPos(-2, 64, 0), new BlockPos(1, 64, 0),
+            new BlockPos(-2, 65, 0), new BlockPos(1, 65, 0), new BlockPos(-1, 66, 0), new BlockPos(0, 66, 0))));
+        assertFalse(targets.contains(new BlockPos(-1, 64, 0)));
+        assertFalse(targets.contains(new BlockPos(1, 66, 0)));
+    }
+
     @Test
     void strongRetriesBeforeTheInitialBreakCannotClaimItsAirConfirmation() {
         var confirmations = new Speedmine.RebreakConfirmations();

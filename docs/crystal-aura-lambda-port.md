@@ -23,6 +23,7 @@ Support placement is adapted from [Meteor CrystalAura](https://github.com/Meteor
 - Optional support follows Meteor: prefer existing bases, otherwise score replaceable positions with simulated obsidian and place the best safe base. Support is off by default and uses hotbar/offhand obsidian. `support-delay` defaults to one tick; zero attempts the crystal immediately after successful client prediction. Failed support attempts retry after 500 ms.
 - Prediction modes: **None**, **Packet**, **Deferred**, **Tick**, and **Mixed**. None is the default. Packet modes use client-thread spawn events; deferred modes guess IDs immediately after placement while recent spawn information is valid.
 - Ticked evaluation is the default. Optional Async mode schedules bounded client-thread work with update-delay and per-frame limits; worker threads never read or modify the world.
+- Enable `auto-mine-sync` in Prediction and `auto-mine` in Speedmine to prioritize blocks that open a safe crystal placement or improve damage against the aura's target. Speedmine waits for server air on coordinated breaks, and the aura reevaluates the opening on its next update. Inspired by [Open Zio](https://github.com/minecraftlover74/open-zio).
 - Draw the recent placement base with THM's purple outline and translucent fill through THM's rendering helper. Debug reports observed crystal removals over three seconds.
 
 ## Port adaptations

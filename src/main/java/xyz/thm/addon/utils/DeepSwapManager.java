@@ -11,7 +11,9 @@ import meteordevelopment.meteorclient.events.game.GameLeftEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.utils.player.SlotUtils;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.ItemStack;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
@@ -67,6 +69,27 @@ public final class DeepSwapManager {
         tickRestores();
     }
 
+    public boolean reserved(int slot) {
+        if (sessions.stream().anyMatch(session -> session.source == slot || session.hotbar == slot)) return true;
+        if (!Inventory.isHotbarSlot(slot)) return false;
+        HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
+        return SwapManager.get().reserved(slot)
+            || builder != null && builder.isActive() && builder.manageHotbar.get() && slot >= 4;
+    }
+
+    public boolean swapIntoHotbar(int source, int hotbar) {
+        return Inventory.isHotbarSlot(hotbar) && swapIntoSlot(source, hotbar);
+    }
+
+    public boolean swapIntoOffhand(int source) {
+        return swapIntoSlot(source, SlotUtils.OFFHAND);
+    }
+
+    private boolean swapIntoSlot(int source, int target) {
+        return source >= 0 && source < 36 && source != target && canClick(false)
+            && !reserved(source) && !reserved(target) && InventoryManager.clickBudget(1) > 0 && click(source, target);
+    }
+
     public void onUserAction() {
         if (mc.player == null) return;
         for (Session session : sessions) if (session.hotbar == mc.player.getInventory().getSelectedSlot()) session.restoring = true;
@@ -103,7 +126,7 @@ public final class DeepSwapManager {
         ItemStack beforeSource = inventory.getItem(source).copy(), beforeHotbar = inventory.getItem(hotbar).copy();
         clicking = true;
         clickSent = false;
-        try { mc.gameMode.handleContainerInput(mc.player.inventoryMenu.containerId, source, hotbar, ContainerInput.SWAP, mc.player); }
+        try { mc.gameMode.handleContainerInput(mc.player.inventoryMenu.containerId, SlotUtils.indexToId(source), hotbar, ContainerInput.SWAP, mc.player); }
         finally { clicking = false; }
         if (!clickSent && ItemStack.matches(inventory.getItem(source), beforeHotbar) && ItemStack.matches(inventory.getItem(hotbar), beforeSource)) {
             inventory.setItem(source, beforeSource);

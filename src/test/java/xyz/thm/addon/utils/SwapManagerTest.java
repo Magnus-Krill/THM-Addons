@@ -59,6 +59,17 @@ class SwapManagerTest {
     }
 
     @Test
+    void cancelledHoldRefreshKeepsThePreviousServerSlotReserved() {
+        var state = new SwapManager.Ownership();
+        var mining = state.acquire(this, 7, 10, 0, false);
+        var refresh = state.acquire(this, 8, 10, 7, false);
+        state.cancelHold(refresh, mining, 7, 7);
+        assertSame(mining, state.current);
+        assertEquals(7, mining.slot);
+        assertEquals(0, state.finish(mining, 7));
+    }
+
+    @Test
     void nestedTemporaryActionsRestoreInOrder() {
         var state = new SwapManager.Ownership();
         var first = state.acquire(this, 7, 10, 0, false);

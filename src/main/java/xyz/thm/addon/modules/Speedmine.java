@@ -38,6 +38,7 @@ import net.minecraft.network.protocol.game.GamePacketTypes;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.tags.FluidTags;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.effect.MobEffectUtil;
 import net.minecraft.world.effect.MobEffects;
@@ -49,6 +50,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LevelEvent;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.mixin.accessor.ClientLevelPredictionAccessor;
 import xyz.thm.addon.mixin.accessor.ClientPlayerInteractionManagerTHMAccessor;
@@ -342,6 +344,7 @@ public class Speedmine extends Module {
     private MineContext primary;
     private MineContext secondary;
     public  BlockPos    lastBrokenPos;
+    private BlockPos lastCrystalOpening;
     private boolean lastBreakConfirmed;
     private boolean rebreakPending;
     private boolean bypassConfirmed;
@@ -448,6 +451,7 @@ public class Speedmine extends Module {
         primary            = null;
         secondary          = null;
         lastBrokenPos      = null;
+        lastCrystalOpening = null;
         lastBreakConfirmed = false;
         rebreakPending = false;
         bypassConfirmed = false;
@@ -523,10 +527,14 @@ public class Speedmine extends Module {
     public void onServerBlockUpdate(ClientLevel level, BlockPos pos, BlockState state) {
         if (!isActive() || level != mc.level || mc.player == null) return;
         confirmBreak(pos, state);
+        if (state.isAir()) {
+            CrystalAura aura = CrystalAura.activeMiningSync();
+            if (aura != null) aura.onMiningOpeningConfirmed(pos);
+        }
         if (!pos.equals(lastBrokenPos)) return;
         packetReplacement = state.isAir() ? null : state;
         if (rebreakTrigger.get() == RebreakTrigger.onPacket && packetReplacement != null) {
-            tryRebreak(pos, packetReplacement, true);
+            tryRebreak(pos, packetReplacement, true, false);
         }
     }
 
@@ -535,6 +543,7 @@ public class Speedmine extends Module {
         if (rebreakConfirmations.confirm(pos, System.nanoTime())) rebreakCount++;
         if (pos.equals(lastStartedPos) && (pos.equals(lastBrokenPos) || (primary != null && pos.equals(primary.pos)))) {
             lastBrokenPos = pos.immutable();
+            if (primary != null && pos.equals(primary.pos)) lastCrystalOpening = primary.crystalOpening ? lastBrokenPos : null;
             lastBreakConfirmed = true;
             if (rebreakPending) bypassConfirmed = true;
             rebreakPending = false;
@@ -691,10 +700,10 @@ public class Speedmine extends Module {
     private void rebreakReplacement() {
         if (lastBrokenPos == null) return;
         boolean packet = rebreakTrigger.get() == RebreakTrigger.onPacket && packetReplacement != null;
-        tryRebreak(lastBrokenPos, packet ? packetReplacement : mc.level.getBlockState(lastBrokenPos), packet);
+        tryRebreak(lastBrokenPos, packet ? packetReplacement : mc.level.getBlockState(lastBrokenPos), packet, false);
     }
 
-    private void tryRebreak(BlockPos pos, BlockState state, boolean packet) {
+    private void tryRebreak(BlockPos pos, BlockState state, boolean packet, boolean crystalOpening) {
         boolean strong = rebreakMode.get().isStrong(bypassConfirmed);
         if (mc.gameMode == null || !autoRebreak.get() || !pos.equals(lastBrokenPos) || !pos.equals(lastStartedPos)
             || !rebreakMode.get().canRebreak(lastBreakConfirmed, rebreakPending, bypassConfirmed)
@@ -706,31 +715,31 @@ public class Speedmine extends Module {
         MineContext ctx = new MineContext(pos, state, false);
         ctx.rebreak = true;
         ctx.packetRebreak = packet;
+        ctx.crystalOpening = crystalOpening || pos.equals(lastCrystalOpening);
         if (rotate.get()) lookAt(pos);
         if (finishBreak(ctx, silentSwap.get()) && !strong && tpsSync.get()) startCredit = Math.max(0, startCredit - 1);
     }
 
     private void handleBlockClick(BlockPos pos, BlockState state) {
-        handleBlockClick(pos, state, true);
+        handleBlockClick(pos, state, true, true, false);
     }
 
-    private void handleBlockClick(BlockPos pos, BlockState state, boolean allowRebreak) {
+    private void handleBlockClick(BlockPos pos, BlockState state, boolean allowRebreak, boolean allowQueue, boolean crystalOpening) {
         if (isMining(pos)) return;
         if (allowRebreak && autoRebreak.get() && rebreakMode.get() != RebreakMode.Off && rebreakMode.get().isPrimed(lastBreakConfirmed)
             && pos.equals(lastBrokenPos) && pos.equals(lastStartedPos)) {
-            boolean packet = rebreakTrigger.get() == RebreakTrigger.onPacket;
-            if (packet && packetReplacement != null) tryRebreak(pos, packetReplacement, true);
-            else tryRebreak(pos, state, false);
+            boolean packet = rebreakTrigger.get() == RebreakTrigger.onPacket && packetReplacement != null;
+            tryRebreak(pos, packet ? packetReplacement : state, packet, crystalOpening);
             return;
         }
         if (shouldPauseMining()) return;
         if (hasPendingNormalBreak()) {
-            if (queueEnabled.get()) enqueue(pos);
+            if (allowQueue && queueEnabled.get()) enqueue(pos);
             return;
         }
 
         if (!canStart()) {
-            enqueue(pos);
+            if (allowQueue) enqueue(pos);
             return;
         }
 
@@ -738,18 +747,20 @@ public class Speedmine extends Module {
 
         if (primary == null) {
             primary = new MineContext(pos, state, true);
+            primary.crystalOpening = crystalOpening;
             sendStart(primary);
         } else if (canAddSecondary) {
             if (!stopWithTool(primary, silentSwap.get())) {
-                if (queueEnabled.get()) enqueue(pos);
+                if (allowQueue && queueEnabled.get()) enqueue(pos);
                 return;
             }
             secondary = primary;
             secondary.isPrimary = false;
             primary   = new MineContext(pos, state, true);
+            primary.crystalOpening = crystalOpening;
             sendStart(primary);
         } else {
-            if (queueEnabled.get()) enqueue(pos);
+            if (allowQueue && queueEnabled.get()) enqueue(pos);
         }
     }
 
@@ -795,6 +806,10 @@ public class Speedmine extends Module {
         withMiningTool(ctx, silentSwap.get(), () -> {
             if (grimBypass.get() && !sendSequencedAction(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, ctx, false)) return;
             if (!sendSequencedAction(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, ctx, false)) return;
+            if (ctx.crystalOpening) {
+                CrystalAura aura = CrystalAura.activeMiningSync();
+                if (aura != null) aura.awaitMiningOpening(ctx.pos);
+            }
             ctx.started = true;
             ctx.instaBreak = ctx.tickDamage >= 1.0f;
             ctx.timing.start(System.nanoTime(), ctx.tickDamage, effectiveTps());
@@ -818,13 +833,17 @@ public class Speedmine extends Module {
     private boolean finishBreak(MineContext ctx, boolean silent) {
         if (!ctx.active || (!ctx.started && !ctx.rebreak) || mc.level == null || mc.player == null || mc.gameMode == null) return false;
 
-        boolean clientRemove = clientPrediction.get();
+        CrystalAura aura = ctx.crystalOpening ? CrystalAura.activeMiningSync() : null;
+        // Crystal scoring needs the server's block state for a coordinated opening.
+        boolean clientRemove = clientPrediction.get() && aura == null;
         // Instant STARTs do not prime the server's target for subsequent STOPs.
         var action = ctx.rebreak && ctx.instaBreak
             ? ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK
             : ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK;
         withMiningTool(ctx, silent, () -> ctx.stopSent = sendSequencedAction(action, ctx, clientRemove));
         if (!ctx.stopSent) return false;
+        if (aura != null) aura.awaitMiningOpening(ctx.pos);
+        lastCrystalOpening = ctx.crystalOpening ? ctx.pos : null;
 
         if (ctx.requiresValidation() || (silent && swapMode.get() == SwapMode.ToolHold)) {
             double ticksPerMs = serverTicks(1, TickRate.INSTANCE.getTickRate()) * ctx.tickDamage;
@@ -890,7 +909,7 @@ public class Speedmine extends Module {
 
     /**
      * Picks blocks to break around nearby enemies, in BlackOut AutoMine's priority order, and
-     * hands them to the normal packet miner via {@link #requestBreak(BlockPos)}. Bedrock can't be
+     * hands them to the normal packet miner. Bedrock can't be
      * packet-mined, so it goes down Nuker's vanilla progress+swing path instead.
      */
     private void tickAutoMine() {
@@ -904,22 +923,36 @@ public class Speedmine extends Module {
         if (mineBedrock.get()) canSwing();
 
         bedrockPos = null;
-        int budget = autoDoubleMine.get() && doubleBreak.get() ? 2 : 1;
+        boolean doubleMine = autoDoubleMine.get() && doubleBreak.get();
+        int budget = doubleMine ? 2 : 1;
 
         List<BlockPos> targets = findAutoTargets();
         // Auto-mine outranks the queue: drop the backlog instead of mining it first
         if (!targets.isEmpty() && !shouldPauseMining()) queue.clear();
 
+        BlockPos crystalOpening = null;
+        if (!targets.isEmpty() && hasAutoMineSlot(doubleMine) && !hasPendingNormalBreak() && canStart()) {
+            CrystalAura aura = CrystalAura.activeMiningSync();
+            if (aura != null) {
+                crystalOpening = aura.findMiningOpening(targets.stream().filter(pos -> !isMining(pos)).toList());
+                if (crystalOpening != null) {
+                    targets.remove(crystalOpening);
+                    targets.addFirst(crystalOpening);
+                }
+            }
+        }
+
         for (BlockPos target : targets) {
-            if (mc.level.getBlockState(target).getBlock() == Blocks.BEDROCK) {
+            BlockState state = mc.level.getBlockState(target);
+            if (state.is(Blocks.BEDROCK)) {
                 // Bedrock is mined one at a time — it's a vanilla progress bar, not a packet break
                 if (bedrockPos == null) mineBedrock(target);
                 continue;
             }
-            if (budget-- <= 0) break;
-            // Both break slots busy: skip rather than queue — auto targets never enter the queue
-            if (primary != null && (secondary != null || !doubleBreak.get())) continue;
-            requestBreak(target);
+            if (budget == 0 || isMining(target)) continue;
+            if (!hasAutoMineSlot(doubleMine)) continue;
+            budget--;
+            handleBlockClick(target, state, true, false, target.equals(crystalOpening));
         }
         if (debugAutoMine.get() && !targets.isEmpty()) {
             if (bedrockPos != null) autoMineStatus = "Targeting bedrock at " + bedrockPos.toShortString();
@@ -929,6 +962,10 @@ public class Speedmine extends Module {
             else if (!canStart()) autoMineStatus = "Waiting for TPS mining credit.";
             else autoMineStatus = "Targets selected; waiting for mining slots.";
         }
+    }
+
+    private boolean hasAutoMineSlot(boolean doubleMine) {
+        return primary == null && secondary == null || doubleMine && (primary == null || secondary == null);
     }
 
     /** A bound key is hold-to-mine; an unbound one means "always on". */
@@ -941,7 +978,7 @@ public class Speedmine extends Module {
         List<Player> enemies = new ArrayList<>();
         int friends = 0, members = 0, distant = 0;
         for (Player player : mc.level.players()) {
-            if (player == mc.player || player.isSpectator()) continue;
+            if (player == mc.player || !player.isAlive() || player.isSpectator() || player.getAbilities().invulnerable) continue;
             if (Friends.get().isFriend(player)) { friends++; continue; }
             if (THMSystem.get().ignoreThmMembers.get() && ThmMembers.isThmMember(player)) { members++; continue; }
             if (player.distanceTo(mc.player) > enemyRange.get()) { distant++; continue; }
@@ -987,8 +1024,9 @@ public class Speedmine extends Module {
     /** Every block the enemy's hitbox overlaps. */
     private List<BlockPos> phaseBlocks(Player enemy) {
         List<BlockPos> out = new ArrayList<>();
-        for (BlockPos pos : BlockPos.betweenClosed(BlockPos.containing(enemy.getBoundingBox().getMinPosition()),
-                                             BlockPos.containing(enemy.getBoundingBox().getMaxPosition()))) {
+        AABB bounds = enemy.getBoundingBox().deflate(1e-7);
+        for (BlockPos pos : BlockPos.betweenClosed(BlockPos.containing(bounds.getMinPosition()),
+                                             BlockPos.containing(bounds.getMaxPosition()))) {
             if (mineable(pos)) out.add(pos.immutable());
         }
         return out;
@@ -996,26 +1034,21 @@ public class Speedmine extends Module {
 
     /** Everything boxing the enemy in: surround ring, head-level ring, and the block above their head. */
     private List<BlockPos> surroundBlocks(Player enemy) {
-        BlockPos feet = feet(enemy);
-        BlockPos head = new BlockPos(enemy.getBlockX(), (int) Math.floor(enemy.getBoundingBox().maxY), enemy.getBlockZ());
-
         List<BlockPos> out = new ArrayList<>();
-        for (Direction dir : Direction.Plane.HORIZONTAL) {
-            out.add(feet.relative(dir));
-            out.add(head.relative(dir));
+        for (BlockPos pos : surroundTargets(enemy.getBoundingBox(), enemy.blockPosition())) {
+            if (mineable(pos)) out.add(pos);
         }
-        out.add(head.above());
-        return mineableOf(out.toArray(new BlockPos[0]));
-    }
-
-    private List<BlockPos> mineableOf(BlockPos... positions) {
-        List<BlockPos> out = new ArrayList<>();
-        for (BlockPos pos : positions) if (mineable(pos)) out.add(pos);
         return out;
     }
 
-    private BlockPos feet(Player enemy) {
-        return new BlockPos(enemy.getBlockX(), (int) Math.round(enemy.getY()), enemy.getBlockZ());
+    static Set<BlockPos> surroundTargets(AABB bounds, BlockPos base) {
+        Set<BlockPos> feet = Surround.footprint(bounds, base.atY(Mth.floor(bounds.minY + 1e-7)), true);
+        Set<BlockPos> ring = Surround.plan(feet, false, false, false, false);
+        int headY = Mth.floor(bounds.maxY - 1e-7);
+        Set<BlockPos> targets = new LinkedHashSet<>(ring);
+        for (BlockPos pos : ring) targets.add(pos.atY(headY));
+        for (BlockPos pos : feet) targets.add(pos.atY(headY + 1));
+        return targets;
     }
 
     /** True if the block is inside or directly against our own hitbox — breaking it drops or exposes us. */
@@ -1284,7 +1317,7 @@ public class Speedmine extends Module {
     void requestFreshBreak(BlockPos pos) {
         if (mc.level == null || mc.player == null) return;
         BlockState state = mc.level.getBlockState(pos);
-        if (!state.isAir()) handleBlockClick(pos, state, false);
+        if (!state.isAir()) handleBlockClick(pos, state, false, true, false);
     }
 
     boolean interceptsManualBreak(BlockPos pos) {
@@ -1474,6 +1507,7 @@ public class Speedmine extends Module {
         public boolean          active = true;
         private boolean rebreak;
         private boolean packetRebreak;
+        private boolean crystalOpening;
         private boolean started;
         private boolean stopSent;
         private float tickDamage;
