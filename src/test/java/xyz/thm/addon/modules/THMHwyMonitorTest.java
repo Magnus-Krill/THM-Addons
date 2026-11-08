@@ -38,6 +38,19 @@ class THMHwyMonitorTest {
     }
 
     @ParameterizedTest
+    @CsvSource({"123.5,3131.5,-90,E,Ring", "123.5,3500.5,-90,E,Ring", "123.5,6250.5,-90,E,Ring",
+        "123.5,12500.5,-90,E,Ring", "123.5,30000000.5,-90,E,Ring", "3456.5,6544.5,-135,NE,Diamond"})
+    void mappedNetherRoadsDoNotTriggerMisalignment(double x, double z, float yaw, String direction, String highway) {
+        var target = THMHwyMonitor.determineRecoveryTarget(x, z, yaw, 120, true, true, null, direction);
+
+        assertNotNull(target);
+        assertEquals(highway, target.highway());
+        assertEquals(direction, target.travelDirection());
+        assertEquals(THMHwyMonitor.RecoveryCause.None,
+            THMHwyMonitor.selectRecoveryCause(THMHwyMonitor.RecoveryCause.None, target.distance(), 0, true));
+    }
+
+    @ParameterizedTest
     @CsvSource({"1,0", "-1,0", "0,1", "0,-1", "1,1", "1,-1", "-1,1", "-1,-1"})
     void retreatClearsServerTrackingAndReturnsWithinTheOriginalDistance(int dx, int dz) {
         for (int radius : new int[] {2, 4, 6, 16, 32}) {

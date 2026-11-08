@@ -119,16 +119,6 @@ public class THMHwyMonitor extends Module {
     private static final double GHOSTBLOCK_CONFIRMED_PROGRESS_BLOCKS = 0.75;
     private static final double RUBBERBAND_BACKTRACK_BLOCKS = 1.5;
 
-    private static final int[] RING_ROADS = new int[] {
-        200, 500, 750, 1000, 1500, 2000, 2500, 5000, 7500, 10000, 15000, 20000, 25000,
-        50000, 55000, 62500, 75000, 100000, 125000, 250000, 500000, 750000, 1000000,
-        1250000, 1568852, 1875000, 2500000, 3750000
-    };
-
-    private static final int[] DIAMONDS = new int[] {
-        1000, 2000, 2500, 5000, 25000, 50000, 125000, 250000, 500000, 3750000
-    };
-
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
 
     private final Setting<Boolean> autoRecover = sgGeneral.add(new BoolSetting.Builder()
@@ -3183,7 +3173,7 @@ public class THMHwyMonitor extends Module {
         return new AlignmentResult(false, "None", "None", bestDistance);
     }
 
-    private static RecoveryTarget determineRecoveryTarget(
+    static RecoveryTarget determineRecoveryTarget(
         double playerX,
         double playerZ,
         float playerYaw,
@@ -3267,7 +3257,8 @@ public class THMHwyMonitor extends Module {
         }
 
         if (ring) {
-            for (int r : RING_ROADS) {
+            for (int i = 0; i < AxisViewer.RING_ROADS.size(); i++) {
+                int r = AxisViewer.RING_ROADS.getInt(i);
                 double left = -r + centerOffset;
                 double right = r + centerOffset;
                 double bottom = -r + centerOffset;
@@ -3281,7 +3272,8 @@ public class THMHwyMonitor extends Module {
         }
 
         if (diamond) {
-            for (int d : DIAMONDS) {
+            for (int i = 0; i < AxisViewer.DIAMONDS.size(); i++) {
+                int d = AxisViewer.DIAMONDS.getInt(i);
                 double x1 = d + centerOffset;
                 double z1 = centerOffset;
                 double x2 = centerOffset;
@@ -4255,7 +4247,7 @@ public class THMHwyMonitor extends Module {
         }
     }
 
-    private record RecoveryTarget(
+    record RecoveryTarget(
         String highway,
         String direction,
         String travelDirection,
