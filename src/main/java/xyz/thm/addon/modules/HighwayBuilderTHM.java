@@ -2369,16 +2369,21 @@ public class HighwayBuilderTHM extends Module {
         }
     }
 
-    public enum UnmappedRoad {
-        Auto("other"),
-        Ring("unlisted-ring"),
-        Diamond("unlisted-diamond");
+    public enum UnmappedRoad implements DescribedOption {
+        Auto("other", "Use automatic road detection."),
+        Ring("unlisted-ring", "Report an unmapped road as an unlisted ring."),
+        Diamond("unlisted-diamond", "Report an unmapped road as an unlisted diamond.");
 
         private final String routeId;
+        private final String description;
 
-        UnmappedRoad(String routeId) {
+        UnmappedRoad(String routeId, String description) {
             this.routeId = routeId;
+            this.description = description;
         }
+
+        @Override
+        public String description() { return description; }
 
         String reportRoute(String detected) {
             return this != Auto && (detected.equals("other") || detected.equals("grid")) ? routeId : detected;
