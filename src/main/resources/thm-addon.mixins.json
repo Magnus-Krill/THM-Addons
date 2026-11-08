@@ -96,14 +96,18 @@
     "ClientLevelBlockUpdateMixin",
     "DistantHorizonsLightmapMixin",
     "InventoryScreenMixin",
+    "JoinMultiplayerScreenMixin",
     "KeyboardMixin",
     "LevelLoadingScreenMixin",
+    "OnlineServerEntryMixin",
     "PlayerAirMiningMixin",
     "PlayerListHudMixin",
     "PlayerListMapMixin",
+    "ServerSelectionListMixin",
     "accessor.ClientLevelPredictionAccessor",
     "ShulkerOverviewMixin",
     "accessor.DeltaTrackerTimerAccessor",
+    "accessor.ServerSelectionListAccessor",
     "meteor.AutoTotemMixin",
     "meteor.AutoArmorMixin"
   ]

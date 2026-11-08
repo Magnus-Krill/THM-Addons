@@ -6,6 +6,21 @@
 
 # Minecraft 26.2 port progress
 
+## 2026-11-08: Multiplayer folders and Join 6b6t
+
+Added a folder sidebar, local server aliases and search to the Vanilla multiplayer screen.
+Folder metadata lives in THM settings. Vanilla keeps the saved servers, LAN discovery, ping and join flow.
+The title-screen shortcut opens the first saved 6b6t address or falls back to `6b6t.org`.
+
+The full build passed all 723 tests. Isolated startup checks passed with confirmed OpenGL and Vulkan.
+The checks cover folder filtering, alias search and reordering without moving unrelated saved entries.
+The shortcut's address matcher is unit-tested. No live connection to 6b6t was made.
+
+Server rows now support drag-and-drop with their favicon. Right-click opens the folder editor
+with the clicked or current folder selected as the parent. Join 6b6t uses the full multiplayer
+button width below Options and Quit Game. The 723-test build and isolated OpenGL and Vulkan
+checks passed with drag rendering, folder drops, right-click creation, and both title layouts.
+
 ## 2026-11-06: Remaining-stock veto uses restock recovery
 
 The player's disconnect screenshot identifies `enterKitbotRestockWithAvailabilityGate` calling

@@ -448,6 +448,12 @@ public class THMUtils {
         return !isAnarchyServer(server.ip);
     }
 
+    private static final Set<String> SIX_B_SIX_T_DOMAINS = Set.of("6b6t.org", "6b6t.cc", "6b6t.me");
+
+    public static boolean is6b6tAddress(String address) {
+        return matchesAnarchyServer(address, SIX_B_SIX_T_DOMAINS);
+    }
+
     public static boolean isAnarchyServer(String address) {
         refreshAnarchyModDomainsAsync();
         return matchesAnarchyServer(address, anarchyModDomains);

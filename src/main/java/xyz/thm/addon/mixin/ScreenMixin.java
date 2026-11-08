@@ -53,6 +53,11 @@ public abstract class ScreenMixin {
                 this.minecraft.gui.setScreen(new MainMenuSettingsScreen(screen)))
                 .bounds(screen.width / 2 - 45, screen.height - 22, 90, 16).build());
             ThmStyledButtons.mark(menu);
+            Button join = addRenderableWidget(Button.builder(Component.literal(MainMenuFx.JOIN_6B6T), b ->
+                MainMenuFx.join6b6t(screen, this.minecraft))
+                .bounds(screen.width / 2 - 100, screen.height - 54, 200, 20).build());
+            join.active = this.minecraft.allowsMultiplayer();
+            ThmStyledButtons.mark(join);
             if (MainMenuFx.previewMode) {
                 AbstractWidget showUi = addRenderableWidget(Button.builder(Component.literal("Show UI"), b -> {
                     MainMenuFx.previewMode = false;

@@ -6,6 +6,8 @@
 
 # 26.2 port gotchas
 
+- Multiplayer list rows and `servers.dat` use different indices after filtering. Resolve both saved entries before reordering, and refresh the Vanilla footer after a filter hides the selected server. Dispatch a server-row click on release so Vanilla's mouse-down join action leaves room for dragging.
+
 - Crystal Aura uses internal name `thmcrystal-aura` and a title override because Meteor replaces existing modules with matching names. Reusing `crystal-aura` would remove the stock instance and break upstream class lookups. Minecraft 26.2 entity constants live in `EntityTypes`, and tame ownership uses `isOwnedBy`/entity references.
 
 - The 2026-10-04 live diagnostics confirmed `TitleBridgeScreen` from ForceCloseLoadingScreen, outer THM setup, 30 discovered backgrounds, and successful scaled shader drawing on Vulkan. An ImageButton sprite includes its vanilla frame; shrinking the whole sprite retains that frame, so crop its outer pixels when adding THM chrome.

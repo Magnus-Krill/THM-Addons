@@ -31,6 +31,7 @@ public class THMSystem extends System<THMSystem> {
     private static final String ACTIVE_HIGHWAY_PROFILE_TAG = "activeHighwayProfile";
 
     public final Settings settings = new Settings();
+    public final ServerFolders serverFolders = new ServerFolders();
 
     // Group creation order = display order in the THM tab. Appearance first (brand colors), API
     // Token last (rarely touched).
@@ -379,6 +380,7 @@ public class THMSystem extends System<THMSystem> {
         tag.put("settings", settings.toTag());
         tag.put("updaterSettings", updaterSettings.toTag());
         tag.put("mainMenuSettings", mainMenuSettings.toTag());
+        tag.put("serverFolders", serverFolders.toTag());
         tag.putString(ACTIVE_HIGHWAY_PROFILE_TAG, (activeHighwayProfile == null ? Mode.None : activeHighwayProfile).name());
         tag.put(HIGHWAY_PROFILE_SNAPSHOTS_TAG, highwayProfileSnapshotsToTag());
         return tag;
@@ -386,6 +388,7 @@ public class THMSystem extends System<THMSystem> {
 
     @Override
     public THMSystem fromTag(CompoundTag tag) {
+        serverFolders.fromTag(tag.getCompoundOrEmpty("serverFolders"));
         if (tag.contains("settings")) {
             settings.fromTag(tag.getCompound("settings").orElse(new CompoundTag()));
         }

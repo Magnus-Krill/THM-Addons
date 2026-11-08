@@ -36,7 +36,7 @@ public abstract class RealmsNotificationsScreenMixin {
     @Redirect(method = "extractIcons", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/GuiGraphicsExtractor;blitSprite(Lcom/mojang/blaze3d/pipeline/RenderPipeline;Lnet/minecraft/resources/Identifier;IIII)V"))
     private void thm$positionBadge(GuiGraphicsExtractor context, RenderPipeline pipeline, Identifier sprite, int x, int y, int width, int height) {
         Minecraft mc = Minecraft.getInstance();
-        if (THMSystem.get().mainMenuWindow.get() && mc.gui.screen() instanceof TitleScreen screen) {
+        if (mc.gui.screen() instanceof TitleScreen screen && THMSystem.get() != null) {
             AbstractWidget realms = null;
             for (var child : screen.children()) {
                 if (child instanceof Button widget && widget.getMessage().getString().equals(I18n.get("menu.online"))) {
@@ -44,11 +44,13 @@ public abstract class RealmsNotificationsScreenMixin {
                     break;
                 }
             }
-            if (realms != null) {
+            if (realms != null && THMSystem.get().mainMenuWindow.get()) {
                 x = realms.getX() + realms.getWidth() - 4 - width - thm$badgeOffset;
                 y = realms.getY() + (realms.getHeight() - height) / 2;
                 thm$badgeOffset += width + 4;
                 MainMenuFx.renderButton(context, mc.font, x - 1, y - 1, x + width + 1, y + height + 1, "", false, true);
+            } else if (realms != null) {
+                y += realms.getY() - (screen.height / 4 + 96);
             }
         }
         context.blitSprite(pipeline, sprite, x, y, width, height);

@@ -6,16 +6,22 @@
 
 package xyz.thm.addon.gui;
 
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.PlainTextButton;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.client.multiplayer.ServerList;
+import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.client.resources.language.I18n;
 import net.minecraft.util.ARGB;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.system.THMSystem;
+import xyz.thm.addon.utils.THMUtils;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -29,6 +35,22 @@ import java.util.Random;
 // is plain DrawContext.fill/text - same cost as any other GUI widget, no custom GL state - so
 // it doesn't add meaningfully to title screen render time.
 public class MainMenuFx {
+    public static final String JOIN_6B6T = "Join 6b6t";
+
+    public static void join6b6t(Screen parent, Minecraft client) {
+        if (!client.allowsMultiplayer()) return;
+        ServerList servers = new ServerList(client);
+        servers.load();
+        ServerData target = new ServerData("6b6t", "6b6t.org", ServerData.Type.OTHER);
+        for (int i = 0; i < servers.size(); i++) {
+            ServerData server = servers.get(i);
+            if (THMUtils.is6b6tAddress(server.ip)) {
+                target = server;
+                break;
+            }
+        }
+        ConnectScreen.startConnecting(parent, client, ServerAddress.parseString(target.ip.strip()), target, false, null);
+    }
 
     // Brand colors are now live and player-editable from the THM tab (THMSystem.thmColor /
     // thmSideColor); these read the current setting each call (fall back to the THMAddon defaults
@@ -87,10 +109,15 @@ public class MainMenuFx {
 
     /** Run after screen initialization so other mods' buttons are included. */
     public static void layoutTitleButtons(Screen screen) {
-        if (!THMSystem.get().mainMenuWindow.get() || previewMode) return;
+        if (previewMode) return;
+        if (!THMSystem.get().mainMenuWindow.get()) {
+            layoutVanillaJoinButton(screen);
+            return;
+        }
         int[] bounds = windowBounds(screen.width, screen.height);
         int centerX = screen.width / 2;
-        int top = bounds[1] + (bounds[3] - bounds[1]) / 4 + 38;
+        int step = titleRowStep(bounds);
+        int top = titleRowTop(bounds, step);
         List<AbstractWidget> icons = new ArrayList<>();
         List<AbstractWidget> extraButtons = new ArrayList<>();
         int sidebarX = bounds[0] + 10;
@@ -101,16 +128,19 @@ public class MainMenuFx {
             if (label.equals("THM Menu")) {
                 widget.setPosition(sidebarX, bounds[3] - 28);
                 widget.setWidth(sidebarWidth);
+            } else if (label.equals(JOIN_6B6T)) {
+                widget.setPosition(centerX - 100, top + 5 * step);
+                widget.setWidth(200);
             } else if (label.equals(I18n.get("menu.singleplayer")) || label.equals(I18n.get("menu.playdemo"))) {
                 widget.setPosition(centerX - 100, top);
             } else if (label.equals(I18n.get("menu.multiplayer")) || label.equals(I18n.get("menu.resetdemo"))) {
-                widget.setPosition(centerX - 100, top + 24);
+                widget.setPosition(centerX - 100, top + step);
             } else if (label.equals(I18n.get("menu.online"))) {
-                widget.setPosition(centerX - 100, top + 48);
+                widget.setPosition(centerX - 100, top + 2 * step);
             } else if (label.equals(I18n.get("menu.options"))) {
-                widget.setPosition(centerX - 100, top + 96);
+                widget.setPosition(centerX - 100, top + 4 * step);
             } else if (label.equals(I18n.get("menu.quit"))) {
-                widget.setPosition(centerX + 2, top + 96);
+                widget.setPosition(centerX + 2, top + 4 * step);
             } else {
                 if (widget instanceof Button && !(widget instanceof PlainTextButton) && widget.visible) {
                     if (widget.getWidth() <= 40 || label.equals(I18n.get("options.language")) || label.equals(I18n.get("options.accessibility"))
@@ -132,10 +162,55 @@ public class MainMenuFx {
         int totalWidth = icons.stream().mapToInt(AbstractWidget::getWidth).sum() + Math.max(0, icons.size() - 1) * 4;
         int x = centerX - totalWidth / 2;
         for (AbstractWidget icon : icons) {
-            icon.setPosition(x, top + 72);
+            icon.setPosition(x, top + 3 * step);
             ThmStyledButtons.mark(icon);
             x += icon.getWidth() + 4;
         }
+    }
+
+    private static void layoutVanillaJoinButton(Screen screen) {
+        AbstractWidget join = findTitleWidget(screen, JOIN_6B6T);
+        if (join == null) return;
+        AbstractWidget multiplayer = findTitleWidget(screen, I18n.get("menu.multiplayer"));
+        AbstractWidget options = findTitleWidget(screen, I18n.get("menu.options"));
+        AbstractWidget quit = findTitleWidget(screen, I18n.get("menu.quit"));
+        int centerX = screen.width / 2;
+        int buttonWidth = multiplayer == null ? 200 : multiplayer.getWidth();
+        int bottom = Math.max(options == null ? 0 : options.getBottom(), quit == null ? 0 : quit.getBottom());
+        int joinY = bottom == 0 ? screen.height - 54 : bottom + 4;
+        int shift = Math.max(0, joinY + join.getHeight() + 12 - screen.height);
+        if (shift > 0) {
+            for (var child : screen.children()) {
+                if (child instanceof Button button && button != join && !(button instanceof PlainTextButton)
+                    && button.getX() >= centerX - 100 && button.getRight() <= centerX + 100
+                    && button.getY() >= bottom - 116 && button.getBottom() <= bottom) {
+                    button.setY(button.getY() - shift);
+                }
+            }
+        }
+        join.setPosition(centerX - buttonWidth / 2, joinY - shift);
+        join.setWidth(buttonWidth);
+        AbstractWidget menu = findTitleWidget(screen, "THM Menu");
+        if (menu != null) {
+            int y = screen.height - 22;
+            if (join.getBottom() > y) menu.setPosition(8, 8);
+            else menu.setPosition(centerX - menu.getWidth() / 2, y);
+        }
+    }
+
+    private static AbstractWidget findTitleWidget(Screen screen, String label) {
+        for (var child : screen.children()) {
+            if (child instanceof AbstractWidget widget && widget.getMessage().getString().equals(label)) return widget;
+        }
+        return null;
+    }
+
+    private static int titleRowStep(int[] bounds) {
+        return bounds[3] - bounds[1] < 210 ? 21 : 24;
+    }
+
+    private static int titleRowTop(int[] bounds, int step) {
+        return Math.min(bounds[1] + (bounds[3] - bounds[1]) / 4 + 38, bounds[3] - 26 - 5 * step);
     }
 
     /** Window frame + big title - draw this BEFORE the screen's buttons so they sit on top of it. */
@@ -145,13 +220,15 @@ public class MainMenuFx {
         int[] bounds = windowBounds(screenWidth, screenHeight);
         int x1 = bounds[0], y1 = bounds[1], x2 = bounds[2], y2 = bounds[3];
         int centerX = x1 + (x2 - x1) / 2;
-        int headerY = y1 + (y2 - y1) / 4 - 25;
+        int step = titleRowStep(bounds);
+        float scale = step < 24 ? 2f : HEADER_SCALE;
+        int headerY = Math.min(y1 + (y2 - y1) / 4 - 25, titleRowTop(bounds, step) - (int) (10 * scale) - 13);
 
         renderChrome(context, tr, x1, y1, x2, y2, "THM Addons");
-        renderBigTitle(context, tr, centerX, headerY);
+        renderBigTitle(context, tr, centerX, headerY, scale);
 
         String version = "THM Addon v" + THMAddon.VERSION;
-        context.text(tr, version, centerX - tr.width(version) / 2, headerY + (int) (10 * HEADER_SCALE) + 2, thmColor());
+        context.text(tr, version, centerX - tr.width(version) / 2, headerY + (int) (10 * scale) + 2, thmColor());
     }
 
     /** Mouse particle trail - draw this AFTER the screen's buttons so it drifts over everything. */
@@ -188,12 +265,12 @@ public class MainMenuFx {
     // alpha explicitly set (THM_COLOR, -1, ...). Scaled via the same pushMatrix/translate/scale
     // wrapper as before, just with that one-byte bug fixed and a plain String instead of a
     // MutableText (no need for per-character styling here).
-    private static void renderBigTitle(GuiGraphicsExtractor context, Font tr, int centerX, int y) {
-        float textWidth = tr.width(HEADER_TEXT) * HEADER_SCALE;
+    private static void renderBigTitle(GuiGraphicsExtractor context, Font tr, int centerX, int y, float scale) {
+        float textWidth = tr.width(HEADER_TEXT) * scale;
 
         context.pose().pushMatrix();
         context.pose().translate(centerX - textWidth / 2f, (float) y);
-        context.pose().scale(HEADER_SCALE, HEADER_SCALE);
+        context.pose().scale(scale, scale);
         context.text(tr, HEADER_TEXT, 0, 0, thmColor());
         context.pose().popMatrix();
     }

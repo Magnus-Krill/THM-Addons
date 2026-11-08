@@ -288,6 +288,8 @@ update while open; existing saved kit strings remain readable. Restock keeps its
 
 **Main-menu diagnostics:** `[THM/Init]` logs addon registration stages; `[THM/Menu]` logs screen and shader hooks. Menu setup runs after outer `Screen.init`, resize, and widget rebuild, since other clients can cancel inner `TitleScreen.init`. Keep setup idempotent and render logging limited to first use or state changes.
 
+**Multiplayer folders:** Keep saved servers in Vanilla's `servers.dat`. `ServerFolders` stores folder IDs, order and aliases in `THMSystem`. Filter the displayed entries and map reordered rows back to their saved indices. The title-screen shortcut uses the first saved 6b6t host, then `6b6t.org`.
+
 Background shaders use a cached texture with separate resolution/FPS settings in THM Menu. Keep shader updates independent of GUI frame rate and invalidate the texture on shader or size changes.
 Apply title-window blur in the panorama callback after the background draw; an earlier GUI pass can reach `prepare()` before the background exists.
 

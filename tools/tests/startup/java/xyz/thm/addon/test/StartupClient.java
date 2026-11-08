@@ -8,10 +8,31 @@ package xyz.thm.addon.test;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen;
+import net.minecraft.client.gui.screens.multiplayer.ServerSelectionList;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.client.multiplayer.ServerList;
+import net.minecraft.client.renderer.state.gui.BlitRenderState;
+import net.minecraft.client.renderer.state.gui.GuiRenderState;
+import net.minecraft.client.resources.language.I18n;
+import net.minecraft.network.chat.CommonComponents;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import org.lwjgl.glfw.GLFW;
+import xyz.thm.addon.gui.MainMenuFx;
+import xyz.thm.addon.gui.ServerFolderSidebar;
+import xyz.thm.addon.accessor.ServerFolderView;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
 import xyz.thm.addon.modules.KitbotFrontend;
+import xyz.thm.addon.system.THMSystem;
 import xyz.thm.addon.utils.PacketBudget;
 
 import java.io.IOException;
@@ -35,6 +56,7 @@ public final class StartupClient implements ClientModInitializer {
             try {
                 verifyPacketBudget();
                 verifyKitbotUpdateIsolation();
+                verifyServerFolders(client);
                 Files.writeString(client.gameDirectory.toPath().resolve("startup-ok"), Long.toString(now - readyAt));
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
@@ -43,6 +65,127 @@ public final class StartupClient implements ClientModInitializer {
             }
             client.stop();
         });
+    }
+
+    private static void verifyServerFolders(Minecraft client) {
+        Screen title = client.gui.screen();
+        verifyJoinButtonLayout(title);
+
+        var folders = THMSystem.get().serverFolders;
+        var saved = folders.toTag();
+        var servers = new ServerList(client);
+        servers.add(new ServerData("First", "first.invalid", ServerData.Type.OTHER), false);
+        servers.add(new ServerData("Second", "second.invalid", ServerData.Type.OTHER), false);
+        servers.add(new ServerData("Third", "third.invalid", ServerData.Type.OTHER), false);
+        servers.save();
+        String folder = folders.putFolder("", "Startup", "");
+        folders.setDetails("second.invalid", folder, "Test alias");
+        folders.setDetails("third.invalid", folder, "");
+        try {
+            var multiplayer = new JoinMultiplayerScreen(title);
+            client.gui.setScreen(multiplayer);
+            var list = ((ServerFolderView) multiplayer).thm$serverList();
+            var sidebar = multiplayer.children().stream().filter(ServerFolderSidebar.class::isInstance)
+                .map(ServerFolderSidebar.class::cast).findFirst().orElseThrow();
+            var search = multiplayer.children().stream().filter(EditBox.class::isInstance)
+                .map(EditBox.class::cast).findFirst().orElseThrow();
+            if (sidebar.children().size() != 3 || list.getX() < sidebar.getRight()) {
+                throw new IllegalStateException("Server folders sidebar is missing or overlaps the server list");
+            }
+            sidebar.children().getLast().keyPressed(new KeyEvent(GLFW.GLFW_KEY_ENTER, 0, 0));
+            if (!(list.children().getFirst() instanceof ServerSelectionList.OnlineServerEntry row)
+                || !row.getServerData().ip.equals("second.invalid")) {
+                throw new IllegalStateException("Selecting a folder did not hide unrelated saved servers");
+            }
+            row.keyPressed(new KeyEvent(GLFW.GLFW_KEY_DOWN, 0, GLFW.GLFW_MOD_SHIFT));
+            if (!multiplayer.getServers().get(0).ip.equals("first.invalid")
+                || !multiplayer.getServers().get(1).ip.equals("third.invalid")) {
+                throw new IllegalStateException("Reordering a filtered server moved an unrelated saved entry");
+            }
+            search.setValue("Test alias");
+            var visible = list.children().stream().filter(ServerSelectionList.OnlineServerEntry.class::isInstance)
+                .map(ServerSelectionList.OnlineServerEntry.class::cast).toList();
+            if (visible.size() != 1 || !visible.getFirst().getServerData().ip.equals("second.invalid")
+                || !visible.getFirst().getNarration().getString().contains("Test alias")) {
+                throw new IllegalStateException("Server folder alias search did not select the expected server");
+            }
+            var server = visible.getFirst();
+            server.getServerData().setState(ServerData.State.UNREACHABLE);
+            server.getServerData().motd = CommonComponents.EMPTY;
+            server.getServerData().status = CommonComponents.EMPTY;
+            var target = sidebar.children().get(1);
+            var left = new MouseButtonInfo(GLFW.GLFW_MOUSE_BUTTON_LEFT, 0);
+            var press = new MouseButtonEvent(server.getContentX() + 20, server.getContentY() + 8, left);
+            var drop = new MouseButtonEvent(target.getContentX() + 4, target.getContentY() + 5, left);
+            if (!multiplayer.mouseClicked(press, false) || !multiplayer.mouseDragged(drop, drop.x() - press.x(), drop.y() - press.y())) {
+                throw new IllegalStateException("Server drag did not start at " + press + " inside " + list.getRectangle()
+                    + ", found " + list.getChildAt(press.x(), press.y()));
+            }
+            var render = new GuiRenderState();
+            multiplayer.extractRenderState(new GuiGraphicsExtractor(client, render, (int) drop.x(), (int) drop.y()),
+                (int) drop.x(), (int) drop.y(), 0);
+            boolean[] icon = {false};
+            render.forEachElement(element -> {
+                if (element instanceof BlitRenderState blit && blit.x0() == (int) drop.x() + 10
+                    && blit.y0() == (int) drop.y() + 8 && blit.x1() - blit.x0() == 32 && blit.y1() - blit.y0() == 32) icon[0] = true;
+            }, GuiRenderState.TraverseRange.ALL);
+            multiplayer.mouseReleased(drop);
+            var details = folders.details("second.invalid");
+            if (!details.folder().isEmpty() || !details.alias().equals("Test alias")) {
+                throw new IllegalStateException("Dropping a server did not preserve its alias and move it to Unfiled");
+            }
+            if (!icon[0]) throw new IllegalStateException("Server icon did not follow the dragged row");
+
+            var parent = sidebar.children().getLast();
+            var folderDrop = new MouseButtonEvent(parent.getContentX() + 4, parent.getContentY() + 5, left);
+            multiplayer.mouseClicked(press, false);
+            multiplayer.mouseDragged(folderDrop, folderDrop.x() - press.x(), folderDrop.y() - press.y());
+            multiplayer.mouseReleased(folderDrop);
+            if (!folders.details("second.invalid").folder().equals(folder)) {
+                throw new IllegalStateException("Dropping a server into a folder did not assign it to that folder");
+            }
+            var right = new MouseButtonInfo(GLFW.GLFW_MOUSE_BUTTON_RIGHT, 0);
+            multiplayer.mouseClicked(new MouseButtonEvent(parent.getContentX() + 4, parent.getContentY() + 5, right), false);
+            if (!(client.gui.screen() instanceof ServerFolderSidebar.EditScreen editor)) {
+                throw new IllegalStateException("Right-click did not open the server folder editor");
+            }
+            editor.children().stream().filter(EditBox.class::isInstance).map(EditBox.class::cast)
+                .findFirst().orElseThrow().setValue("Nested");
+            button(editor, CommonComponents.GUI_DONE.getString()).onPress(left);
+            if (folders.children(folder).stream().noneMatch(child -> child.name().equals("Nested"))) {
+                throw new IllegalStateException("Right-click folder was not created under the clicked folder");
+            }
+        } finally {
+            client.gui.setScreen(title);
+            folders.fromTag(saved);
+        }
+    }
+
+    private static void verifyJoinButtonLayout(Screen title) {
+        var window = THMSystem.get().mainMenuWindow;
+        boolean saved = window.get();
+        int width = title.width, height = title.height;
+        try {
+            for (boolean styled : new boolean[] {true, false}) {
+                window.set(styled);
+                title.resize(420, 240);
+                var join = button(title, MainMenuFx.JOIN_6B6T);
+                var multiplayer = button(title, I18n.get("menu.multiplayer"));
+                if (join.getX() != multiplayer.getX() || join.getWidth() != multiplayer.getWidth()
+                    || join.getY() < button(title, I18n.get("menu.options")).getBottom()
+                    || join.getY() < button(title, I18n.get("menu.quit")).getBottom() || join.getBottom() > title.height - 10) {
+                    throw new IllegalStateException("Join 6b6t did not fit below Options and Quit Game, styled=" + styled);
+                }
+            }
+        } finally {
+            window.set(saved);
+            title.resize(width, height);
+        }
+    }
+
+    private static Button button(Screen screen, String label) {
+        return screen.children().stream().filter(Button.class::isInstance).map(Button.class::cast)
+            .filter(button -> button.getMessage().getString().equals(label)).findFirst().orElseThrow();
     }
 
     private static void verifyPacketBudget() throws ReflectiveOperationException {
