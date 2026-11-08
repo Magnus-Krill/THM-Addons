@@ -12,7 +12,8 @@ This public guide explains the user-facing settings in `THM-HighwayBuilder` (`Hi
 
 HighwayBuilder identifies the road locally and sends a road ID such as `ring-62500`.
 Kitbot validates the ID against its own approved roads. Start and end coordinates stay on the client.
-Reports without an ID use the general unofficial rate. Admin Login → Set Multipliers edits the rates.
+Credit starts at 100%. Kitbot deducts 20 percentage points for digging, 10 for ring or diamond
+roads, and 20 for unofficial roads. Main axes are always official.
 
 ## Highway Profiles
 
