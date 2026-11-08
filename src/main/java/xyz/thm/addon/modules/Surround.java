@@ -16,7 +16,6 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.PlayerUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
-import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -47,7 +46,6 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.mixin.accessor.ClientLevelPredictionAccessor;
-import xyz.thm.addon.mixin.accessor.ClientPlayerInteractionManagerTHMAccessor;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.utils.InventoryManager;
 import xyz.thm.addon.utils.PacketPlaceTracker;
@@ -55,6 +53,7 @@ import xyz.thm.addon.utils.PlacementUtils;
 import xyz.thm.addon.utils.RenderUtilsTHM;
 
 import java.util.*;
+import java.util.function.BooleanSupplier;
 
 public class Surround extends Module {
     public static Surround INSTANCE;
@@ -431,16 +430,20 @@ public class Surround extends Module {
                 cancel(pos, placement);
                 return;
             }
-            if (!budget.dispatch(blocksPerTick.get(), immediate ? 0 : delay.get())) { pending.remove(pos); return; }
-            if (immediate && rotate.get()) {
-                float yaw = (float) Rotations.getYaw(actualHit.getLocation()), pitch = (float) Rotations.getPitch(actualHit.getLocation());
-                mc.getConnection().send(new ServerboundMovePlayerPacket.Rot(yaw, pitch, mc.player.onGround(), mc.player.horizontalCollision));
-                Rotations.setCamRotation(yaw, pitch);
+            if (!budget.dispatch(blocksPerTick.get(), immediate ? 0 : delay.get(), () -> {
+                if (immediate && rotate.get()) {
+                    float yaw = (float) Rotations.getYaw(actualHit.getLocation()), pitch = (float) Rotations.getPitch(actualHit.getLocation());
+                    mc.getConnection().send(new ServerboundMovePlayerPacket.Rot(yaw, pitch, mc.player.onGround(), mc.player.horizontalCollision));
+                    Rotations.setCamRotation(yaw, pitch);
+                }
+                return sendPlacement(pos, actualHit, actualSlot);
+            })) {
+                pending.remove(pos);
+                return;
             }
             lastAttempt.put(pos, System.nanoTime());
             placement.sent = true;
             placement.started = System.nanoTime();
-            sendPlacement(actualHit, actualSlot);
             BlockState predicted = world.getBlockState(pos);
             if (!placementMode.get().packet && !predicted.canBeReplaced()) placement.predicted = predicted;
             if (placementMode.get().packet && placementMode.get().waitForAnswer) PacketPlaceTracker.markSent(pos, confirmationTimeout.get());
@@ -493,18 +496,14 @@ public class Surround extends Module {
         return !stack.isEmpty() && stack.getItem() instanceof BlockItem item && blocks.get().contains(item.getBlock());
     }
 
-    private void sendPlacement(BlockHitResult hit, int slot) {
+    private boolean sendPlacement(BlockPos pos, BlockHitResult hit, int slot) {
         InteractionHand hand = slot == 45 ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
-        Runnable place = () -> {
-            if (placementMode.get().packet) {
-                ((ClientPlayerInteractionManagerTHMAccessor) mc.gameMode).thm$sendSequencedPacket(world,
-                    sequence -> new ServerboundUseItemOnPacket(hand, hit, sequence));
-                mc.player.swing(hand);
-            } else BlockUtils.interact(hit, hand, true);
-        };
-        if (hand == InteractionHand.OFF_HAND) place.run();
-        else InventoryManager.withItem(this, slot, placementMode.get().packet,
-            xyz.thm.addon.utils.SwapManager.SURROUND, multitask.get(), place);
+        boolean packet = placementMode.get().packet;
+        if (hand == InteractionHand.OFF_HAND) return PlacementUtils.sendPlacement(pos, hit, hand, packet);
+        boolean[] sent = {false};
+        InventoryManager.withItem(this, slot, packet, xyz.thm.addon.utils.SwapManager.SURROUND, multitask.get(),
+            () -> sent[0] = PlacementUtils.sendPlacement(pos, hit, hand, packet));
+        return sent[0];
     }
 
     /** Called on the client thread before vanilla applies an authoritative block update. */
@@ -703,9 +702,9 @@ public class Surround extends Module {
             reserved++;
             return true;
         }
-        boolean dispatch(int limit, int delay) {
+        boolean dispatch(int limit, int delay, BooleanSupplier send) {
             reserved--;
-            if (!ready(limit, delay)) return false;
+            if (!ready(limit, delay) || !send.getAsBoolean()) return false;
             sent++;
             lastSend = tick;
             return true;

@@ -228,6 +228,21 @@ class HighwayBuilderTHMTest {
     }
 
     @Test
+    void automaticKitbotUpdatesRequireOutboundTravelOnTheMainRoad() {
+        for (var direction : HorizontalDirection.values()) {
+            double x = 0.5 + direction.offsetX * 20_000;
+            double z = 0.5 + direction.offsetZ * 20_000;
+            assertTrue(HighwayBuilderTHM.isOutboundMainHighway(x, z, true, direction));
+            assertFalse(HighwayBuilderTHM.isOutboundMainHighway(x, z, true, direction.opposite()));
+            assertFalse(HighwayBuilderTHM.isOutboundMainHighway(x, z, false, direction));
+        }
+        assertFalse(HighwayBuilderTHM.isOutboundMainHighway(0.5, 62500.5, true, HorizontalDirection.East));
+        assertFalse(HighwayBuilderTHM.isOutboundMainHighway(12500.5, 12500.5, true, HorizontalDirection.SouthWest));
+        assertFalse(HighwayBuilderTHM.isOutboundMainHighway(5000.5, 7500.5, true, HorizontalDirection.South));
+        assertFalse(HighwayBuilderTHM.isOutboundMainHighway(0.5, 0.5, true, HorizontalDirection.North));
+    }
+
+    @Test
     void declaredRoadTypeAppliesToUnmappedAndOverlappingGridSegments() {
         assertEquals("unlisted-ring", HighwayBuilderTHM.UnmappedRoad.Ring.reportRoute("other"));
         assertEquals("unlisted-ring", HighwayBuilderTHM.UnmappedRoad.Ring.reportRoute("grid"));

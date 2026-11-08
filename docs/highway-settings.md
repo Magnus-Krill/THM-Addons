@@ -224,11 +224,12 @@ migrate in module configs, Highway Profiles and custom presets.
 
 | Setting | Default / Options | What to change it for |
 | --- | --- | --- |
-| `kitbot-update-on-finish` | `true` | Sends `$update` to KitBot1 with the current direction when the module finishes, then disconnects. |
-| `kitbot-periodic-update` | `true` | Sends periodic `$update` requests while building, deferred during restock. |
+| `kitbot-update-on-finish` | `true` | Updates the outbound main highway on finish before disconnecting. |
+| `kitbot-periodic-update` | `true` | Sends periodic `$update` requests while building away from spawn on a main highway. |
 | `kitbot-update-interval-minutes` | `30`, range `30-60` | Minutes between automatic updates (minimum 30 so KitBot1 is not flooded). Changing it restarts the countdown unless an update is pending. The countdown uses real time and survives relogs; it only starts fresh after the builder was inactive for more than 10 minutes. |
 
 Periodic and finish `$update` requests share KitBot Frontend's request window with kit orders.
+Both require a main axis or main diagonal in the 6b6t Nether and a build direction away from spawn.
 Updates wait during queued or active restocks and collection. A restock order waits for an
 outstanding update's request window to close. Periodic update failures report a warning and leave
 the restock order alone. Stopping during restock skips the finish update.
@@ -367,8 +368,8 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 
 | Setting | Default / Range / Options | Visible when | Behavior |
 | --- | --- | --- | --- |
-| `kitbot-update-on-finish` | `true` | Always | Sends `$update` to KitBot1 with the current highway direction when the module finishes, waits for KitBot to teleport, then disconnects. |
-| `kitbot-periodic-update` | `true` | Always | Sends periodic `$update` requests to KitBot1 while building; delayed until restock completes. |
+| `kitbot-update-on-finish` | `true` | Always | Updates the outbound main highway on finish before disconnecting. |
+| `kitbot-periodic-update` | `true` | Always | Updates the outbound main highway while building and defers during restock. |
 | `kitbot-update-interval-minutes` | `30`, range `30-60` | `kitbot-periodic-update` is on | Minutes between automatic updates; real-time countdown that survives relogs. |
 
 ### THM-HighwayBuilder: Experimental

@@ -6,7 +6,15 @@
 
 package xyz.thm.addon.utils;
 
+import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.network.Connection;
+import net.minecraft.network.protocol.PacketFlow;
+import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -14,6 +22,24 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PacketPlaceTrackerTest {
+    @Test
+    void placementCountsOnlyTheMatchingSentEvent() {
+        var tracker = new PacketPlaceTracker();
+        var connection = new Connection(PacketFlow.CLIENTBOUND);
+        var otherConnection = new Connection(PacketFlow.CLIENTBOUND);
+        var hand = InteractionHand.MAIN_HAND;
+        var hit = new BlockHitResult(Vec3.ZERO, Direction.UP, BlockPos.ZERO, false);
+        var otherHit = new BlockHitResult(Vec3.ZERO, Direction.UP, BlockPos.ZERO, false);
+        var use = new ServerboundUseItemOnPacket(hand, hit, 1);
+
+        assertFalse(tracker.trackUseOn(connection, hand, hit, () -> {
+            tracker.onSent(new PacketEvent.Sent(use, otherConnection));
+            tracker.onSent(new PacketEvent.Sent(new ServerboundUseItemOnPacket(hand, otherHit, 2), connection));
+            tracker.onSent(new PacketEvent.Sent(new ServerboundUseItemOnPacket(InteractionHand.OFF_HAND, hit, 3), connection));
+        }));
+        assertTrue(tracker.trackUseOn(connection, hand, hit, () -> tracker.onSent(new PacketEvent.Sent(use, connection))));
+        assertFalse(tracker.trackUseOn(connection, hand, hit, () -> {}));
+    }
     @Test
     void unansweredLoadedPlacementsStayBlockedAndProbeInsteadOfResending() {
         var tracker = new PacketPlaceTracker();

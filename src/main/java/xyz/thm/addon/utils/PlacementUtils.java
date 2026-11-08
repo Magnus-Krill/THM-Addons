@@ -16,6 +16,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.network.protocol.game.ServerboundSwingPacket;
 import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Block;
@@ -25,6 +26,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import xyz.thm.addon.mixin.accessor.ClientPlayerInteractionManagerTHMAccessor;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.BooleanSupplier;
@@ -47,6 +49,43 @@ public class PlacementUtils {
             if (result.found()) return result;
         }
         return InvUtils.findInHotbar(itemStack -> false);
+    }
+
+    public static boolean sendPlacement(BlockPos target, BlockHitResult hit, InteractionHand hand, boolean packet) {
+        var player = mc.player;
+        var level = mc.level;
+        var gameMode = mc.gameMode;
+        var connection = mc.getConnection();
+        if (player == null || level == null || gameMode == null || connection == null) return false;
+        if (packet) {
+            if (!PacketPlaceTracker.trackUseOnSend(connection.getConnection(), hand, hit, () ->
+                ((ClientPlayerInteractionManagerTHMAccessor) gameMode).thm$sendSequencedPacket(level,
+                    sequence -> new ServerboundUseItemOnPacket(hand, hit, sequence)))) return false;
+            player.swing(hand);
+            return true;
+        }
+
+        BlockState before = level.getBlockState(target);
+        ItemStack stack = player.getItemInHand(hand);
+        int count = stack.getCount();
+        boolean sneaking = player.isShiftKeyDown();
+        InteractionResult[] result = {InteractionResult.PASS};
+        boolean sent;
+        player.setShiftKeyDown(false);
+        try {
+            sent = PacketPlaceTracker.trackUseOnSend(connection.getConnection(), hand, hit,
+                () -> result[0] = gameMode.useItemOn(player, hand, hit));
+        } finally {
+            player.setShiftKeyDown(sneaking);
+        }
+        if (sent) {
+            if (result[0].consumesAction()) player.swing(hand);
+        } else if (mc.level == level && mc.player == player && level.getBlockState(target) != before) {
+            // Vanilla predicts before the packet limiter sees the use-on packet.
+            level.setBlock(target, before, 19);
+            if (player.getItemInHand(hand) == stack && stack.getCount() == count - 1) stack.setCount(count);
+        }
+        return sent;
     }
     public static boolean placeBlock(BlockPos pos, boolean rotate, boolean swing, boolean strictDirection) {
         FindItemResult block = findResistantBlock();

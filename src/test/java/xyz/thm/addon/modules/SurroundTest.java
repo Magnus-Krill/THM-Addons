@@ -37,23 +37,23 @@ class SurroundTest {
     @Test void packetAndTickPlacementsShareTheSameBudget() {
         var budget = new Surround.PlacementBudget();
         assertTrue(budget.reserve(2, 0));
-        assertTrue(budget.dispatch(2, 0));
+        assertTrue(budget.dispatch(2, 0, () -> true));
         assertTrue(budget.reserve(2, 0));
         assertFalse(budget.reserve(2, 0));
-        assertTrue(budget.dispatch(2, 0));
+        assertTrue(budget.dispatch(2, 0, () -> true));
         assertFalse(budget.reserve(2, 0));
         budget.advanceTick();
         assertTrue(budget.reserve(2, 0));
-        assertTrue(budget.dispatch(2, 0));
+        assertTrue(budget.dispatch(2, 0, () -> true));
     }
 
     @Test void delayedRotationCannotBypassThePlaceDelay() {
         var budget = new Surround.PlacementBudget();
         assertTrue(budget.reserve(3, 2));
         assertTrue(budget.reserve(3, 2));
-        assertTrue(budget.dispatch(3, 2));
+        assertTrue(budget.dispatch(3, 2, () -> true));
         budget.advanceTick();
-        assertFalse(budget.dispatch(3, 2));
+        assertFalse(budget.dispatch(3, 2, () -> fail("Delayed placement must not send")));
         assertFalse(budget.reserve(3, 2));
         budget.advanceTick();
         assertFalse(budget.reserve(3, 2));
@@ -61,21 +61,31 @@ class SurroundTest {
         assertTrue(budget.reserve(3, 2));
         budget.cancel();
         assertTrue(budget.reserve(1, 2));
-        assertTrue(budget.dispatch(1, 2));
+        assertTrue(budget.dispatch(1, 2, () -> true));
         assertFalse(budget.reserve(1, 2));
     }
 
     @Test void packetPreplaceSkipsBatchDelayButStillRespectsTheTickLimit() {
         var budget = new Surround.PlacementBudget();
         assertTrue(budget.reserve(2, 5));
-        assertTrue(budget.dispatch(2, 5));
+        assertTrue(budget.dispatch(2, 5, () -> true));
         budget.advanceTick();
         assertFalse(budget.reserve(2, 5));
         assertTrue(budget.reserve(2, 0));
-        assertTrue(budget.dispatch(2, 0));
+        assertTrue(budget.dispatch(2, 0, () -> true));
         assertTrue(budget.reserve(2, 0));
-        assertTrue(budget.dispatch(2, 0));
+        assertTrue(budget.dispatch(2, 0, () -> true));
         assertFalse(budget.reserve(2, 0));
+    }
+
+    @Test void unsentPlacementFreesItsReservationAndDoesNotStartBatchDelay() {
+        var budget = new Surround.PlacementBudget();
+        assertTrue(budget.reserve(1, 5));
+        assertFalse(budget.dispatch(1, 5, () -> false));
+        budget.advanceTick();
+        assertTrue(budget.reserve(1, 5));
+        assertTrue(budget.dispatch(1, 5, () -> true));
+        assertFalse(budget.reserve(1, 5));
     }
 
     @ParameterizedTest

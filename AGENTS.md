@@ -164,7 +164,7 @@ do not treat the stock veto itself as a fatal error.
 
 **Highway KitBot updates:** Send periodic and finish updates through `KitbotFrontend.sendUpdate`
 to share the request window with restock orders. Defer during queued/active restock and collection;
-update outcomes must not finish or fail a kit order. Skip finish updates when stopping in restock.
+update outcomes must not finish or fail a kit order. Automatic updates require outbound building on a main axis or diagonal.
 
 **Highway autosetup:** HighwayBuilder configures and enables Speed Mine, Reach, Velocity, and KillAura on startup and resume. It also enables Criticals with its existing settings. KillAura setup leaves addon settings such as Smart Timing alone.
 
@@ -273,6 +273,8 @@ and showing as Surround. Both triggers repair client-world air; `onPacket` also 
 and server updates, skipping batch delay and queued rotation while keeping the tick limit. Predictions expire;
 inventory swaps restore items and client/server slots. Compact dropdowns migrate previous toggle values.
 Only Advanced starts collapsed; later layout changes remain saved.
+
+**PvP placement tracking:** Crystal Aura and Surround advance placement state only after `PacketEvent.Sent` matches the current use-on-block action. Roll back normal client prediction when sending fails.
 
 **Dropdown tooltips:** Enum choices implement `settings/DescribedOption` for per-option descriptions.
 Keep descriptions to one short sentence. Use `DropdownDescriptions.configure` for string menus.

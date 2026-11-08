@@ -219,7 +219,7 @@ public class AxisViewer extends Module {
     }
 
     // Build direction disambiguates roads where their mapped lines intersect.
-    static String highwayRouteAt(double x, double z, boolean nether, HorizontalDirection direction) {
+    public static String highwayRouteAt(double x, double z, boolean nether, HorizontalDirection direction) {
         if (!Double.isFinite(x) || !Double.isFinite(z) || direction == null) return "other";
         x -= 0.5;
         z -= 0.5;

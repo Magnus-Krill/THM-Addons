@@ -15,6 +15,7 @@ import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket;
 import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
@@ -50,11 +51,50 @@ public final class PacketPlaceTracker {
     // Filled from the netty thread, drained on tick.
     private final ConcurrentLinkedQueue<Long> answered = new ConcurrentLinkedQueue<>();
     private volatile boolean listening;
+    private final ThreadLocal<UseOnSend> useOnSend = new ThreadLocal<>();
 
     PacketPlaceTracker() {}
 
     public static void init() {
         MeteorClient.EVENT_BUS.subscribe(INSTANCE);
+    }
+
+    static boolean trackUseOnSend(Connection connection, InteractionHand hand, BlockHitResult hit, Runnable action) {
+        return INSTANCE.trackUseOn(connection, hand, hit, action);
+    }
+
+    boolean trackUseOn(Connection connection, InteractionHand hand, BlockHitResult hit, Runnable action) {
+        UseOnSend previous = useOnSend.get();
+        UseOnSend attempt = new UseOnSend(connection, hand, hit);
+        useOnSend.set(attempt);
+        try {
+            action.run();
+            return attempt.sent;
+        } finally {
+            if (previous == null) useOnSend.remove();
+            else useOnSend.set(previous);
+        }
+    }
+
+    @EventHandler
+    void onSent(PacketEvent.Sent event) {
+        if (!(event.packet instanceof ServerboundUseItemOnPacket use)) return;
+        UseOnSend attempt = useOnSend.get();
+        if (attempt != null && attempt.connection == event.connection && attempt.hand == use.getHand()
+            && attempt.hit == use.getHitResult()) attempt.sent = true;
+    }
+
+    private static final class UseOnSend {
+        final Connection connection;
+        final InteractionHand hand;
+        final BlockHitResult hit;
+        boolean sent;
+
+        UseOnSend(Connection connection, InteractionHand hand, BlockHitResult hit) {
+            this.connection = connection;
+            this.hand = hand;
+            this.hit = hit;
+        }
     }
 
     /** False while a packet for this block is still waiting for the server's answer. */

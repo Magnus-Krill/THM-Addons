@@ -867,14 +867,14 @@ public class HighwayBuilderTHM extends Module {
 
     private final Setting<Boolean> kitbotUpdateOnFinish = sgKitBotIntegration.add(new BoolSetting.Builder()
         .name("kitbot-update-on-finish")
-        .description("Sends $update to KitBot1 when finished, waits for the teleport, then disconnects.")
+        .description("Updates the outbound main highway on finish before disconnecting.")
         .defaultValue(true)
         .build()
     );
 
     private final Setting<Boolean> kitbotPeriodicUpdate = sgKitBotIntegration.add(new BoolSetting.Builder()
         .name("kitbot-periodic-update")
-        .description("Periodically sends $update to KitBot1 while building.")
+        .description("Periodically updates the main highway while building away from spawn.")
         .defaultValue(true)
         .build()
     );
@@ -3349,8 +3349,8 @@ public class HighwayBuilderTHM extends Module {
         if (kitbotUpdateOnFinish.get() && !isReconnectFailureDeactivate && !isAutoLogTerminalDeactivate) {
             if (restockingAtStop || KitbotFrontend.hasActiveWindow()) {
                 info("Skipping finish $update while restock or another KitBot request is active.");
-            } else if (!isOnOfficialHighway()) {
-                info("Not on an official highway - skipping KitBot $update.");
+            } else if (!isOnKitbotUpdateHighway()) {
+                info("Skipping finish $update outside an outbound main highway.");
             } else if (isAtHighwayEnd()) {
                 String kitbotDir = directionToKitbotCommand(dir);
                 if (kitbotDir != null && mc.player != null && mc.level != null) {
@@ -3548,7 +3548,7 @@ public class HighwayBuilderTHM extends Module {
             && (isPavedSegment(floorBehind, railingsBehind, 0) || isPavedSegment(floorAhead, railingsAhead, 0));
         boolean digging = inferDugModeForUpdate(hasDugContext, hasPavedContext);
 
-        boolean officialHighway = isOnOfficialHighway();
+        boolean officialHighway = isOnKitbotUpdateHighway();
         String axis = directionToKitbotCommand(dir);
         if (debugLog.get()) {
             info(
@@ -3872,16 +3872,7 @@ public class HighwayBuilderTHM extends Module {
 
         boolean digging = inferDugModeForUpdate(false, false);
 
-        String base = switch (dir) {
-            case North -> "N";
-            case South -> "S";
-            case East -> "E";
-            case West -> "W";
-            case NorthEast -> "NE";
-            case NorthWest -> "NW";
-            case SouthEast -> "SE";
-            case SouthWest -> "SW";
-        };
+        String base = THMUtils.highwayCode(dir);
 
         return digging ? "dug" + base : base;
     }
@@ -3932,13 +3923,24 @@ public class HighwayBuilderTHM extends Module {
             || restockTask.hasPendingRestockTasks() || kitbotOrderInFlight || kitbotOrderFrontendSucceeded;
     }
 
+    private boolean isOnKitbotUpdateHighway() {
+        return mc.player != null && mc.level != null && !isNot6B6T()
+            && isOutboundMainHighway(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER, dir);
+    }
+
+    static boolean isOutboundMainHighway(double x, double z, boolean nether, HorizontalDirection direction) {
+        if (!nether) return false;
+        String highway = THMUtils.getCurrentHighway(x, z, true, direction);
+        return highway != null && highway.equals(THMUtils.highwayCode(direction));
+    }
+
     private void sendKitbotPeriodicUpdate() {
         if (kitbotRestockBusy() || KitbotFrontend.hasActiveWindow()) {
             kitbotPeriodicUpdatePending = true;
             kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + Math.max(1_000L, KitbotFrontend.getRemainingWindowMs());
             return;
         }
-        if (!isOnOfficialHighway() || dir == null || mc.level == null) {
+        if (!isOnKitbotUpdateHighway()) {
             kitbotPeriodicUpdatePending = false;
             kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
             return;

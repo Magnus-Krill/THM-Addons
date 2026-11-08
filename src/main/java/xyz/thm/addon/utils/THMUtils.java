@@ -12,6 +12,7 @@ import com.google.gson.JsonObject;
 import meteordevelopment.meteorclient.mixininterface.IServerboundMovePlayerPacket;
 import meteordevelopment.meteorclient.pathing.BaritoneUtils;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.utils.misc.HorizontalDirection;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -30,6 +31,8 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.modules.AxisViewer;
+import xyz.thm.addon.modules.HighwayBuilderTHM;
 import xyz.thm.addon.modules.TunnelMinerModule;
 import xyz.thm.addon.system.THMSystem;
 
@@ -540,6 +543,57 @@ public class THMUtils {
         boolean onDiagonal = Math.abs(Math.abs(playerX) - Math.abs(playerZ)) < 5;
 
         return onXAxis || onZAxis || onDiagonal;
+    }
+
+    /** Returns the outbound compass code of the current main highway, or null. */
+    public static @Nullable String getCurrentHighway() {
+        if (mc.player == null || mc.level == null) return null;
+        return getCurrentHighway(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER, currentRoadDirection());
+    }
+
+    public static @Nullable String getCurrentHighway(double x, double z, boolean nether, HorizontalDirection direction) {
+        if (!AxisViewer.highwayRouteAt(x, z, nether, direction).equals("main")) return null;
+        double along = (x - 0.5) * direction.offsetX + (z - 0.5) * direction.offsetZ;
+        if (along == 0) return null;
+        return highwayCode(along > 0 ? direction : direction.opposite());
+    }
+
+    /** Returns main, ring, diamond, grid, or other. */
+    public static String getCurrentHighwayType() {
+        if (mc.player == null || mc.level == null) return "other";
+        return getCurrentHighwayType(mc.player.getX(), mc.player.getZ(), mc.level.dimension() == Level.NETHER, currentRoadDirection());
+    }
+
+    public static String getCurrentHighwayType(double x, double z, boolean nether, HorizontalDirection direction) {
+        String route = AxisViewer.highwayRouteAt(x, z, nether, direction);
+        int separator = route.indexOf('-');
+        return separator < 0 ? route : route.substring(0, separator);
+    }
+
+    private static HorizontalDirection currentRoadDirection() {
+        HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
+        if (builder != null && builder.isActive() && builder.getWorkingDirection() != null) return builder.getWorkingDirection();
+        HorizontalDirection facing = HorizontalDirection.get(mc.player.getYRot());
+        double x = mc.player.getX(), z = mc.player.getZ();
+        boolean nether = mc.level.dimension() == Level.NETHER;
+        if (!AxisViewer.highwayRouteAt(x, z, nether, facing).equals("other")) return facing;
+        for (HorizontalDirection direction : HorizontalDirection.values()) {
+            if (!AxisViewer.highwayRouteAt(x, z, nether, direction).equals("other")) return direction;
+        }
+        return facing;
+    }
+
+    public static String highwayCode(HorizontalDirection direction) {
+        return switch (direction) {
+            case North -> "N";
+            case South -> "S";
+            case East -> "E";
+            case West -> "W";
+            case NorthEast -> "NE";
+            case NorthWest -> "NW";
+            case SouthEast -> "SE";
+            case SouthWest -> "SW";
+        };
     }
 
     public static boolean isOnOfficialHighway() {
