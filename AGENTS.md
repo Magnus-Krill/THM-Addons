@@ -36,7 +36,7 @@ The wrapper uses Gradle 9.8.2 with Loom 1.19.3. Dependency versions live in `gra
 - `tools/scripts/test-async.sh` — background build and JUnit tests; prints the log and exit-code paths.
   `MinecraftStartupTest` runs concurrently with the Java tests, opens an isolated OpenGL client,
   waits one second at the main menu and closes it. Missing startup, crashes and a three-minute timeout fail.
-  JUnit runs up to four test classes concurrently; methods within each class stay sequential.
+  JUnit targets 16 concurrent test classes. Methods within each class stay sequential.
 - `./gradlew checkBuildRules` — standalone block-state checks for Baritone build rules; initializes vanilla registries without starting a client.
 - `./gradlew checkShaders` — OpenGL/Vulkan compiler and linker tests for backgrounds, blur, and
   trip shaders. Requires `glslangValidator` on PATH (`glslang` on Arch, `glslang-tools` on Ubuntu).

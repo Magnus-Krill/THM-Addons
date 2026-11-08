@@ -246,7 +246,7 @@ tasks.test {
     systemProperty("junit.jupiter.execution.parallel.enabled", "true")
     systemProperty("junit.jupiter.execution.parallel.mode.classes.default", "concurrent")
     systemProperty("junit.jupiter.execution.parallel.config.strategy", "fixed")
-    systemProperty("junit.jupiter.execution.parallel.config.fixed.parallelism", "4")
+    systemProperty("junit.jupiter.execution.parallel.config.fixed.parallelism", "16")
     outputs.upToDateWhen { false }
     systemProperty("thm.requireShaderCompiler", providers.environmentVariable("CI").orElse("false").get().equals("true", ignoreCase = true))
 }
