@@ -152,6 +152,7 @@ import java.util.regex.Pattern;
 
 import static xyz.thm.addon.utils.APIUtils.*;
 import static xyz.thm.addon.utils.THMUtils.*;
+import static xyz.thm.addon.utils.ThmMembers.isNovice;
 
 @SuppressWarnings("ConstantConditions")
 public class HighwayBuilderTHM extends Module {
@@ -765,7 +766,7 @@ public class HighwayBuilderTHM extends Module {
         .name("kitbot-restock")
         .description("Allows restock tasks to order kits from KitBot1.")
         .defaultValue(false)
-        .visible(() -> mc.player != null && !ThmMembers.isNovice(mc.player.getName().getString()))
+        .visible(() -> mc.player != null && !isNovice(mc.player.getName().getString()))
         .build()
     );
 
@@ -861,7 +862,7 @@ public class HighwayBuilderTHM extends Module {
         .name("restock-secondary-source-order")
         .description("Which external restock source to try first.")
         .defaultValue(RestockSecondarySourceOrder.EnderChestThenKitBot)
-        .visible(() -> mc.player != null && !ThmMembers.isNovice(mc.player.getName().getString()))
+        .visible(() -> mc.player != null && !isNovice(mc.player.getName().getString()))
         .build()
     );
 
@@ -2958,8 +2959,6 @@ public class HighwayBuilderTHM extends Module {
                 echestBreakMode.set(EChestBreakMode.OnPlace);
                 predictiveEChestReplace.set(true);
                 if (THMUtils.isBaritoneInstalled()) manageThmHwyMonitor.set(true);
-                kitbotEChestRestockKit.set(KitbotEChestRestockKit.Echest);
-                kitbotPickaxeRestockKit.set(KitbotPickaxeRestockKit.Pickaxe);
 
                 // Proven paving setup.
                 useThmSpeed.set(true);
@@ -2976,10 +2975,6 @@ public class HighwayBuilderTHM extends Module {
                 saveEchests.set(11);
                 sendStatisticsWebhhok.set(true);
                 sendStatisticsapi.set(true);
-                kitbotRestock.set(true);
-                kitbotEChestRestockAmount.set(6);
-                kitbotPickaxeRestock.set(false);
-                kitbotPickaxeRestockAmount.set(1);
                 restockSecondarySourceOrder.set(RestockSecondarySourceOrder.KitBotThenEnderChest);
                 kitbotUpdateOnFinish.set(true);
                 kitbotPeriodicUpdate.set(true);
@@ -2987,6 +2982,15 @@ public class HighwayBuilderTHM extends Module {
                 packetBudget.set(true);
                 useBreakSpeedMultiplier.set(false);
                 breakSpeedMultiplier.set(1.465);
+                if (isNovice(mc.player.getName().toString())) {
+                    kitbotRestock.set(true);
+                    kitbotEChestRestockAmount.set(6);
+                    kitbotPickaxeRestock.set(false);
+                    kitbotPickaxeRestockAmount.set(1);
+                    kitbotEChestRestockKit.set(KitbotEChestRestockKit.Echest);
+                    kitbotPickaxeRestockKit.set(KitbotPickaxeRestockKit.Pickaxe);
+
+                }
             }
             case HighwayDigging -> {
                 width.set(5);

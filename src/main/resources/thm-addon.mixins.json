@@ -1,6 +1,7 @@
 {
   "required": true,
   "package": "xyz.thm.addon.mixin",
+  "plugin": "xyz.thm.addon.ThmMixinConfigPlugin",
   "compatibilityLevel": "JAVA_25",
   "injectors": {
     "defaultRequire": 1

@@ -34,8 +34,9 @@ The wrapper uses Gradle 9.8.2 with Loom 1.19.3. Dependency versions live in `gra
 - `./gradlew build` — full build with parallel JUnit tests and the Minecraft startup test on every run;
   failures fail the build. The jar lands in `build/libs`.
 - `tools/scripts/test-async.sh` — background build and JUnit tests; prints the log and exit-code paths.
-  `MinecraftStartupTest` runs concurrently with the Java tests, opens an isolated OpenGL client,
-  waits one second at the main menu and closes it. Missing startup, crashes and a three-minute timeout fail.
+  `MinecraftStartupTest` runs concurrently with the Java tests. It opens an isolated OpenGL client
+  with and without Patchy, waits one second at the main menu and closes it each time.
+  Missing startup, crashes and a three-minute timeout fail.
   JUnit targets 16 concurrent test classes. Methods within each class stay sequential.
 - `./gradlew checkBuildRules` — standalone block-state checks for Baritone build rules; initializes vanilla registries without starting a client.
 - `./gradlew checkShaders` — OpenGL/Vulkan compiler and linker tests for backgrounds, blur, and
@@ -232,7 +233,8 @@ when an absent player cannot be checked against fresh completion.
 
 **Anarchy join:** `AnarchyJoinMixin` sends an empty `anarchymod:join` packet directly after
 `ClientPacketListener.handleLogin` on recognized anarchy hosts, unless AnarchyMod is installed.
-No Fabric payload registration is needed. `BlockedServersMixin` bypasses Mojang's blocklist.
+No Fabric payload registration is needed. `BlockedServersMixin` bypasses Mojang's blocklist when
+`ThmMixinConfigPlugin` finds its Patchy target at runtime.
 
 **Server diagnostics:** `.serverinfo` passively samples keepalives and world-time packets.
 `utils/server/ServerTelemetry` keeps bounded clock/TPS samples. Uptime is a host-clock estimate,

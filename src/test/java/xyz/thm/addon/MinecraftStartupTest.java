@@ -6,22 +6,37 @@
 
 package xyz.thm.addon;
 
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class MinecraftStartupTest {
-    @Test
-    void reachesTheMainMenuAndClosesAfterOneSecond() throws Exception {
+    @ParameterizedTest(name = "Patchy present: {0}")
+    @ValueSource(booleans = {true, false})
+    void reachesTheMainMenuAndClosesAfterOneSecond(boolean withPatchy) throws Exception {
         Path launch = Path.of(System.getProperty("thm.startup.command"));
         Path run = Files.createTempDirectory(launch.getParent(), "run-");
         Path log = run.resolve("console.log");
         Files.writeString(run.resolve("options.txt"), "onboardAccessibility:false\npauseOnLostFocus:false\npreferredGraphicsBackend:\"opengl\"\n");
-        Process client = new ProcessBuilder(Files.readAllLines(launch))
+        var command = new ArrayList<>(Files.readAllLines(launch));
+        if (!withPatchy) {
+            int classpathIndex = command.indexOf("-cp") + 1;
+            String classpath = Arrays.stream(command.get(classpathIndex).split(Pattern.quote(File.pathSeparator)))
+                .filter(entry -> !Path.of(entry).getFileName().toString().startsWith("patchy-"))
+                .collect(Collectors.joining(File.pathSeparator));
+            command.set(classpathIndex, classpath);
+        }
+        Process client = new ProcessBuilder(command)
             .directory(run.toFile()).redirectErrorStream(true).redirectOutput(log.toFile()).start();
         try {
             assertTrue(client.waitFor(180, TimeUnit.SECONDS), "Minecraft startup timed out. Log: " + log);
@@ -30,6 +45,9 @@ class MinecraftStartupTest {
             assertTrue(Files.isRegularFile(success), "Minecraft exited before startup completed. Log: " + log);
             assertTrue(Long.parseLong(Files.readString(success)) >= 1_000_000_000L,
                 "Minecraft must remain at the main menu for at least one second.");
+            String decision = withPatchy ? "Enabled BlockedServersMixin"
+                : "Skipped BlockedServersMixin because com.mojang.patchy.BlockedServers is missing";
+            assertTrue(Files.readString(log).contains(decision), "Missing mixin decision: " + decision + ". Log: " + log);
         } finally {
             if (client.isAlive()) {
                 client.destroy();
