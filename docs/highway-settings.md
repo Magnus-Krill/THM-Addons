@@ -148,6 +148,7 @@ migrate in module configs, Highway Profiles and custom presets.
 | `fall-save-air-place` | `false`; shown when `manage-thm-highway-monitor` is on | Places safety blocks while descending at least 0.25 below the managed paving or digging level with support missing. |
 | `fall-save-distance` | `3`, range `3-5`; shown when fall-save is on | How far below the hitbox fall-save can place. |
 | `autosetup-modules` | `true` | Configures and enables Meteor Speed Mine, Reach, Velocity, and KillAura, enables Criticals, and sets HighwayBuilder place range. |
+| `autosetup-killaura-weapons` | Diamond Sword, Axe, Pickaxe, Trident | Which of those four KillAura uses; applied to KillAura as soon as you change it. |
 | `toggle-perspective` | `true` | Switches to third person while active, then restores the old camera. |
 | `toggle-hud` | `true` | Toggles the highway HUD integration. |
 
@@ -279,6 +280,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `fall-save-air-place` | `false` | `manage-thm-highway-monitor` is on | Places one safety block per tick while the player remains below the managed operating level, is still descending by position and velocity, and has no direct support. Turning monitor management off also turns fall-save off. |
 | `fall-save-distance` | `3`, range `3-5` | Monitor management and `fall-save-air-place` are on | Vertical distance below the hitbox used by fall-save placement. |
 | `autosetup-modules` | `true` | Always | Configures and enables Meteor Speed Mine, Reach, Velocity, and KillAura, enables Criticals, and sets HighwayBuilder place range. |
+| `autosetup-killaura-weapons` | Diamond Sword, Axe, Pickaxe, Trident | `autosetup-modules` on | Which of those four KillAura uses; applied to KillAura as soon as you change it. |
 | `packet-mode` | `false` | Always | Enables Packet Build and Packet Borer, leaving already-enabled pieces alone. |
 | `packet-budget` | `true` | Always | Caps mining and placing independently of Experimental. Disabling it removes this internal cap. Fast Packet Build uses the capacity left after mining in the same tick, including double mining. Active Paket Limiter Always Block rules exclude canceled packet types. |
 | `packets-per-tick` | `23`, range `4-200` | `packet-budget` is on | The tick's packet allowance, including movement and optional silent swaps. |

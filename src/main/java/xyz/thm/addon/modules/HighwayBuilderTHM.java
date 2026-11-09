@@ -965,6 +965,20 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
+    private final Setting<List<Item>> autosetupKillAuraWeapons = sgGeneral.add(new ItemListSetting.Builder()
+        .name("autosetup-killaura-weapons")
+        .description("Weapons Kill Aura may use after autosetup.")
+        .defaultValue(Items.DIAMOND_SWORD, Items.DIAMOND_AXE, Items.TRIDENT, Items.DIAMOND_PICKAXE)
+        .filter(HighwayBuilderTHM::isKillAuraWeapon)
+        .visible(autosetupModules::get)
+        .onChanged(value -> {
+            if (!autosetupModules.get()) return;
+            KillAura killAura = Modules.get().get(KillAura.class);
+            if (killAura != null) applyAutosetupKillAuraWeapons(killAura.settings);
+        })
+        .build()
+    );
+
     // Digging
 
     private final Setting<Boolean> instamineBypass = sgDigging.add(new BoolSetting.Builder()
@@ -6329,7 +6343,19 @@ public class HighwayBuilderTHM extends Module {
         info("Timer with tps sync got activated. This may cause slower building on low tps.");
     }
 
-    private static void configureAutosetupKillAura(Settings settings) {
+    // Only these work with KillAura here; other tiers are not offered.
+    private static boolean isKillAuraWeapon(Item item) {
+        return item == Items.DIAMOND_SWORD || item == Items.DIAMOND_AXE
+            || item == Items.DIAMOND_PICKAXE || item == Items.TRIDENT;
+    }
+
+    private void applyAutosetupKillAuraWeapons(Settings settings) {
+        if (settings.get("selected-weapon-types") instanceof ItemListSetting weapons) {
+            weapons.set(new ArrayList<>(autosetupKillAuraWeapons.get()));
+        }
+    }
+
+    private void configureAutosetupKillAura(Settings settings) {
         // The export omits defaults, so reset only stock settings and keep addon options.
         for (String name : List.of(
             "attack-when-holding", "rotate", "auto-switch", "swap-back", "shield-mode",
@@ -6340,9 +6366,7 @@ public class HighwayBuilderTHM extends Module {
             Setting<?> setting = settings.get(name);
             if (setting != null) setting.reset();
         }
-        if (settings.get("selected-weapon-types") instanceof ItemListSetting weapons) {
-            weapons.set(new ArrayList<>(List.of(Items.DIAMOND_SWORD, Items.DIAMOND_AXE, Items.TRIDENT, Items.DIAMOND_PICKAXE)));
-        }
+        applyAutosetupKillAuraWeapons(settings);
         if (settings.get("entities") instanceof EntityTypeListSetting entities) {
             entities.set(new HashSet<>(Set.of(
                 EntityTypes.BLAZE, EntityTypes.BOGGED, EntityTypes.BREEZE, EntityTypes.CAMEL_HUSK,
