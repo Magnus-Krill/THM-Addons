@@ -6348,18 +6348,22 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private static void configureAutosetupKillAura(Settings settings) {
-        // The export omits defaults, so reset only stock settings and keep addon options.
+        // Paver's KillAura export; it omits defaults, so reset the other stock settings and keep addon options.
         for (String name : List.of(
-            "attack-when-holding", "rotate", "auto-switch", "swap-back", "shield-mode",
+            "attack-when-holding", "selected-weapon-types", "shield-mode",
             "only-on-click", "only-on-look", "pause-baritone", "priority",
-            "passive-mob-age-filter", "hostile-mob-age-filter", "ignore-passive", "ignore-tamed",
+            "hostile-mob-age-filter", "ignore-named", "ignore-tamed",
             "pause-on-lag", "pause-on-use", "pause-on-CA", "TPS-sync", "custom-delay", "hit-delay", "switch-delay"
         )) {
             Setting<?> setting = settings.get(name);
             if (setting != null) setting.reset();
         }
-        if (settings.get("selected-weapon-types") instanceof ItemListSetting weapons) {
-            weapons.set(new ArrayList<>(List.of(Items.DIAMOND_SWORD, Items.DIAMOND_AXE, Items.TRIDENT, Items.DIAMOND_PICKAXE)));
+        for (String[] value : new String[][] {
+            {"rotate", "OnHit"}, {"auto-switch", "true"}, {"swap-back", "true"},
+            {"passive-mob-age-filter", "Both"}, {"ignore-passive", "false"}
+        }) {
+            Setting<?> setting = settings.get(value[0]);
+            if (setting != null) setting.parse(value[1]);
         }
         if (settings.get("entities") instanceof EntityTypeListSetting entities) {
             entities.set(new HashSet<>(Set.of(
@@ -6378,8 +6382,7 @@ public class HighwayBuilderTHM extends Module {
         }
         if (settings.get("max-targets") instanceof IntSetting targets) targets.set(5);
         if (settings.get("range") instanceof DoubleSetting range) range.set(5.2);
-        if (settings.get("walls-range") instanceof DoubleSetting wallsRange) wallsRange.set(5.2);
-        if (settings.get("ignore-named") instanceof BoolSetting ignoreNamed) ignoreNamed.set(true);
+        if (settings.get("walls-range") instanceof DoubleSetting wallsRange) wallsRange.set(0.0);
     }
 
     private void applyAutosetupVelocity() {
@@ -15498,6 +15501,9 @@ public class HighwayBuilderTHM extends Module {
             // A cursor stack with nowhere to go kept this state looking up for good; the watchdog does not always cover it.
             private static final int MAX_STALL_TICKS = 200;
             private int stallTicks;
+            // Retry waits count toward the stall limit; the first delay and waits after a drop do not.
+            private boolean retryDelay;
+            private boolean droppedInBatch;
             private final Set<Integer> keepSlots = new HashSet<>();
             private final Map<Integer, ItemStack> skippedDropSlots = new HashMap<>();
             private boolean firstTick;
@@ -15517,6 +15523,7 @@ public class HighwayBuilderTHM extends Module {
                 firstTick = true;
                 completionDelayStarted = false;
                 stallTicks = 0;
+                retryDelay = false;
                 timer = Math.max(1, b.inventoryDelay.get());
                 clearFailedDropState();
                 failedRotationRetries = 0;
@@ -15528,17 +15535,19 @@ public class HighwayBuilderTHM extends Module {
             protected void tick(HighwayBuilderTHM b) {
                 b.input.stop();
 
-                if (timer > 0) {
-                    timer--;
-                    return;
-                }
-
-                // Counted after the inventory delay, so a long delay can't end the routine before its first drop.
-                if (++stallTicks > MAX_STALL_TICKS) {
+                boolean waiting = timer > 0;
+                if (waiting) timer--;
+                if ((!waiting || retryDelay) && ++stallTicks > MAX_STALL_TICKS) {
+                    ItemStack carried = b.mc.player.containerMenu.getCarried();
+                    if (!carried.isEmpty()) {
+                        b.error("Trash routine is stuck holding %s; free an inventory slot.", carried.getHoverName().getString());
+                        return;
+                    }
                     b.warning("Trash routine made no progress; continuing restock.");
                     b.setState(b.lastState);
                     return;
                 }
+                if (waiting) return;
 
                 if (!alignForTrashRoutine(b)) return;
 
@@ -15549,18 +15558,24 @@ public class HighwayBuilderTHM extends Module {
 
                 if (!b.mc.player.containerMenu.getCarried().isEmpty()) {
                     completionDelayStarted = false;
-                    if (handleCursorStack(b)) timer = b.inventoryDelay.get();
+                    if (handleCursorStack(b)) {
+                        timer = b.inventoryDelay.get();
+                        retryDelay = true;
+                    }
                     return;
                 }
 
-                if (dropDirectTrashBatch(b)) {
+                boolean pending = dropDirectTrashBatch(b);
+                if (droppedInBatch) stallTicks = 0;
+                retryDelay = !droppedInBatch;
+                if (pending) {
                     completionDelayStarted = false;
-                    stallTicks = 0;
                     return;
                 }
 
                 if (!completionDelayStarted) {
                     completionDelayStarted = true;
+                    retryDelay = false;
                     timer = POST_PURGE_DELAY_TICKS;
                     return;
                 }
@@ -15712,6 +15727,7 @@ public class HighwayBuilderTHM extends Module {
             private boolean dropDirectTrashBatch(HighwayBuilderTHM b) {
                 int maxActions = Math.min(MAX_DIRECT_TRASH_DROPS_PER_PASS, b.mc.player.getInventory().getNonEquipmentItems().size());
                 boolean onlySkippedTrashRemains = false;
+                droppedInBatch = false;
 
                 for (int actions = 0; actions < maxActions; ) {
                     refreshProtectedTrashSlots(b);
@@ -15761,6 +15777,7 @@ public class HighwayBuilderTHM extends Module {
                         skippedDropSlots.remove(i);
                         clearFailedDropState();
                         completionDelayStarted = false;
+                        droppedInBatch = true;
                         actions++;
                         droppedThisPass = true;
                         if (actions >= maxActions) {
@@ -16304,6 +16321,7 @@ public class HighwayBuilderTHM extends Module {
                     }
                 }
                 else {
+                    foreignBlockPos = null;
                     // Place ender chest. With offhand-build they sit in the offhand, which the inventory
                     // search never looks at: without this the phase sees none and ends without placing.
                     boolean fromOffhand = b.offhandHoldsEnderChest();

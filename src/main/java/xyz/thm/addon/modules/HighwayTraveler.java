@@ -974,9 +974,13 @@ public class HighwayTraveler extends Module {
         int sideX = -fwdZ, sideZ = fwdX;
         for (int step = 1; step <= max; step++) {
             int x = origin.getX() + fwdX * step, z = origin.getZ() + fwdZ * step;
-            for (int lane = -LOADED_CHECK_HALF_WIDTH; lane <= LOADED_CHECK_HALF_WIDTH; lane += LOADED_CHECK_HALF_WIDTH) {
-                int lx = x + sideX * lane, lz = z + sideZ * lane;
-                if (!mc.level.hasChunk(lx >> 4, lz >> 4)) return step - 1;
+            // Every chunk the row's bounding box touches: diagonal rows can cut a chunk corner between lane samples.
+            int ax = x - sideX * LOADED_CHECK_HALF_WIDTH, az = z - sideZ * LOADED_CHECK_HALF_WIDTH;
+            int bx = x + sideX * LOADED_CHECK_HALF_WIDTH, bz = z + sideZ * LOADED_CHECK_HALF_WIDTH;
+            for (int cx = Math.min(ax, bx) >> 4; cx <= Math.max(ax, bx) >> 4; cx++) {
+                for (int cz = Math.min(az, bz) >> 4; cz <= Math.max(az, bz) >> 4; cz++) {
+                    if (!mc.level.hasChunk(cx, cz)) return step - 1;
+                }
             }
         }
         return max;
