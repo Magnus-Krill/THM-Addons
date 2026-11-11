@@ -414,8 +414,6 @@ public class HighwayTraveler extends Module {
     private static final int END_CONFIRM_TICKS = 40;
     private int endConfirmTicks = -1;
     private BlockPos suspectedEnd;
-    // Lateral reach of the chunk check; covers the widest highway profile.
-    private static final int LOADED_CHECK_HALF_WIDTH = 4;
     private final ElytraNavigator.Config navConfig = new ElytraNavigator.Config();
     private final FlyTerrain flyTerrain = new FlyTerrain();
     private final ElytraNavigator navigator = new ElytraNavigator(flyTerrain, navConfig);
@@ -961,27 +959,18 @@ public class HighwayTraveler extends Module {
         // Paving only repairs the floor; blocks on the highway or at its ceiling are left to obstacle avoidance.
         boolean floorOnly = THMSystem.get().mode.get() == THMSystem.Mode.HighwayBuilding;
         // Unloaded rows read as air, so the scan stops where the loaded world does.
-        int scan = loadedStepsAhead(origin, repairScanBlocks.get());
+        int scan = loadedStepsAhead(builder, travelDir, origin, repairScanBlocks.get());
         int broken = builder.firstBrokenStepAhead(travelDir, origin, scan, tolerance, floorOnly);
         if (broken == -1) return false;
         if (stopAtEnd.get() == StopAtEnd.OFF) return true;
-        int last = loadedStepsAhead(origin, broken + REPAIR_GAP_SCAN);
+        int last = loadedStepsAhead(builder, travelDir, origin, broken + REPAIR_GAP_SCAN);
         return builder.highwayContinuesAhead(travelDir, origin, broken + 1, last, tolerance, floorOnly);
     }
 
-    /** Steps ahead of {@code origin}, up to {@code max}, before the first one with an unloaded chunk across the lane. */
-    private int loadedStepsAhead(BlockPos origin, int max) {
-        int sideX = -fwdZ, sideZ = fwdX;
+    /** Steps ahead of {@code origin}, up to {@code max}, before the first whose builder cross-section reads an unloaded chunk. */
+    private int loadedStepsAhead(HighwayBuilderTHM builder, HorizontalDirection travelDir, BlockPos origin, int max) {
         for (int step = 1; step <= max; step++) {
-            int x = origin.getX() + fwdX * step, z = origin.getZ() + fwdZ * step;
-            // Every chunk the row's bounding box touches: diagonal rows can cut a chunk corner between lane samples.
-            int ax = x - sideX * LOADED_CHECK_HALF_WIDTH, az = z - sideZ * LOADED_CHECK_HALF_WIDTH;
-            int bx = x + sideX * LOADED_CHECK_HALF_WIDTH, bz = z + sideZ * LOADED_CHECK_HALF_WIDTH;
-            for (int cx = Math.min(ax, bx) >> 4; cx <= Math.max(ax, bx) >> 4; cx++) {
-                for (int cz = Math.min(az, bz) >> 4; cz <= Math.max(az, bz) >> 4; cz++) {
-                    if (!mc.level.hasChunk(cx, cz)) return step - 1;
-                }
-            }
+            if (!builder.isCrossSectionLoaded(origin, travelDir, step)) return step - 1;
         }
         return max;
     }

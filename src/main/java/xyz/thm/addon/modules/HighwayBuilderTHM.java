@@ -3783,6 +3783,21 @@ public class HighwayBuilderTHM extends Module {
         return true;
     }
 
+    /** True when every chunk that {@link #isCrossSectionHealthy} reads for this step is loaded. */
+    public boolean isCrossSectionLoaded(BlockPos origin, HorizontalDirection travelDir, int step) {
+        if (mc.level == null) return false;
+
+        int cx = origin.getX() + travelDir.offsetX * step;
+        int cz = origin.getZ() + travelDir.offsetZ * step;
+        HorizontalDirection lateral = travelDir.rotateLeftSkipOne();
+        int half = width.get() / 2;
+
+        for (int w = -half; w < width.get() - half; w++) {
+            if (!mc.level.hasChunk((cx + lateral.offsetX * w) >> 4, (cz + lateral.offsetZ * w) >> 4)) return false;
+        }
+        return true;
+    }
+
     /** True if every cross-section from 1 up to {@code maxSteps} ahead of the player is healthy. */
     public boolean isHighwayAheadClean(HorizontalDirection travelDir, int maxSteps) {
         return isHighwayAheadClean(travelDir, maxSteps, 0);
@@ -15560,7 +15575,10 @@ public class HighwayBuilderTHM extends Module {
                     completionDelayStarted = false;
                     if (handleCursorStack(b)) {
                         timer = b.inventoryDelay.get();
-                        retryDelay = true;
+                        // True also covers a preserved stack, so only an emptied cursor is progress.
+                        boolean cleared = b.mc.player.containerMenu.getCarried().isEmpty();
+                        if (cleared) stallTicks = 0;
+                        retryDelay = !cleared;
                     }
                     return;
                 }
