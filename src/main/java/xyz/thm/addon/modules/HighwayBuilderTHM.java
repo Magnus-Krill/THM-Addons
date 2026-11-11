@@ -3751,6 +3751,11 @@ public class HighwayBuilderTHM extends Module {
      * i.e. relative to wherever the player currently is, not a fixed absolute Y.
      */
     public boolean isCrossSectionHealthy(BlockPos origin, HorizontalDirection travelDir, int step, boolean pavedProfile) {
+        return isCrossSectionHealthy(origin, travelDir, step, pavedProfile, false);
+    }
+
+    /** With {@code floorOnly}, blocks inside the cleared space don't make the section broken. */
+    public boolean isCrossSectionHealthy(BlockPos origin, HorizontalDirection travelDir, int step, boolean pavedProfile, boolean floorOnly) {
         if (mc.level == null) return false;
 
         int cx = origin.getX() + travelDir.offsetX * step;
@@ -3768,6 +3773,7 @@ public class HighwayBuilderTHM extends Module {
                 ? isObsidian(floorState)
                 : (isNetherrack(floorState) || blocksToPlace.get().contains(floorState.getBlock()));
             if (!floorOk) return false;
+            if (floorOnly) continue;
 
             for (int h = 0; h < height.get(); h++) {
                 BlockState interior = mc.level.getBlockState(new BlockPos(x, origin.getY() + h, z));
@@ -3800,13 +3806,17 @@ public class HighwayBuilderTHM extends Module {
      * is broken, or -1 if all are healthy. Each step also accepts a healthy section within {@code verticalTolerance}.
      */
     public int firstBrokenStepAhead(HorizontalDirection travelDir, BlockPos origin, int maxSteps, int verticalTolerance) {
+        return firstBrokenStepAhead(travelDir, origin, maxSteps, verticalTolerance, false);
+    }
+
+    public int firstBrokenStepAhead(HorizontalDirection travelDir, BlockPos origin, int maxSteps, int verticalTolerance, boolean floorOnly) {
         if (mc.level == null || travelDir == null || origin == null) return 1;
         boolean pavedProfile = THMSystem.get().mode.get() == THMSystem.Mode.HighwayBuilding;
 
         for (int step = 1; step <= maxSteps; step++) {
             boolean stepHealthy = false;
             for (int dy = -verticalTolerance; dy <= verticalTolerance; dy++) {
-                if (isCrossSectionHealthy(origin.offset(0, dy, 0), travelDir, step, pavedProfile)) {
+                if (isCrossSectionHealthy(origin.offset(0, dy, 0), travelDir, step, pavedProfile, floorOnly)) {
                     stepHealthy = true;
                     break;
                 }
@@ -3831,11 +3841,15 @@ public class HighwayBuilderTHM extends Module {
      * {@code verticalTolerance} as {@link #firstBrokenStepAhead}: the highway goes on past a gap.
      */
     public boolean highwayContinuesAhead(HorizontalDirection travelDir, BlockPos origin, int fromStep, int toStep, int verticalTolerance) {
+        return highwayContinuesAhead(travelDir, origin, fromStep, toStep, verticalTolerance, false);
+    }
+
+    public boolean highwayContinuesAhead(HorizontalDirection travelDir, BlockPos origin, int fromStep, int toStep, int verticalTolerance, boolean floorOnly) {
         if (mc.level == null || travelDir == null || origin == null) return false;
         boolean pavedProfile = THMSystem.get().mode.get() == THMSystem.Mode.HighwayBuilding;
         for (int step = fromStep; step <= toStep; step++) {
             for (int dy = -verticalTolerance; dy <= verticalTolerance; dy++) {
-                if (isCrossSectionHealthy(origin.offset(0, dy, 0), travelDir, step, pavedProfile)) return true;
+                if (isCrossSectionHealthy(origin.offset(0, dy, 0), travelDir, step, pavedProfile, floorOnly)) return true;
             }
         }
         return false;
@@ -15481,6 +15495,9 @@ public class HighwayBuilderTHM extends Module {
             private static final int MAX_DIRECT_TRASH_DROPS_PER_PASS = 2;
             private static final float TARGET_PITCH = -25.0f;
             private static final float ROTATION_TOLERANCE = 0.5f;
+            // A cursor stack with nowhere to go kept this state looking up for good; the watchdog does not always cover it.
+            private static final int MAX_STALL_TICKS = 200;
+            private int stallTicks;
             private final Set<Integer> keepSlots = new HashSet<>();
             private final Map<Integer, ItemStack> skippedDropSlots = new HashMap<>();
             private boolean firstTick;
@@ -15499,6 +15516,7 @@ public class HighwayBuilderTHM extends Module {
                 skippedDropSlots.clear();
                 firstTick = true;
                 completionDelayStarted = false;
+                stallTicks = 0;
                 timer = Math.max(1, b.inventoryDelay.get());
                 clearFailedDropState();
                 failedRotationRetries = 0;
@@ -15512,6 +15530,13 @@ public class HighwayBuilderTHM extends Module {
 
                 if (timer > 0) {
                     timer--;
+                    return;
+                }
+
+                // Counted after the inventory delay, so a long delay can't end the routine before its first drop.
+                if (++stallTicks > MAX_STALL_TICKS) {
+                    b.warning("Trash routine made no progress; continuing restock.");
+                    b.setState(b.lastState);
                     return;
                 }
 
@@ -15530,6 +15555,7 @@ public class HighwayBuilderTHM extends Module {
 
                 if (dropDirectTrashBatch(b)) {
                     completionDelayStarted = false;
+                    stallTicks = 0;
                     return;
                 }
 
@@ -15859,6 +15885,7 @@ public class HighwayBuilderTHM extends Module {
             private static final MBlockPos pos = new MBlockPos();
             private static final int SPEEDMINE_RETRY_TICKS = 10;
             private int targetEchestsToBreak;
+            private BlockPos foreignBlockPos;
             private int targetObsidianCount;
             private int lastObservedObsidianCount;
             private boolean first, primed, speedmineRebreakMode;
@@ -15937,6 +15964,7 @@ public class HighwayBuilderTHM extends Module {
                 returnY = b.mc.player.getY();
                 returnZ = b.mc.player.getZ();
                 returnAnchorSaved = true;
+                foreignBlockPos = null;
 
                 stopReason = null;
                 ignoreGroundObsidian = false;
@@ -16252,6 +16280,27 @@ public class HighwayBuilderTHM extends Module {
                             } else if (b.rotation.get().mine) Rotations.rotate(Rotations.getYaw(bp), Rotations.getPitch(bp), () -> BlockUtils.breakBlock(bp, true));
                             else BlockUtils.breakBlock(bp, true);
                         }
+                    }
+                }
+                else if (!blockState.canBeReplaced()) {
+                    // Another block took the chest's spot (seen: obsidian); clear it now instead of waiting for the watchdog.
+                    boolean keepSign = b.shouldSkipSignBreak(bp, blockState);
+                    if (!bp.equals(foreignBlockPos)) {
+                        foreignBlockPos = bp.immutable();
+                        if (keepSign) b.warning("A sign blocks the ender chest spot at %d %d %d; clear it manually.", bp.getX(), bp.getY(), bp.getZ());
+                        else b.info("Clearing %s from the ender chest spot.", blockState.getBlock().getName().getString());
+                        b.restockDebug("MineEnderChests: foreign block %s at %s mainHand=%s offHand=%s.", blockState.getBlock(), bp,
+                            b.mc.player.getMainHandItem().getItem(), b.mc.player.getOffhandItem().getItem());
+                    }
+                    if (keepSign) return;
+                    int toolSlot = findAndMoveBestToolToHotbar(b, blockState, false, false);
+                    if (toolSlot == -1) return;
+                    if (speedmineRebreakMode && Speedmine.INSTANCE != null) {
+                        if (!Speedmine.INSTANCE.isMining(bp)) Speedmine.INSTANCE.requestFreshBreak(bp);
+                    } else {
+                        if (b.mc.player.getInventory().getSelectedSlot() != toolSlot) InvUtils.swap(toolSlot, false);
+                        if (b.rotation.get().mine) Rotations.rotate(Rotations.getYaw(bp), Rotations.getPitch(bp), () -> BlockUtils.breakBlock(bp, true));
+                        else BlockUtils.breakBlock(bp, true);
                     }
                 }
                 else {

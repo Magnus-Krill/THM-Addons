@@ -37,6 +37,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.settings.DescribedOption;
+import xyz.thm.addon.system.THMSystem;
 import xyz.thm.addon.utils.ElytraNavigator;
 import xyz.thm.addon.utils.ElytraPathPlanner;
 import xyz.thm.addon.utils.THMUtils;
@@ -407,12 +408,18 @@ public class HighwayTraveler extends Module {
     // Climbs a little past the level so slow sinking doesn't drop it straight back below.
     private static final double HOLD_Y_OVERSHOOT = 0.25;
     private static final int FLY_FLOOR_SEARCH = 8;
-    private static final int FLY_MAX_DESCEND_TICKS = 200;
+    private static final int HANDOFF_MAX_AIR_TICKS = 200;
+    private int handoffAirTicks;
+    // Fast flight outruns chunk loading, so a suspected end is held still and re-checked before it counts.
+    private static final int END_CONFIRM_TICKS = 40;
+    private int endConfirmTicks = -1;
+    private BlockPos suspectedEnd;
+    // Lateral reach of the chunk check; covers the widest highway profile.
+    private static final int LOADED_CHECK_HALF_WIDTH = 4;
     private final ElytraNavigator.Config navConfig = new ElytraNavigator.Config();
     private final FlyTerrain flyTerrain = new FlyTerrain();
     private final ElytraNavigator navigator = new ElytraNavigator(flyTerrain, navConfig);
     private double laneX0, laneZ0;
-    private int flyDescendTicks;
     // Hold-Y hysteresis: climb from one block below the level back up to it, sink from one block above.
     private boolean flyClimbing, flySinking;
     // Cleared whenever another method is selected, so switching to Fly later sets up floor and lane first.
@@ -451,6 +458,8 @@ public class HighwayTraveler extends Module {
         obstacleWaitTicks  = 0;
         repairCheckTicks   = 0;
         handoffTicks       = -1;
+        endConfirmTicks    = -1;
+        suspectedEnd       = null;
         bounceRubberbanded = false;
         bounceRestartTicks = bounceRestartDelay.get();
         stashedElytraSlot  = -1;
@@ -486,7 +495,6 @@ public class HighwayTraveler extends Module {
         laneCenterWaitTicks = 0;
         laneWalkTicks = 0;
         flyJumped = false;
-        flyDescendTicks = 0;
         flyClimbing = false;
         flySinking = false;
         navigator.reset();
@@ -573,6 +581,7 @@ public class HighwayTraveler extends Module {
         mc.options.keyShift.setDown(false);
         bounceRubberbanded = false;
         handoffTicks = -1;
+        endConfirmTicks = -1;
         // If the module gets toggled off mid unequip-recast, don't leave the elytra sitting
         // unworn in the player's inventory - put it straight back on.
         if (stashedElytraSlot != -1) reequipElytra();
@@ -602,12 +611,17 @@ public class HighwayTraveler extends Module {
         // Before the end scan, so the repair check can tell a gap from the end right after switching to Fly.
         if (methodSetting.get() == TravelMethod.FLY && !flyInitialized && !initFly()) return;
 
+        if (endConfirmTicks >= 0) {
+            tickEndConfirm(p);
+            return;
+        }
+
         if (stopAtEnd.get() != StopAtEnd.OFF && travelState != TravelState.BACKUP) {
             BlockPos end = findHighwayEnd(p);
             if (end != null) {
-                // A hole with highway behind it is damage for the builder, not the end.
-                if (autoRepairSwap.get() && highwayAheadBroken()) beginHandoffWait(p);
-                else reachEnd(p, end);
+                suspectedEnd = end;
+                endConfirmTicks = 0;
+                tickEndConfirm(p);
                 return;
             }
         }
@@ -661,7 +675,7 @@ public class HighwayTraveler extends Module {
      */
     @EventHandler
     private void onBouncePostTick(TickEvent.Post event) {
-        if (!bounceEnabled() || mc.player == null || handoffTicks >= 0) return;
+        if (!bounceEnabled() || mc.player == null || holding()) return;
         LocalPlayer p = mc.player;
 
         if (mc.options.keyJump.isDown() && !p.isFallFlying() && !bounceManualTakeoff.get()) {
@@ -695,13 +709,13 @@ public class HighwayTraveler extends Module {
 
     @EventHandler
     private void onBouncePreTick(TickEvent.Pre event) {
-        if (!bounceEnabled() || mc.player == null || handoffTicks >= 0) return;
+        if (!bounceEnabled() || mc.player == null || holding()) return;
         if (bounceConditionsMet(mc.player) && sprintSetting.get()) mc.player.setSprinting(true);
     }
 
     @EventHandler
     private void onBouncePacketReceive(PacketEvent.Receive event) {
-        if (!bounceEnabled() || mc.player == null || handoffTicks >= 0) return;
+        if (!bounceEnabled() || mc.player == null || holding()) return;
         if (event.packet instanceof ClientboundPlayerPositionPacket) {
             bounceRubberbanded = true;
             mc.player.stopFallFlying();
@@ -715,7 +729,7 @@ public class HighwayTraveler extends Module {
 
     @EventHandler
     private void onBouncePacketSend(PacketEvent.Send event) {
-        if (!bounceEnabled() || mc.player == null || handoffTicks >= 0 || sprintSetting.get()) return;
+        if (!bounceEnabled() || mc.player == null || holding() || sprintSetting.get()) return;
         if (event.packet instanceof ServerboundPlayerCommandPacket cmd && cmd.getAction() == ServerboundPlayerCommandPacket.Action.START_FALL_FLYING) {
             mc.player.setSprinting(true);
         }
@@ -729,7 +743,7 @@ public class HighwayTraveler extends Module {
     @EventHandler
     private void onPlayerMove(PlayerMoveEvent event) {
         if (mc.player == null || methodSetting.get() != TravelMethod.WASP || !mc.player.isFallFlying()) return;
-        if (travelState == TravelState.STOPPED || travelState == TravelState.BACKUP || handoffTicks >= 0) return;
+        if (travelState == TravelState.STOPPED || travelState == TravelState.BACKUP || holding()) return;
 
         float yaw = travelState == TravelState.PATH_FOLLOW ? mc.player.getYRot() : hwYaw;
 
@@ -944,10 +958,61 @@ public class HighwayTraveler extends Module {
             tolerance = repairToleratesBounce.get() ? BOUNCE_Y_TOLERANCE : 0;
         }
 
-        int broken = builder.firstBrokenStepAhead(travelDir, origin, repairScanBlocks.get(), tolerance);
+        // Paving only repairs the floor; blocks on the highway or at its ceiling are left to obstacle avoidance.
+        boolean floorOnly = THMSystem.get().mode.get() == THMSystem.Mode.HighwayBuilding;
+        // Unloaded rows read as air, so the scan stops where the loaded world does.
+        int scan = loadedStepsAhead(origin, repairScanBlocks.get());
+        int broken = builder.firstBrokenStepAhead(travelDir, origin, scan, tolerance, floorOnly);
         if (broken == -1) return false;
         if (stopAtEnd.get() == StopAtEnd.OFF) return true;
-        return builder.highwayContinuesAhead(travelDir, origin, broken + 1, broken + REPAIR_GAP_SCAN, tolerance);
+        int last = loadedStepsAhead(origin, broken + REPAIR_GAP_SCAN);
+        return builder.highwayContinuesAhead(travelDir, origin, broken + 1, last, tolerance, floorOnly);
+    }
+
+    /** Steps ahead of {@code origin}, up to {@code max}, before the first one with an unloaded chunk across the lane. */
+    private int loadedStepsAhead(BlockPos origin, int max) {
+        int sideX = -fwdZ, sideZ = fwdX;
+        for (int step = 1; step <= max; step++) {
+            int x = origin.getX() + fwdX * step, z = origin.getZ() + fwdZ * step;
+            for (int lane = -LOADED_CHECK_HALF_WIDTH; lane <= LOADED_CHECK_HALF_WIDTH; lane += LOADED_CHECK_HALF_WIDTH) {
+                int lx = x + sideX * lane, lz = z + sideZ * lane;
+                if (!mc.level.hasChunk(lx >> 4, lz >> 4)) return step - 1;
+            }
+        }
+        return max;
+    }
+
+    private boolean holding() {
+        return handoffTicks >= 0 || endConfirmTicks >= 0;
+    }
+
+    /** Holds still until a suspected end has stayed for {@link #END_CONFIRM_TICKS}; resumes as soon as it is gone. */
+    private void tickEndConfirm(LocalPlayer p) {
+        // The bounce handlers that would re-equip it are paused during the check.
+        if (stashedElytraSlot != -1) reequipElytra();
+        releaseAll();
+        mc.options.keyJump.setDown(false);
+        mc.options.keyShift.setDown(false);
+        p.setSprinting(false);
+
+        if (!endStillThere()) {
+            endConfirmTicks = -1;
+            info("The highway goes on; it had not loaded yet.");
+            return;
+        }
+        if (++endConfirmTicks < END_CONFIRM_TICKS) return;
+        endConfirmTicks = -1;
+
+        // A hole with highway behind it is damage for the builder, not the end.
+        if (autoRepairSwap.get() && highwayAheadBroken()) beginHandoffWait(p);
+        else reachEnd(p, suspectedEnd);
+    }
+
+    private boolean endStillThere() {
+        if (suspectedEnd == null) return false;
+        int x = suspectedEnd.getX(), z = suspectedEnd.getZ();
+        if (!mc.level.hasChunk(x >> 4, z >> 4)) return false;
+        return stopAtEnd.get() == StopAtEnd.PAVE ? paveEndsAt(x, z) : isDugWall(x, z);
     }
 
     /**
@@ -965,6 +1030,7 @@ public class HighwayTraveler extends Module {
         // back on right away so the player isn't stuck bare-chested falling with no glide control.
         if (stashedElytraSlot != -1) reequipElytra();
         handoffTicks = (int) Math.round(handoffLandingDelay.get() * 20);
+        handoffAirTicks = 0;
     }
 
     private void tickAwaitingHandoff(LocalPlayer p) {
@@ -972,12 +1038,19 @@ public class HighwayTraveler extends Module {
         mc.options.keyJump.setDown(false);
         p.setSprinting(false);
 
-        // ElytraFly hovers in place once forward is released, so sneak down until landed.
-        if (methodSetting.get() == TravelMethod.FLY && p.isFallFlying() && flyDescendTicks++ < FLY_MAX_DESCEND_TICKS) {
-            mc.options.keyShift.setDown(true);
+        // The delay only counts on the ground; ElytraFly hovers once forward is released, so sneak down.
+        boolean airborne = p.isFallFlying() || !p.onGround();
+        if (airborne && handoffAirTicks++ < HANDOFF_MAX_AIR_TICKS) {
+            mc.options.keyShift.setDown(methodSetting.get() == TravelMethod.FLY && p.isFallFlying());
             return;
         }
         mc.options.keyShift.setDown(false);
+
+        if (airborne && handoffToBuilder) {
+            warning("Could not land on the highway; not starting the repair.");
+            handoffToBuilder = false;
+            handoffTicks = 0;
+        }
 
         if (--handoffTicks > 0) return;
         handoffTicks = -1;
