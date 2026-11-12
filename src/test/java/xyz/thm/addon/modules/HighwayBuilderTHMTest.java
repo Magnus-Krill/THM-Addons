@@ -16,6 +16,7 @@ import net.minecraft.network.protocol.game.GamePacketTypes;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.Test;
+import xyz.thm.addon.modules.HighwayBuilderTHM.State;
 import xyz.thm.addon.system.THMSystem;
 
 import java.util.*;
@@ -494,5 +495,75 @@ class HighwayBuilderTHMTest {
         }
         assertFalse(targets.contains(anchor));
         assertFalse(targets.contains(anchor.below()));
+    }
+
+    @Test
+    void blockadeSetupRunsCenterThenTrashThenTheBlockade() {
+        for (var blockade : List.of(State.PlaceShulkerBlockade, State.PlaceEChestBlockade)) {
+            assertEquals(State.Center, HighwayBuilderTHM.nextBlockadeSetupState(State.Forward, blockade));
+            assertEquals(State.ThrowOutTrash, HighwayBuilderTHM.nextBlockadeSetupState(State.Center, blockade));
+            assertEquals(blockade, HighwayBuilderTHM.nextBlockadeSetupState(State.ThrowOutTrash, blockade));
+            assertNull(HighwayBuilderTHM.nextBlockadeSetupState(blockade, blockade));
+        }
+    }
+
+    @Test
+    void blockadeSetupFinishesWithinThreeStepsFromAnyPreviousState() {
+        var blockade = State.PlaceShulkerBlockade;
+        for (var previous : State.values()) {
+            // Each setup state hands back to its owner, which then sees that state as previous.
+            var current = previous;
+            int steps = 0;
+            for (var next = HighwayBuilderTHM.nextBlockadeSetupState(current, blockade); next != null;
+                 next = HighwayBuilderTHM.nextBlockadeSetupState(current, blockade)) {
+                current = next;
+                assertTrue(++steps <= 3, "setup did not finish after " + previous);
+            }
+        }
+    }
+
+    @Test
+    void restockRecoveryNeverMakesCenterOrTrashTheOwnerOfCenter() {
+        var states = new ArrayList<State>(List.of(State.values()));
+        states.add(null);
+        for (var current : State.values()) {
+            for (var last : states) {
+                for (boolean tasksInactive : new boolean[] {true, false}) {
+                    var owner = HighwayBuilderTHM.restockRecoveryOwner(current, last, tasksInactive);
+                    assertNotNull(owner, current + " after " + last);
+                    assertNotEquals(State.Center, owner, current + " after " + last);
+                    assertNotEquals(State.ThrowOutTrash, owner, current + " after " + last);
+                }
+            }
+        }
+    }
+
+    @Test
+    void restockRecoveryResumesTheStateThatOwnedTheSetup() {
+        assertEquals(State.Restock, HighwayBuilderTHM.restockRecoveryOwner(State.Restock, State.Center, false));
+        assertEquals(State.MineEnderChests, HighwayBuilderTHM.restockRecoveryOwner(State.MineEnderChests, State.Restock, false));
+        assertEquals(State.MineEnderChests, HighwayBuilderTHM.restockRecoveryOwner(State.Center, State.MineEnderChests, false));
+        assertEquals(State.Restock, HighwayBuilderTHM.restockRecoveryOwner(State.ThrowOutTrash, State.Restock, false));
+        // Center <-> ThrowOutTrash bounce (a0cb2e6).
+        assertEquals(State.Restock, HighwayBuilderTHM.restockRecoveryOwner(State.Center, State.ThrowOutTrash, false));
+        assertEquals(State.Restock, HighwayBuilderTHM.restockRecoveryOwner(State.ThrowOutTrash, State.Center, true));
+    }
+
+    @Test
+    void blockadeRebuildReturnsToAStateThatContinuesTheSetup() {
+        for (var requester : State.values()) {
+            var owner = HighwayBuilderTHM.blockadeRebuildOwner(requester);
+            assertTrue(owner == State.Restock || owner == State.MineEnderChests, requester + " -> " + owner);
+        }
+        // Teardown rebuilding for a pending task used to own Center itself, tear down again and drop the task.
+        assertEquals(State.Restock, HighwayBuilderTHM.blockadeRebuildOwner(State.MineShulkerBlockade));
+    }
+
+    @Test
+    void restockRecoveryDuringTeardownKeepsAnActiveTask() {
+        for (var teardown : List.of(State.MineShulkerBlockade, State.MineEChestBlockade)) {
+            assertEquals(State.Restock, HighwayBuilderTHM.restockRecoveryOwner(State.Center, teardown, false));
+            assertEquals(teardown, HighwayBuilderTHM.restockRecoveryOwner(State.Center, teardown, true));
+        }
     }
 }

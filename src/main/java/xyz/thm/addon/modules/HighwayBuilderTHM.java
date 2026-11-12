@@ -6775,6 +6775,34 @@ public class HighwayBuilderTHM extends Module {
         state.start(this);
     }
 
+    /**
+     * Blockade setup runs Center, ThrowOutTrash, then {@code blockade}; Center and ThrowOutTrash return to their owner,
+     * so the owner reads its progress from the state it came back from. Null once {@code blockade} has finished.
+     */
+    static State nextBlockadeSetupState(State previous, State blockade) {
+        if (previous == blockade) return null;
+        if (previous == State.Center) return State.ThrowOutTrash;
+        if (previous == State.ThrowOutTrash) return blockade;
+        return State.Center;
+    }
+
+    /** Owner for Center when the blockade must be rebuilt; only Restock and MineEnderChests continue the setup. */
+    static State blockadeRebuildOwner(State requester) {
+        return requester == State.MineEnderChests ? requester : State.Restock;
+    }
+
+    /**
+     * State that recovery hands to Center as its owner. Never Center or ThrowOutTrash: both exit to their owner,
+     * so either one as owner would bounce between the two forever.
+     */
+    static State restockRecoveryOwner(State current, State lastState, boolean tasksInactive) {
+        if (current != State.Center && current != State.ThrowOutTrash) return current;
+        if (lastState == State.Center || lastState == State.ThrowOutTrash || lastState == null) return State.Restock;
+        // Teardown with an active task would finish the sequence without restocking.
+        boolean teardown = lastState == State.MineShulkerBlockade || lastState == State.MineEChestBlockade;
+        return teardown && !tasksInactive ? State.Restock : lastState;
+    }
+
     private void completeRestockTaskAndContinue() {
         if (restockDebugLog.get()) {
             restockDebug("completeRestockTaskAndContinue(active=%s, pending=%s, blockadeReady=%s, sequence=%s)",
@@ -9607,15 +9635,7 @@ public class HighwayBuilderTHM extends Module {
 
             if (b.mc.player.tickCount < recoveryReadyAge) return true;
 
-            State retryFrom = b.state;
-            // Center and ThrowOutTrash exit to lastState; restarting one of them from Center bounces between the two forever.
-            // Teardown with an active task would finish the sequence without restocking.
-            if (retryFrom == State.Center || retryFrom == State.ThrowOutTrash) {
-                State owner = b.lastState;
-                boolean teardown = owner == State.MineShulkerBlockade || owner == State.MineEChestBlockade;
-                retryFrom = owner == State.Center || owner == State.ThrowOutTrash || teardown && !b.restockTask.tasksInactive()
-                    ? State.Restock : owner;
-            }
+            State retryFrom = restockRecoveryOwner(b.state, b.lastState, b.restockTask.tasksInactive());
             recoveryPending = false;
             recoveryStartedAge = 0;
             recoveryReadyAge = 0;
@@ -14954,7 +14974,7 @@ public class HighwayBuilderTHM extends Module {
         }
     }
 
-    private enum State {
+    enum State {
         AutoAlign {
             private int ticks;
 
@@ -15950,31 +15970,11 @@ public class HighwayBuilderTHM extends Module {
             protected void start(HighwayBuilderTHM b) {
                 b.restockTask.refreshSessionProgress();
                 b.restockTask.notePhase(RestockTask.SourcePhase.MineEnderChests);
-                if (b.restockTask.isSequenceActive() && !b.restockTask.isBlockadeReady()) {
-                    if (b.lastState != Center && b.lastState != ThrowOutTrash && b.lastState != PlaceShulkerBlockade) {
-                        b.setState(Center);
-                        return;
-                    }
-                    else if (b.lastState == Center) {
-                        b.setState(ThrowOutTrash);
-                        return;
-                    }
-                    else if (b.lastState == ThrowOutTrash) {
-                        b.setState(PlaceShulkerBlockade);
-                        return;
-                    }
-                }
-                else if (!b.restockTask.isSequenceActive()) {
-                    if (b.lastState != Center && b.lastState != ThrowOutTrash && b.lastState != PlaceEChestBlockade) {
-                        b.setState(Center);
-                        return;
-                    }
-                    else if (b.lastState == Center) {
-                        b.setState(ThrowOutTrash);
-                        return;
-                    }
-                    else if (b.lastState == ThrowOutTrash) {
-                        b.setState(PlaceEChestBlockade);
+                boolean sequenceActive = b.restockTask.isSequenceActive();
+                if (!sequenceActive || !b.restockTask.isBlockadeReady()) {
+                    State setup = nextBlockadeSetupState(b.lastState, sequenceActive ? PlaceShulkerBlockade : PlaceEChestBlockade);
+                    if (setup != null) {
+                        b.setState(setup);
                         return;
                     }
                 }
@@ -17373,12 +17373,13 @@ public class HighwayBuilderTHM extends Module {
                 }
 
                 if (!b.restockTask.isBlockadeReady()) {
-                    if (b.lastState == Center) {
+                    State setup = nextBlockadeSetupState(b.lastState, PlaceShulkerBlockade);
+                    if (setup == ThrowOutTrash) {
                         b.restockDebug("Restock.start requesting ThrowOutTrash before blockade placement.");
                         b.setState(ThrowOutTrash);
                         return;
                     }
-                    else if (b.lastState == ThrowOutTrash) {
+                    else if (setup == PlaceShulkerBlockade) {
                         b.restockDebug("Restock.start requesting PlaceShulkerBlockade using effective type %s.", b.getEffectiveBlockadeType());
                         b.setState(PlaceShulkerBlockade);
                         return;
@@ -19116,7 +19117,7 @@ public class HighwayBuilderTHM extends Module {
                     b.setState(Restock, Restock);
                 } else {
                     b.restockDebug("MineShulkerBlockade advanced pending task after teardown touched or lost the blockade (blocks=%d); rebuilding from Center.", blockadeBlocks);
-                    b.setState(Center, this);
+                    b.setState(Center, blockadeRebuildOwner(this));
                 }
                 return true;
             }
