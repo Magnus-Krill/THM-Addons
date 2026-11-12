@@ -3751,6 +3751,11 @@ public class HighwayBuilderTHM extends Module {
      * i.e. relative to wherever the player currently is, not a fixed absolute Y.
      */
     public boolean isCrossSectionHealthy(BlockPos origin, HorizontalDirection travelDir, int step, boolean pavedProfile) {
+        return isCrossSectionHealthy(origin, travelDir, step, pavedProfile, false);
+    }
+
+    /** With {@code floorOnly}, blocks inside the cleared space don't make the section broken. */
+    public boolean isCrossSectionHealthy(BlockPos origin, HorizontalDirection travelDir, int step, boolean pavedProfile, boolean floorOnly) {
         if (mc.level == null) return false;
 
         int cx = origin.getX() + travelDir.offsetX * step;
@@ -3768,11 +3773,27 @@ public class HighwayBuilderTHM extends Module {
                 ? isObsidian(floorState)
                 : (isNetherrack(floorState) || blocksToPlace.get().contains(floorState.getBlock()));
             if (!floorOk) return false;
+            if (floorOnly) continue;
 
             for (int h = 0; h < height.get(); h++) {
                 BlockState interior = mc.level.getBlockState(new BlockPos(x, origin.getY() + h, z));
                 if (!isExcavatedSpace(interior)) return false;
             }
+        }
+        return true;
+    }
+
+    /** True when every chunk that {@link #isCrossSectionHealthy} reads for this step is loaded. */
+    public boolean isCrossSectionLoaded(BlockPos origin, HorizontalDirection travelDir, int step) {
+        if (mc.level == null) return false;
+
+        int cx = origin.getX() + travelDir.offsetX * step;
+        int cz = origin.getZ() + travelDir.offsetZ * step;
+        HorizontalDirection lateral = travelDir.rotateLeftSkipOne();
+        int half = width.get() / 2;
+
+        for (int w = -half; w < width.get() - half; w++) {
+            if (!mc.level.hasChunk((cx + lateral.offsetX * w) >> 4, (cz + lateral.offsetZ * w) >> 4)) return false;
         }
         return true;
     }
@@ -3800,13 +3821,17 @@ public class HighwayBuilderTHM extends Module {
      * is broken, or -1 if all are healthy. Each step also accepts a healthy section within {@code verticalTolerance}.
      */
     public int firstBrokenStepAhead(HorizontalDirection travelDir, BlockPos origin, int maxSteps, int verticalTolerance) {
+        return firstBrokenStepAhead(travelDir, origin, maxSteps, verticalTolerance, false);
+    }
+
+    public int firstBrokenStepAhead(HorizontalDirection travelDir, BlockPos origin, int maxSteps, int verticalTolerance, boolean floorOnly) {
         if (mc.level == null || travelDir == null || origin == null) return 1;
         boolean pavedProfile = THMSystem.get().mode.get() == THMSystem.Mode.HighwayBuilding;
 
         for (int step = 1; step <= maxSteps; step++) {
             boolean stepHealthy = false;
             for (int dy = -verticalTolerance; dy <= verticalTolerance; dy++) {
-                if (isCrossSectionHealthy(origin.offset(0, dy, 0), travelDir, step, pavedProfile)) {
+                if (isCrossSectionHealthy(origin.offset(0, dy, 0), travelDir, step, pavedProfile, floorOnly)) {
                     stepHealthy = true;
                     break;
                 }
@@ -3831,11 +3856,15 @@ public class HighwayBuilderTHM extends Module {
      * {@code verticalTolerance} as {@link #firstBrokenStepAhead}: the highway goes on past a gap.
      */
     public boolean highwayContinuesAhead(HorizontalDirection travelDir, BlockPos origin, int fromStep, int toStep, int verticalTolerance) {
+        return highwayContinuesAhead(travelDir, origin, fromStep, toStep, verticalTolerance, false);
+    }
+
+    public boolean highwayContinuesAhead(HorizontalDirection travelDir, BlockPos origin, int fromStep, int toStep, int verticalTolerance, boolean floorOnly) {
         if (mc.level == null || travelDir == null || origin == null) return false;
         boolean pavedProfile = THMSystem.get().mode.get() == THMSystem.Mode.HighwayBuilding;
         for (int step = fromStep; step <= toStep; step++) {
             for (int dy = -verticalTolerance; dy <= verticalTolerance; dy++) {
-                if (isCrossSectionHealthy(origin.offset(0, dy, 0), travelDir, step, pavedProfile)) return true;
+                if (isCrossSectionHealthy(origin.offset(0, dy, 0), travelDir, step, pavedProfile, floorOnly)) return true;
             }
         }
         return false;
@@ -5851,6 +5880,12 @@ public class HighwayBuilderTHM extends Module {
 
         KitbotFrontend.FailureReason reason = event.failureReason();
         String detail = event.detail();
+        if (reason == KitbotFrontend.FailureReason.Cooldown) {
+            // The bot never took the order, so waiting out the cooldown does not spend an attempt.
+            if (kitbotOrderAcceptedAttempts > 0) kitbotOrderAcceptedAttempts--;
+            scheduleKitbotRestockSubmitAfterWindow(event.remainingWindowMs(), "frontend cooldown");
+            return;
+        }
         if (isRetryableKitbotRestockFailure(reason) && kitbotOrderAcceptedAttempts < KITBOT_MAX_ACCEPTED_ATTEMPTS) {
             scheduleKitbotRestockSubmitAfterWindow(
                 event.remainingWindowMs(),
@@ -5876,7 +5911,7 @@ public class HighwayBuilderTHM extends Module {
     private boolean isRetryableKitbotRestockFailure(KitbotFrontend.FailureReason reason) {
         if (reason == null) return false;
         return switch (reason) {
-            case TimedOut, Disconnected, TransportFailure, GenericError, UnableToFulfill -> true;
+            case TimedOut, Disconnected, TransportFailure, GenericError, UnableToFulfill, Cooldown -> true;
             case InsufficientTokens, VoucherCredits, OutOfStock, InvalidKit, NotWhitelisted, MaxOrderViolation, PermissionDenied -> false;
         };
     }
@@ -5892,6 +5927,7 @@ public class HighwayBuilderTHM extends Module {
             case MaxOrderViolation -> "hit KitBot's max order limit";
             case PermissionDenied -> "no permission for this kit";
             case TimedOut -> "KitBot timed out";
+            case Cooldown -> "KitBot is on cooldown";
             case Disconnected -> "disconnected from KitBot";
             case TransportFailure -> "KitBot connection issue";
             case GenericError, UnableToFulfill -> "KitBot couldn't fulfill the order";
@@ -6334,18 +6370,22 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private static void configureAutosetupKillAura(Settings settings) {
-        // The export omits defaults, so reset only stock settings and keep addon options.
+        // Paver's KillAura export; it omits defaults, so reset the other stock settings and keep addon options.
         for (String name : List.of(
-            "attack-when-holding", "rotate", "auto-switch", "swap-back", "shield-mode",
+            "attack-when-holding", "selected-weapon-types", "shield-mode",
             "only-on-click", "only-on-look", "pause-baritone", "priority",
-            "passive-mob-age-filter", "hostile-mob-age-filter", "ignore-passive", "ignore-tamed",
+            "hostile-mob-age-filter", "ignore-named", "ignore-tamed",
             "pause-on-lag", "pause-on-use", "pause-on-CA", "TPS-sync", "custom-delay", "hit-delay", "switch-delay"
         )) {
             Setting<?> setting = settings.get(name);
             if (setting != null) setting.reset();
         }
-        if (settings.get("selected-weapon-types") instanceof ItemListSetting weapons) {
-            weapons.set(new ArrayList<>(List.of(Items.DIAMOND_SWORD, Items.DIAMOND_AXE, Items.TRIDENT, Items.DIAMOND_PICKAXE)));
+        for (String[] value : new String[][] {
+            {"rotate", "Always"}, {"auto-switch", "true"}, {"swap-back", "true"},
+            {"passive-mob-age-filter", "Both"}, {"ignore-passive", "false"}
+        }) {
+            Setting<?> setting = settings.get(value[0]);
+            if (setting != null) setting.parse(value[1]);
         }
         if (settings.get("entities") instanceof EntityTypeListSetting entities) {
             entities.set(new HashSet<>(Set.of(
@@ -6364,8 +6404,7 @@ public class HighwayBuilderTHM extends Module {
         }
         if (settings.get("max-targets") instanceof IntSetting targets) targets.set(5);
         if (settings.get("range") instanceof DoubleSetting range) range.set(5.2);
-        if (settings.get("walls-range") instanceof DoubleSetting wallsRange) wallsRange.set(5.2);
-        if (settings.get("ignore-named") instanceof BoolSetting ignoreNamed) ignoreNamed.set(true);
+        if (settings.get("walls-range") instanceof DoubleSetting wallsRange) wallsRange.set(0.0);
     }
 
     private void applyAutosetupVelocity() {
@@ -6734,6 +6773,34 @@ public class HighwayBuilderTHM extends Module {
 
         input.stop();
         state.start(this);
+    }
+
+    /**
+     * Blockade setup runs Center, ThrowOutTrash, then {@code blockade}; Center and ThrowOutTrash return to their owner,
+     * so the owner reads its progress from the state it came back from. Null once {@code blockade} has finished.
+     */
+    static State nextBlockadeSetupState(State previous, State blockade) {
+        if (previous == blockade) return null;
+        if (previous == State.Center) return State.ThrowOutTrash;
+        if (previous == State.ThrowOutTrash) return blockade;
+        return State.Center;
+    }
+
+    /** Owner for Center when the blockade must be rebuilt; only Restock and MineEnderChests continue the setup. */
+    static State blockadeRebuildOwner(State requester) {
+        return requester == State.MineEnderChests ? requester : State.Restock;
+    }
+
+    /**
+     * State that recovery hands to Center as its owner. Never Center or ThrowOutTrash: both exit to their owner,
+     * so either one as owner would bounce between the two forever.
+     */
+    static State restockRecoveryOwner(State current, State lastState, boolean tasksInactive) {
+        State owner = current == State.Center || current == State.ThrowOutTrash ? lastState : current;
+        if (owner == null || owner == State.Center || owner == State.ThrowOutTrash) return State.Restock;
+        // Teardown with an active task would finish the sequence without restocking.
+        boolean teardown = owner == State.MineShulkerBlockade || owner == State.MineEChestBlockade;
+        return teardown && !tasksInactive ? State.Restock : owner;
     }
 
     private void completeRestockTaskAndContinue() {
@@ -9568,7 +9635,7 @@ public class HighwayBuilderTHM extends Module {
 
             if (b.mc.player.tickCount < recoveryReadyAge) return true;
 
-            State retryFrom = b.state;
+            State retryFrom = restockRecoveryOwner(b.state, b.lastState, b.restockTask.tasksInactive());
             recoveryPending = false;
             recoveryStartedAge = 0;
             recoveryReadyAge = 0;
@@ -14907,7 +14974,7 @@ public class HighwayBuilderTHM extends Module {
         }
     }
 
-    private enum State {
+    enum State {
         AutoAlign {
             private int ticks;
 
@@ -15481,6 +15548,12 @@ public class HighwayBuilderTHM extends Module {
             private static final int MAX_DIRECT_TRASH_DROPS_PER_PASS = 2;
             private static final float TARGET_PITCH = -25.0f;
             private static final float ROTATION_TOLERANCE = 0.5f;
+            // A cursor stack with nowhere to go kept this state looking up for good; the watchdog does not always cover it.
+            private static final int MAX_STALL_TICKS = 200;
+            private int stallTicks;
+            // Retry waits count toward the stall limit; the first delay and waits after a drop do not.
+            private boolean retryDelay;
+            private boolean droppedInBatch;
             private final Set<Integer> keepSlots = new HashSet<>();
             private final Map<Integer, ItemStack> skippedDropSlots = new HashMap<>();
             private boolean firstTick;
@@ -15499,6 +15572,8 @@ public class HighwayBuilderTHM extends Module {
                 skippedDropSlots.clear();
                 firstTick = true;
                 completionDelayStarted = false;
+                stallTicks = 0;
+                retryDelay = false;
                 timer = Math.max(1, b.inventoryDelay.get());
                 clearFailedDropState();
                 failedRotationRetries = 0;
@@ -15510,10 +15585,19 @@ public class HighwayBuilderTHM extends Module {
             protected void tick(HighwayBuilderTHM b) {
                 b.input.stop();
 
-                if (timer > 0) {
-                    timer--;
+                boolean waiting = timer > 0;
+                if (waiting) timer--;
+                if ((!waiting || retryDelay) && ++stallTicks > MAX_STALL_TICKS) {
+                    ItemStack carried = b.mc.player.containerMenu.getCarried();
+                    if (!carried.isEmpty()) {
+                        b.error("Trash routine is stuck holding %s; free an inventory slot.", carried.getHoverName().getString());
+                        return;
+                    }
+                    b.warning("Trash routine made no progress; continuing restock.");
+                    b.setState(b.lastState);
                     return;
                 }
+                if (waiting) return;
 
                 if (!alignForTrashRoutine(b)) return;
 
@@ -15524,17 +15608,27 @@ public class HighwayBuilderTHM extends Module {
 
                 if (!b.mc.player.containerMenu.getCarried().isEmpty()) {
                     completionDelayStarted = false;
-                    if (handleCursorStack(b)) timer = b.inventoryDelay.get();
+                    if (handleCursorStack(b)) {
+                        timer = b.inventoryDelay.get();
+                        // True also covers a preserved stack, so only an emptied cursor is progress.
+                        boolean cleared = b.mc.player.containerMenu.getCarried().isEmpty();
+                        if (cleared) stallTicks = 0;
+                        retryDelay = !cleared;
+                    }
                     return;
                 }
 
-                if (dropDirectTrashBatch(b)) {
+                boolean pending = dropDirectTrashBatch(b);
+                if (droppedInBatch) stallTicks = 0;
+                retryDelay = !droppedInBatch;
+                if (pending) {
                     completionDelayStarted = false;
                     return;
                 }
 
                 if (!completionDelayStarted) {
                     completionDelayStarted = true;
+                    retryDelay = false;
                     timer = POST_PURGE_DELAY_TICKS;
                     return;
                 }
@@ -15686,6 +15780,7 @@ public class HighwayBuilderTHM extends Module {
             private boolean dropDirectTrashBatch(HighwayBuilderTHM b) {
                 int maxActions = Math.min(MAX_DIRECT_TRASH_DROPS_PER_PASS, b.mc.player.getInventory().getNonEquipmentItems().size());
                 boolean onlySkippedTrashRemains = false;
+                droppedInBatch = false;
 
                 for (int actions = 0; actions < maxActions; ) {
                     refreshProtectedTrashSlots(b);
@@ -15735,6 +15830,7 @@ public class HighwayBuilderTHM extends Module {
                         skippedDropSlots.remove(i);
                         clearFailedDropState();
                         completionDelayStarted = false;
+                        droppedInBatch = true;
                         actions++;
                         droppedThisPass = true;
                         if (actions >= maxActions) {
@@ -15859,6 +15955,7 @@ public class HighwayBuilderTHM extends Module {
             private static final MBlockPos pos = new MBlockPos();
             private static final int SPEEDMINE_RETRY_TICKS = 10;
             private int targetEchestsToBreak;
+            private BlockPos foreignBlockPos;
             private int targetObsidianCount;
             private int lastObservedObsidianCount;
             private boolean first, primed, speedmineRebreakMode;
@@ -15873,31 +15970,11 @@ public class HighwayBuilderTHM extends Module {
             protected void start(HighwayBuilderTHM b) {
                 b.restockTask.refreshSessionProgress();
                 b.restockTask.notePhase(RestockTask.SourcePhase.MineEnderChests);
-                if (b.restockTask.isSequenceActive() && !b.restockTask.isBlockadeReady()) {
-                    if (b.lastState != Center && b.lastState != ThrowOutTrash && b.lastState != PlaceShulkerBlockade) {
-                        b.setState(Center);
-                        return;
-                    }
-                    else if (b.lastState == Center) {
-                        b.setState(ThrowOutTrash);
-                        return;
-                    }
-                    else if (b.lastState == ThrowOutTrash) {
-                        b.setState(PlaceShulkerBlockade);
-                        return;
-                    }
-                }
-                else if (!b.restockTask.isSequenceActive()) {
-                    if (b.lastState != Center && b.lastState != ThrowOutTrash && b.lastState != PlaceEChestBlockade) {
-                        b.setState(Center);
-                        return;
-                    }
-                    else if (b.lastState == Center) {
-                        b.setState(ThrowOutTrash);
-                        return;
-                    }
-                    else if (b.lastState == ThrowOutTrash) {
-                        b.setState(PlaceEChestBlockade);
+                boolean sequenceActive = b.restockTask.isSequenceActive();
+                if (!sequenceActive || !b.restockTask.isBlockadeReady()) {
+                    State setup = nextBlockadeSetupState(b.lastState, sequenceActive ? PlaceShulkerBlockade : PlaceEChestBlockade);
+                    if (setup != null) {
+                        b.setState(setup);
                         return;
                     }
                 }
@@ -15937,6 +16014,7 @@ public class HighwayBuilderTHM extends Module {
                 returnY = b.mc.player.getY();
                 returnZ = b.mc.player.getZ();
                 returnAnchorSaved = true;
+                foreignBlockPos = null;
 
                 stopReason = null;
                 ignoreGroundObsidian = false;
@@ -16254,7 +16332,29 @@ public class HighwayBuilderTHM extends Module {
                         }
                     }
                 }
+                else if (!blockState.canBeReplaced()) {
+                    // Another block took the chest's spot (seen: obsidian); clear it now instead of waiting for the watchdog.
+                    boolean keepSign = b.shouldSkipSignBreak(bp, blockState);
+                    if (!bp.equals(foreignBlockPos)) {
+                        foreignBlockPos = bp.immutable();
+                        if (keepSign) b.warning("A sign blocks the ender chest spot at %d %d %d; clear it manually.", bp.getX(), bp.getY(), bp.getZ());
+                        else b.info("Clearing %s from the ender chest spot.", blockState.getBlock().getName().getString());
+                        b.restockDebug("MineEnderChests: foreign block %s at %s mainHand=%s offHand=%s.", blockState.getBlock(), bp,
+                            b.mc.player.getMainHandItem().getItem(), b.mc.player.getOffhandItem().getItem());
+                    }
+                    if (keepSign) return;
+                    int toolSlot = findAndMoveBestToolToHotbar(b, blockState, false, false);
+                    if (toolSlot == -1) return;
+                    if (speedmineRebreakMode && Speedmine.INSTANCE != null) {
+                        if (!Speedmine.INSTANCE.isMining(bp)) Speedmine.INSTANCE.requestFreshBreak(bp);
+                    } else {
+                        if (b.mc.player.getInventory().getSelectedSlot() != toolSlot) InvUtils.swap(toolSlot, false);
+                        if (b.rotation.get().mine) Rotations.rotate(Rotations.getYaw(bp), Rotations.getPitch(bp), () -> BlockUtils.breakBlock(bp, true));
+                        else BlockUtils.breakBlock(bp, true);
+                    }
+                }
                 else {
+                    foreignBlockPos = null;
                     // Place ender chest. With offhand-build they sit in the offhand, which the inventory
                     // search never looks at: without this the phase sees none and ends without placing.
                     boolean fromOffhand = b.offhandHoldsEnderChest();
@@ -17273,12 +17373,13 @@ public class HighwayBuilderTHM extends Module {
                 }
 
                 if (!b.restockTask.isBlockadeReady()) {
-                    if (b.lastState == Center) {
+                    State setup = nextBlockadeSetupState(b.lastState, PlaceShulkerBlockade);
+                    if (setup == ThrowOutTrash) {
                         b.restockDebug("Restock.start requesting ThrowOutTrash before blockade placement.");
                         b.setState(ThrowOutTrash);
                         return;
                     }
-                    else if (b.lastState == ThrowOutTrash) {
+                    else if (setup == PlaceShulkerBlockade) {
                         b.restockDebug("Restock.start requesting PlaceShulkerBlockade using effective type %s.", b.getEffectiveBlockadeType());
                         b.setState(PlaceShulkerBlockade);
                         return;
@@ -19016,7 +19117,7 @@ public class HighwayBuilderTHM extends Module {
                     b.setState(Restock, Restock);
                 } else {
                     b.restockDebug("MineShulkerBlockade advanced pending task after teardown touched or lost the blockade (blocks=%d); rebuilding from Center.", blockadeBlocks);
-                    b.setState(Center, this);
+                    b.setState(Center, blockadeRebuildOwner(this));
                 }
                 return true;
             }

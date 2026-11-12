@@ -152,6 +152,8 @@ addon-specific settings screen — don't confuse the two when adding a new modul
 
 **Highway restock inventory:** HighwayBuilder owns supply slots 5-9 through `Manage-hotbar`. Trash limits include hotbar stacks. Offhand refills preserve reserved hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
 
+**Highway restock stalls:** MineEnderChests clears a foreign block from the chest spot right away. ThrowOutTrash leaves after repeated attempts without a drop, since a stuck cursor stack is not always watched.
+
 **Highway packet budget:** The General toggle alone controls budgeting. Reset it before tick early
 returns and initialize it before double mining. Fast Packet Build uses the allowance actually
 left after mining, independently of Experimental. Preserve pending-target duplicate protection.
@@ -192,6 +194,8 @@ Wait for the bobber to disappear, step back and return, look away and back, then
 Movement uses collision-checked sub-block steps and cancels for manual input, world changes, or timeout.
 
 **Distant Horizons:** The optional `DistantHorizonsLightmapMixin` binds the level lightmap when DH requests it. Meteor Fullbright Gamma skips DH's normal lightmap hook; preserve both Blaze3D textures and native OpenGL IDs.
+
+**Highway Traveler:** A suspected end is held still and re-checked before it counts; fast flight outruns chunk loading. Repair scans stop at the first unloaded row. In the paving profile only the floor triggers a repair. The builder starts only after the player has landed.
 
 **Highway pause:** Manual pause checkpoints stats and fully deactivates the builder. An independent return listener uses Baritone before reactivation; failures retain the pause. Return positions last for the client session and require the original world and dimension.
 

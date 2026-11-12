@@ -24,6 +24,7 @@ import xyz.thm.addon.utils.kitbot.KitbotKitCatalog;
 
 import java.util.Locale;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class KitbotFrontend extends Module {
@@ -329,7 +330,8 @@ public class KitbotFrontend extends Module {
         MaxOrderViolation,
         Disconnected,
         PermissionDenied,
-        TransportFailure
+        TransportFailure,
+        Cooldown
     }
 
     public enum RequestOrigin {
@@ -416,6 +418,8 @@ public class KitbotFrontend extends Module {
         private static final Pattern UPDATE_DISTANCE_PATTERN = Pattern.compile("Update rejected! New position is .* Max jump is 100k\\.", Pattern.CASE_INSENSITIVE);
         private static final Pattern UPDATE_SUCCESS_PATTERN = Pattern.compile("Highway .* updated");
         private static final Pattern GOTO_GOING_PATTERN = Pattern.compile("Going to highway .* please wait to teleport", Pattern.CASE_INSENSITIVE);
+        // The event has no sender, so the whole line must be KitBot's whisper; only bracketed head/timestamp tags may precede it.
+        private static final Pattern COOLDOWN_PATTERN = Pattern.compile("^(?:\\[[^\\]»]*\\]\\s*)*" + Pattern.quote(KITBOT_NAME) + " whispers: Cooldown (\\d{1,5})s\\s*$");
         private static final Pattern GOTO_ARRIVED_PATTERN = Pattern.compile("Bot has arrived at highway .* you may teleport", Pattern.CASE_INSENSITIVE);
 
         private static volatile ManagedRuntime INSTANCE;
@@ -580,7 +584,12 @@ public class KitbotFrontend extends Module {
                 if (activeRequest == null) return;
                 long now = System.currentTimeMillis();
 
-                if (message.contains("Bot is busy, you have been added to the queue")) {
+                Matcher cooldown = COOLDOWN_PATTERN.matcher(message);
+                if (cooldown.matches()) {
+                    // The bot drops the request; keep the window until the cooldown ends so the retry is not rejected again.
+                    windowEndsAtMs = now + Long.parseLong(cooldown.group(1)) * 1000L;
+                    actions = failureActionsLocked(FailureReason.Cooldown, message, "KitBot is on cooldown for " + cooldown.group(1) + "s.", now);
+                } else if (message.contains("Bot is busy, you have been added to the queue")) {
                     actions = new PendingActions(progressLocked(message, now), null, null, null);
                 } else {
                     actions = switch (activeRequest.mode) {
