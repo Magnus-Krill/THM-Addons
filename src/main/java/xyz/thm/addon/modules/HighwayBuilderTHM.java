@@ -1282,15 +1282,15 @@ public class HighwayBuilderTHM extends Module {
     private final Setting<Boolean> silentForwardPlaceSwap = sgPaving.add(new BoolSetting.Builder()
         .name("silent-forward-place-swap")
         .description("Silently swaps to scheduler forward placement blocks, then restores your selected slot.")
-        .defaultValue(true)
-        .visible(() -> !legacyMode.get())
+        .defaultValue(false)
+        .visible(() -> !legacyMode.get() )
         .build()
     );
 
     private final Setting<Boolean> silentForwardToolSwap = sgPaving.add(new BoolSetting.Builder()
         .name("silent-forward-tool-swap")
         .description("Silently swaps to scheduler forward mining tools, then restores your selected slot.")
-        .defaultValue(true)
+        .defaultValue(false)
         .visible(() -> !legacyMode.get())
         .build()
     );
@@ -7763,7 +7763,7 @@ public class HighwayBuilderTHM extends Module {
         if (!BlockUtils.canPlaceBlock(target, true, blockItem.getBlock())) return false;
 
         FindItemResult item = new FindItemResult(slot, stack.getCount());
-        boolean placed = PlacementUtils.placeBlockPacket(target, item, false, 0, true, silentForwardPlaceSwap.get());
+        boolean placed = PlacementUtils.placeBlockPacket(target, item, rotation.get().place, 0, true, silentForwardPlaceSwap.get());
         if (!placed) return false;
 
         safetyPlacedThisTick = true;
@@ -16300,9 +16300,9 @@ public class HighwayBuilderTHM extends Module {
                     boolean placedEChest;
                     if (fromOffhand) {
                         // Offhand holds the chests, so the pickaxe keeps the main hand: place and mine share the tick.
-                        placedEChest = BlockUtils.place(bp, InteractionHand.OFF_HAND, b.mc.player.getInventory().getSelectedSlot(), b.rotation.get().place, 0, true, true, false);
+                        placedEChest = BlockUtils.place(bp, InteractionHand.OFF_HAND, b.mc.player.getInventory().getSelectedSlot(), b.rotation.get().place, 0, false, true, false);
                     } else {
-                        placedEChest = BlockUtils.place(bp, InteractionHand.MAIN_HAND, slot, b.rotation.get().place, 0, true, true, b.silentRebreakSwap.get());
+                        placedEChest = BlockUtils.place(bp, InteractionHand.MAIN_HAND, slot, b.rotation.get().place, 0, false, true, b.silentRebreakSwap.get());
                     }
 
                     if (placedEChest) {
