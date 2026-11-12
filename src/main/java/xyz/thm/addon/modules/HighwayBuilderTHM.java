@@ -6796,11 +6796,11 @@ public class HighwayBuilderTHM extends Module {
      * so either one as owner would bounce between the two forever.
      */
     static State restockRecoveryOwner(State current, State lastState, boolean tasksInactive) {
-        if (current != State.Center && current != State.ThrowOutTrash) return current;
-        if (lastState == State.Center || lastState == State.ThrowOutTrash || lastState == null) return State.Restock;
+        State owner = current == State.Center || current == State.ThrowOutTrash ? lastState : current;
+        if (owner == null || owner == State.Center || owner == State.ThrowOutTrash) return State.Restock;
         // Teardown with an active task would finish the sequence without restocking.
-        boolean teardown = lastState == State.MineShulkerBlockade || lastState == State.MineEChestBlockade;
-        return teardown && !tasksInactive ? State.Restock : lastState;
+        boolean teardown = owner == State.MineShulkerBlockade || owner == State.MineEChestBlockade;
+        return teardown && !tasksInactive ? State.Restock : owner;
     }
 
     private void completeRestockTaskAndContinue() {

@@ -71,7 +71,8 @@ real owner, never Center or ThrowOutTrash itself, or the two states return to ea
 | Entering Forward | sequence still active | sequence finished and cleared |
 
 `restockRecoveryOwner` never returns Center or ThrowOutTrash. During blockade teardown with an
-active task it returns Restock, so the task is not dropped.
+active task it returns Restock, so the task is not dropped, whether recovery starts in the
+teardown itself or in Center or ThrowOutTrash entered from it.
 
 ## Rule for rebuilding the blockade
 

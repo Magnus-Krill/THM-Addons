@@ -564,6 +564,9 @@ class HighwayBuilderTHMTest {
         for (var teardown : List.of(State.MineShulkerBlockade, State.MineEChestBlockade)) {
             assertEquals(State.Restock, HighwayBuilderTHM.restockRecoveryOwner(State.Center, teardown, false));
             assertEquals(teardown, HighwayBuilderTHM.restockRecoveryOwner(State.Center, teardown, true));
+            // Recovery can also start in the teardown itself, e.g. after invalid-source recovery.
+            assertEquals(State.Restock, HighwayBuilderTHM.restockRecoveryOwner(teardown, State.Restock, false));
+            assertEquals(teardown, HighwayBuilderTHM.restockRecoveryOwner(teardown, State.Restock, true));
         }
     }
 }
