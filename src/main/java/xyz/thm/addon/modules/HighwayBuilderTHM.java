@@ -5880,6 +5880,12 @@ public class HighwayBuilderTHM extends Module {
 
         KitbotFrontend.FailureReason reason = event.failureReason();
         String detail = event.detail();
+        if (reason == KitbotFrontend.FailureReason.Cooldown) {
+            // The bot never took the order, so waiting out the cooldown does not spend an attempt.
+            if (kitbotOrderAcceptedAttempts > 0) kitbotOrderAcceptedAttempts--;
+            scheduleKitbotRestockSubmitAfterWindow(event.remainingWindowMs(), "frontend cooldown");
+            return;
+        }
         if (isRetryableKitbotRestockFailure(reason) && kitbotOrderAcceptedAttempts < KITBOT_MAX_ACCEPTED_ATTEMPTS) {
             scheduleKitbotRestockSubmitAfterWindow(
                 event.remainingWindowMs(),
@@ -5905,7 +5911,7 @@ public class HighwayBuilderTHM extends Module {
     private boolean isRetryableKitbotRestockFailure(KitbotFrontend.FailureReason reason) {
         if (reason == null) return false;
         return switch (reason) {
-            case TimedOut, Disconnected, TransportFailure, GenericError, UnableToFulfill -> true;
+            case TimedOut, Disconnected, TransportFailure, GenericError, UnableToFulfill, Cooldown -> true;
             case InsufficientTokens, VoucherCredits, OutOfStock, InvalidKit, NotWhitelisted, MaxOrderViolation, PermissionDenied -> false;
         };
     }
@@ -5921,6 +5927,7 @@ public class HighwayBuilderTHM extends Module {
             case MaxOrderViolation -> "hit KitBot's max order limit";
             case PermissionDenied -> "no permission for this kit";
             case TimedOut -> "KitBot timed out";
+            case Cooldown -> "KitBot is on cooldown";
             case Disconnected -> "disconnected from KitBot";
             case TransportFailure -> "KitBot connection issue";
             case GenericError, UnableToFulfill -> "KitBot couldn't fulfill the order";
@@ -6374,7 +6381,7 @@ public class HighwayBuilderTHM extends Module {
             if (setting != null) setting.reset();
         }
         for (String[] value : new String[][] {
-            {"rotate", "OnHit"}, {"auto-switch", "true"}, {"swap-back", "true"},
+            {"rotate", "Always"}, {"auto-switch", "true"}, {"swap-back", "true"},
             {"passive-mob-age-filter", "Both"}, {"ignore-passive", "false"}
         }) {
             Setting<?> setting = settings.get(value[0]);
@@ -9601,6 +9608,14 @@ public class HighwayBuilderTHM extends Module {
             if (b.mc.player.tickCount < recoveryReadyAge) return true;
 
             State retryFrom = b.state;
+            // Center and ThrowOutTrash exit to lastState; restarting one of them from Center bounces between the two forever.
+            // Teardown with an active task would finish the sequence without restocking.
+            if (retryFrom == State.Center || retryFrom == State.ThrowOutTrash) {
+                State owner = b.lastState;
+                boolean teardown = owner == State.MineShulkerBlockade || owner == State.MineEChestBlockade;
+                retryFrom = owner == State.Center || owner == State.ThrowOutTrash || teardown && !b.restockTask.tasksInactive()
+                    ? State.Restock : owner;
+            }
             recoveryPending = false;
             recoveryStartedAge = 0;
             recoveryReadyAge = 0;
