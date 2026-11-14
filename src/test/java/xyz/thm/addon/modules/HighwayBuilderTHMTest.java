@@ -84,6 +84,16 @@ class HighwayBuilderTHMTest {
     }
 
     @Test
+    void miningRespectsConfiguredRangeAndPlayerReach() {
+        Vec3 eyes = new Vec3(0.5, 1.62, 0.5);
+        BlockPos target = new BlockPos(5, 1, 0);
+
+        assertFalse(HighwayBuilderTHM.isWithinMineRange(target, eyes, 5.4, 4.5));
+        assertFalse(HighwayBuilderTHM.isWithinMineRange(target, eyes, 4.4, 5.2));
+        assertTrue(HighwayBuilderTHM.isWithinMineRange(target, eyes, 4.5, 5.2));
+    }
+
+    @Test
     void offhandLoadoutUsesTheTwoPacketsOtherwiseReservedForSilentSwaps() {
         var alwaysBlocked = Set.of(GamePacketTypes.SERVERBOUND_SWING);
         assertEquals(11, HighwayBuilderTHM.packetBudgetCosts(true, 23, false, true, 20, 0, alwaysBlocked::contains).plan(false, 20, 0).mine());

@@ -179,8 +179,8 @@ migrate in module configs, Highway Profiles and custom presets.
 | `air-place-mode` | `Smart`; options `Never`, `Smart`, `Always`; shown when `packet-build` is on | Controls packet-build air placement. |
 | `legacy-air-place` | `false`; shown when Packet Build permits air placement | Uses the 1.21.11 target-center click with face `UP` for unsupported blocks. |
 | `packet-build-lookahead` | `true`; shown with unlimited `packet-build` | Also places upcoming rows in the same tick. |
-| `silent-forward-place-swap` | `true`; hidden in legacy mode | Restores your selected slot after scheduler placement. |
-| `silent-forward-tool-swap` | `true`; hidden in legacy mode | Restores your selected slot after scheduler mining. |
+| `silent-forward-place-swap` | `false`; hidden in legacy mode or with `offhand-build` | Restores your selected slot after scheduler placement. |
+| `silent-forward-tool-swap` | `false`; hidden in legacy mode or with `offhand-build` | Restores your selected slot after scheduler mining. |
 
 ### Experimental
 
@@ -216,7 +216,7 @@ migrate in module configs, Highway Profiles and custom presets.
 | `break-mode` | `Instant rebreak on place`; shown when `mine-ender-chests` and `offhand-build` are on | How a placed chest is broken again: `Speedmine rebreak`, `Instant rebreak`, `Instant rebreak on place` or `Normal breaking`. |
 | `break-mode-no-offhand` | `Speedmine rebreak`; shown when `mine-ender-chests` is on and `offhand-build` is off | Same choice without the on-place mode, which needs the chest in the offhand. |
 | `rebreak-delay` | `0`, slider max `20`; shown for `Instant rebreak` | Ticks between rebreak packets. |
-| `silent-rebreak-swap` | `true`; shown unless the mode is `Normal breaking` | Restores your selected slot after a rebreak or chest placement. |
+| `silent-rebreak-swap` | `true`; shown with `offhand-build` off and a rebreak mode selected | Restores your selected slot after a rebreak or chest placement. |
 | `predictive-echest-replace` | `true`; shown for offhand OnPlace rebreak | Places the next offhand EChest immediately after the rebreak packet. |
 | `use-break-speed-multiplier` | `true`; shown when `mine-ender-chests` is on | Temporarily boosts Timer while mining ender chests. |
 | `break-speed-multiplier` | `1.5`, range `1-3`; shown when the boost is on | How much Timer is boosted. |
@@ -326,8 +326,8 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `choke-hold-ticks` | `5`, range `1-200` | `choke-build` is on | Desired hold duration. |
 | `choke-release-ticks` | `5`, range `1-200` | `choke-build` is on | Duration of normal sending after a release. |
 | `choke-max-hold-ticks` | `20`, range `1-200` | `choke-build` is on | Maximum hold duration; releases early when below `choke-hold-ticks`. |
-| `silent-forward-place-swap` | `true` | `legacy-mode` is off | Silently swaps to placement blocks for scheduler work, then restores your selected slot. |
-| `silent-forward-tool-swap` | `true` | `legacy-mode` is off | Silently swaps to scheduler mining tools, then restores your selected slot. |
+| `silent-forward-place-swap` | `false` | `legacy-mode` and `offhand-build` are off | Silently swaps to placement blocks for scheduler work, then restores your selected slot. |
+| `silent-forward-tool-swap` | `false` | `legacy-mode` and `offhand-build` are off | Silently swaps to scheduler mining tools, then restores your selected slot. |
 | `placements-per-tick` | `1.5`, range `0.1-100`, slider `0.1-10`, one decimal place | Always | Maximum averaged placement rate; `1.5` bursts 1-2-1-2 blocks per tick for 30 blocks/s, `0.1` performs about one placement every 10 ticks. |
 | `adaptive-placements` | `false` | Always | Auto-tunes the place rate between `0.5` and `3` from rubberbands and reverted placements, including `packet-build-normal-rate`. |
 
@@ -360,7 +360,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `break-mode` | `Instant rebreak on place`; options below | `mine-ender-chests` and `offhand-build` are on | Picks one breaking method for the mining cycle. **Speedmine rebreak**: breaks with THM Speedmine, turning its `auto-rebreak` on for the cycle and putting your own setting back afterwards. **Instant rebreak**: after placing a chest, sends a sequenced `STOP_DESTROY_BLOCK` plus a swing (the same shape Meteor's InstantRebreak uses); the server breaks it at once when its stored mining progress for that spot is far enough along, otherwise it records the attempt and finishes the block itself a few ticks later. **Instant rebreak on place**: sends the same packet immediately after a successful normal placement, then retries it while the chest remains visible instead of falling back to a normal break on the next tick. With `offhand-build`, the pickaxe stays in the main hand. **Normal breaking**: plain mining, no packet tricks. |
 | `break-mode-no-offhand` | `Speedmine rebreak` | `mine-ender-chests` is on, `offhand-build` is off | Same modes as `break-mode` minus **Instant rebreak on place**, which needs the chest in the offhand. It's a separate setting because a select can't hide a single option. |
 | `rebreak-delay` | `0`, slider max `20` | Mode is `Instant rebreak` | Delay in ticks between rebreak packets. |
-| `silent-rebreak-swap` | `true` | Mode is not `Normal breaking` | Restores your previously selected slot after a rebreak packet or a chest placement. |
+| `silent-rebreak-swap` | `true` | `mine-ender-chests` is on, `offhand-build` is off and a rebreak mode is selected | Restores your previously selected slot after a rebreak packet or a chest placement. |
 | `predictive-echest-replace` | `true` | Offhand OnPlace mode | Places the next offhand EChest immediately after the rebreak packet. |
 | `use-break-speed-multiplier` | `true` | `mine-ender-chests` is on | Temporarily boosts Timer while mining ender chests, then restores the previous Timer state. |
 | `break-speed-multiplier` | `1.5`, range `1-3` | `mine-ender-chests` and `use-break-speed-multiplier` are on | Timer multiplier used during ender chest mining. |

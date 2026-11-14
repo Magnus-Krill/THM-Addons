@@ -94,6 +94,7 @@ import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.ChatVisiblity;
@@ -1283,7 +1284,7 @@ public class HighwayBuilderTHM extends Module {
         .name("silent-forward-place-swap")
         .description("Silently swaps to scheduler forward placement blocks, then restores your selected slot.")
         .defaultValue(false)
-        .visible(() -> !legacyMode.get() )
+        .visible(() -> !legacyMode.get() && allowsSilentSwap())
         .build()
     );
 
@@ -1291,7 +1292,7 @@ public class HighwayBuilderTHM extends Module {
         .name("silent-forward-tool-swap")
         .description("Silently swaps to scheduler forward mining tools, then restores your selected slot.")
         .defaultValue(false)
-        .visible(() -> !legacyMode.get())
+        .visible(() -> !legacyMode.get() && allowsSilentSwap())
         .build()
     );
 
@@ -1605,7 +1606,7 @@ public class HighwayBuilderTHM extends Module {
         .name("silent-rebreak-swap")
         .description("Restores your selected slot after a rebreak or chest placement.")
         .defaultValue(true)
-        .visible(() -> mineEnderChests.get() && effectiveEChestBreakMode() != EChestBreakMode.Normal)
+        .visible(() -> mineEnderChests.get() && allowsSilentSwap() && effectiveEChestBreakMode() != EChestBreakMode.Normal)
         .build()
     );
 
@@ -1843,6 +1844,8 @@ public class HighwayBuilderTHM extends Module {
     private IBlockPosProvider blockPosProvider;
     private ServerboundUseItemOnPacket packetBuildSending;
     private boolean packetBuildSent;
+    private ServerboundPlayerActionPacket doubleMineStartSending;
+    private boolean doubleMineStartSent;
 
     public Vec3 start;
     public int blocksBroken, blocksPlaced;
@@ -7276,9 +7279,10 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private boolean canMine(MBlockPos pos, boolean mineBlocksToPlace) {
+        if (!isWithinMineRange(pos.getBlockPos())) return false;
         BlockState state = pos.getState();
         if (shouldSkipSignBreak(pos.getBlockPos(), state)) return false;
-        return isWithinConfiguredForwardRange(pos.getBlockPos()) && safeCanBreak(pos.getBlockPos(), state) && (mineBlocksToPlace || !blocksToPlace.get().contains(state.getBlock()));
+        return safeCanBreak(pos.getBlockPos(), state) && (mineBlocksToPlace || !blocksToPlace.get().contains(state.getBlock()));
     }
 
     private boolean canPlace(MBlockPos pos, boolean liquids) {
@@ -7581,7 +7585,7 @@ public class HighwayBuilderTHM extends Module {
             if (!canSafetyPlaceBlockAt(target, slot)) continue;
 
             if (BlockUtils.place(target, new FindItemResult(slot, mc.player.getInventory().getItem(slot).getCount()),
-                rotation.get().place, 0, true, true, true)) {
+                rotation.get().place, 0, true, true, allowsSilentSwap())) {
                 safetyPlacedThisTick = true;
                 tpsSafetyPlacedBlocks.add(target);
                 if (debugLog.get()) highwayDebug("HB TPS safety enclosure placed %s.", formatBlockPos(target));
@@ -7763,7 +7767,7 @@ public class HighwayBuilderTHM extends Module {
         if (!BlockUtils.canPlaceBlock(target, true, blockItem.getBlock())) return false;
 
         FindItemResult item = new FindItemResult(slot, stack.getCount());
-        boolean placed = PlacementUtils.placeBlockPacket(target, item, rotation.get().place, 0, true, silentForwardPlaceSwap.get());
+        boolean placed = PlacementUtils.placeBlockPacket(target, item, rotation.get().place, 0, true, allowsSilentForwardPlaceSwap());
         if (!placed) return false;
 
         safetyPlacedThisTick = true;
@@ -7816,7 +7820,7 @@ public class HighwayBuilderTHM extends Module {
         boolean filterPackets = limiter != null && (mc.getConnection() == null
             || !isChokeHoldingOrFlushing(mc.getConnection().getConnection()));
         packetCostsThisTick = packetBudgetCosts(packetBudget.get(), packetBudgetLimit.get(), allowsSilentForwardToolSwap(),
-            silentForwardPlaceSwap.get() && !placeFromOffhand(),
+            allowsSilentForwardPlaceSwap(),
             mineActionsThisTick, placeActionsThisTick, type -> filterPackets && limiter.alwaysBlocks(type));
         if (packetCostsThisTick == null) return;
         minePacketsLeft = packetCostsThisTick.available();
@@ -8133,6 +8137,18 @@ public class HighwayBuilderTHM extends Module {
         return inBorder(pos) && RangeUtils.isInRange(placeRange.get(), pos);
     }
 
+    private boolean isWithinMineRange(BlockPos pos) {
+        // Meteor Reach extends the local accessor without changing the server-synced attribute.
+        return mc.player != null && inBorder(pos)
+            && isWithinMineRange(pos, mc.player.getEyePosition(), placeRange.get(),
+                mc.player.getAttributeValue(Attributes.BLOCK_INTERACTION_RANGE));
+    }
+
+    static boolean isWithinMineRange(BlockPos pos, Vec3 eyes, double configuredRange, double reach) {
+        double distanceSquared = RangeUtils.squaredDistance(pos, eyes);
+        return distanceSquared <= configuredRange * configuredRange && distanceSquared < reach * reach;
+    }
+
     private boolean inBorder(BlockPos pos) {
         return mc.level != null && mc.level.getWorldBorder().isWithinBounds(pos);
     }
@@ -8142,7 +8158,7 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private boolean tryMineBlock(BlockPos pos, BlockState state, boolean rotate, Runnable beforeBreakAction) {
-        if (!isWithinConfiguredForwardRange(pos)) return false;
+        if (!isWithinMineRange(pos)) return false;
         if (!safeCanBreak(pos, state)) return false;
 
         if (packetCostsThisTick != null) {
@@ -8158,9 +8174,11 @@ public class HighwayBuilderTHM extends Module {
             minePacketAttempted = true;
         }
 
+        BlockPos target = rotate ? pos.immutable() : pos;
         Runnable breakAction = () -> {
+            if (rotate && !isWithinMineRange(target)) return;
             if (beforeBreakAction != null) beforeBreakAction.run();
-            BlockUtils.breakBlock(pos, true);
+            BlockUtils.breakBlock(target, true);
         };
 
         if (rotate) Rotations.rotate(Rotations.getYaw(pos), Rotations.getPitch(pos), breakAction);
@@ -8195,7 +8213,7 @@ public class HighwayBuilderTHM extends Module {
             pos,
             offhand ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND,
             offhand ? mc.player.getInventory().getSelectedSlot() : slot,
-            rotate, 0, true, true, true
+            rotate, 0, true, true, allowsSilentSwap()
         );
         if (!placed) return false;
 
@@ -8328,7 +8346,7 @@ public class HighwayBuilderTHM extends Module {
 
         boolean swapped = false;
         if (!offhandPlace) {
-            if (silentForwardPlaceSwap.get()) {
+            if (allowsSilentForwardPlaceSwap()) {
                 if (mc.player.getInventory().getSelectedSlot() != slot) {
                     if (!InvUtils.swap(slot, true)) return false;
                     swapped = true;
@@ -8407,7 +8425,7 @@ public class HighwayBuilderTHM extends Module {
 
         boolean predictive = experimental(predictiveEChestRebreak)
             && effectiveEChestBreakMode() == EChestBreakMode.OnPlace;
-        boolean swapBack = swapped && silentRebreakSwap.get();
+        boolean swapBack = swapped && allowsSilentRebreakSwap();
         int packets = predictive ? PREDICTIVE_ECHEST_REBREAK_PACKETS : 1;
         for (int packet = 1; packet <= packets; packet++) {
             eChestDebugStopAttempts++;
@@ -8954,8 +8972,9 @@ public class HighwayBuilderTHM extends Module {
     }
 
     @EventHandler
-    private void onPacketBuildSent(PacketEvent.Sent event) {
+    private void onPlacementOrMiningPacketSent(PacketEvent.Sent event) {
         if (event.packet == packetBuildSending) packetBuildSent = true;
+        if (event.packet == doubleMineStartSending) doubleMineStartSent = true;
     }
 
     static BlockHitResult packetAirPlaceHit(BlockPos target, Vec3 eye, boolean legacy) {
@@ -8980,7 +8999,7 @@ public class HighwayBuilderTHM extends Module {
         BlockPos target = pos.immutable();
         BlockHitResult hit = side == null ? packetAirPlaceHit(target, mc.player.getEyePosition(), legacyAirPlace.get()) : PlacementUtils.packetPlacementHit(target, side);
         boolean rotate = rotation.get().place;
-        boolean placed = PlacementUtils.placeBlockPacket(target, item, rotate, 0, silentForwardPlaceSwap.get(), hit, packet -> {
+        boolean placed = PlacementUtils.placeBlockPacket(target, item, rotate, 0, allowsSilentForwardPlaceSwap(), hit, packet -> {
             if (!isActive() || !packetBuild.get() || !BlockUtils.canPlace(target)
                 || trackPending && !PacketPlaceTracker.canSend(target)
                 || rotate && PlacementUtils.getPlaceSide(target) != side
@@ -9203,7 +9222,7 @@ public class HighwayBuilderTHM extends Module {
         if (task == null) return "none";
 
         BlockState state = mc.level == null ? null : mc.level.getBlockState(task.pos);
-        boolean inRange = isWithinConfiguredForwardRange(task.pos);
+        boolean inRange = task.type.mine ? isWithinMineRange(task.pos) : isWithinConfiguredForwardRange(task.pos);
         boolean canMineTask = task.type.mine && state != null && safeCanBreak(task.pos, state) && (task.type.mineBlocksToPlace() || !blocksToPlace.get().contains(state.getBlock()));
         boolean canPlaceTask = !task.type.mine && state != null && (task.type.liquids() ? !state.getFluidState().isEmpty() : BlockUtils.canPlace(task.pos));
         return String.format(
@@ -9266,8 +9285,20 @@ public class HighwayBuilderTHM extends Module {
             || block == Blocks.GILDED_BLACKSTONE;
     }
 
+    private boolean allowsSilentSwap() {
+        return !noSwapLoadout.get();
+    }
+
+    private boolean allowsSilentForwardPlaceSwap() {
+        return allowsSilentSwap() && silentForwardPlaceSwap.get();
+    }
+
     private boolean allowsSilentForwardToolSwap() {
-        return silentForwardToolSwap.get() && !noSwapLoadout.get();
+        return allowsSilentSwap() && silentForwardToolSwap.get();
+    }
+
+    private boolean allowsSilentRebreakSwap() {
+        return allowsSilentSwap() && silentRebreakSwap.get();
     }
 
     private boolean canUseSilentForwardToolSwap(BlockState state, int toolSlot) {
@@ -13714,19 +13745,13 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private void borerBreakBlock(BlockPos pos) {
-        if (borerPackets >= 130) return;
+        if (borerPackets >= 130 || !isWithinMineRange(pos)) return;
         BlockState state = mc.level.getBlockState(pos);
-        if (!safeCanBreak(pos, state)) return;
-        if (!BlockUtils.canInstaBreak(pos)) {
-            mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos, Direction.UP));
-            chargeDigPackets(1);
-            borerPackets += 1;
-        } else {
-            mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos, Direction.UP));
-            mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, pos, Direction.UP));
-            chargeDigPackets(2);
-            borerPackets += 2;
-        }
+        if (!safeCanBreak(pos, state) || !BlockUtils.canInstaBreak(pos)) return;
+        mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos, Direction.UP));
+        mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, pos, Direction.UP));
+        chargeDigPackets(2);
+        borerPackets += 2;
     }
 
     private void tickDoubleMine() {
@@ -14639,13 +14664,11 @@ public class HighwayBuilderTHM extends Module {
             for (ForwardTask task : row.mineQueue.values()) {
                 if (toDoubleMine.size() >= 2) break;
                 if (forwardMineCount >= currentMineActionsThisTick()) break;
-                if (!shouldKeepForwardMineTask(task)) continue;
+                if (!isWithinMineRange(task.pos) || !shouldKeepForwardMineTask(task)) continue;
 
                 BlockState state = mc.level.getBlockState(task.pos);
                 if (
-                    safeCanBreak(task.pos, state)
-                        && (task.type.mineBlocksToPlace() || !blocksToPlace.get().contains(state.getBlock()))
-                        && !safeCanInstaBreakForBreaking(task.pos)
+                    !safeCanInstaBreakForBreaking(task.pos)
                         && (!speedMineInstamine || state.getDestroyProgress(mc.player, mc.level, task.pos) <= 0.5)
                         && (normalMining == null || !task.pos.equals(normalMining.blockPos))
                         && (packetMining == null || !task.pos.equals(packetMining.blockPos))
@@ -14679,6 +14702,7 @@ public class HighwayBuilderTHM extends Module {
                 row.mineQueue.remove(task.pos);
                 continue;
             }
+            if (!isWithinMineRange(task.pos)) continue;
 
             BlockState state = mc.level.getBlockState(task.pos);
             int mineCost = mineBudgetCost(state);
@@ -15266,7 +15290,7 @@ public class HighwayBuilderTHM extends Module {
 
                 boolean placed = b.packetBuild.get()
                     ? b.tryPlaceBlock(pos.immutable(), slot, b.rotation.get().place)
-                    : BlockUtils.place(pos.immutable(), InteractionHand.MAIN_HAND, slot, b.rotation.get().place, 100, true, true, true);
+                    : BlockUtils.place(pos.immutable(), InteractionHand.MAIN_HAND, slot, b.rotation.get().place, 100, true, true, b.allowsSilentSwap());
                 if (placed) {
                     if (b.renderPlace.get()) b.placeTrail.add(BlockPos.asLong(pos.getX(), pos.getY(), pos.getZ()));
                     if (!b.packetBuild.get()) b.placeTimer = b.placeDelay.get();
@@ -15949,7 +15973,7 @@ public class HighwayBuilderTHM extends Module {
                     b.noSwapLoadout.get(),
                     b.rotation.get().mine,
                     b.rotation.get().place,
-                    b.silentRebreakSwap.get(),
+                    b.allowsSilentRebreakSwap(),
                     targetEchestsToBreak,
                     targetObsidianCount,
                     b.mc.player.tickCount
@@ -16201,7 +16225,7 @@ public class HighwayBuilderTHM extends Module {
                             // The server reads the held item for the break.
                             if (selectedSlot != slot) {
                                 InvUtils.swap(slot, false);
-                                swappedForRebreak = b.silentRebreakSwap.get();
+                                swappedForRebreak = b.allowsSilentRebreakSwap();
                             }
                             instantRebreak = true;
                         }
@@ -16302,7 +16326,7 @@ public class HighwayBuilderTHM extends Module {
                         // Offhand holds the chests, so the pickaxe keeps the main hand: place and mine share the tick.
                         placedEChest = BlockUtils.place(bp, InteractionHand.OFF_HAND, b.mc.player.getInventory().getSelectedSlot(), b.rotation.get().place, 0, false, true, false);
                     } else {
-                        placedEChest = BlockUtils.place(bp, InteractionHand.MAIN_HAND, slot, b.rotation.get().place, 0, false, true, b.silentRebreakSwap.get());
+                        placedEChest = BlockUtils.place(bp, InteractionHand.MAIN_HAND, slot, b.rotation.get().place, 0, false, true, b.allowsSilentRebreakSwap());
                     }
 
                     if (placedEChest) {
@@ -17053,7 +17077,7 @@ public class HighwayBuilderTHM extends Module {
                     boolean placingObsidian = b.isObsidianEnclosureSlot(slot);
                     boolean placed = BlockUtils.place(pos, slot == SlotUtils.OFFHAND ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND,
                         slot == SlotUtils.OFFHAND ? b.mc.player.getInventory().getSelectedSlot() : slot,
-                        b.rotation.get().place, 0, true, true, true);
+                        b.rotation.get().place, 0, true, true, b.allowsSilentSwap());
                     if (placed) {
                         b.placeTimer = b.placeDelay.get();
                         b.startEnclosurePlacementConfirmation(KitbotOrder, pos, centerTarget, label, placingObsidian);
@@ -17831,7 +17855,7 @@ public class HighwayBuilderTHM extends Module {
                         sourceReadyRetries = 0;
                         if (!BlockUtils.place(blockPos, slot == SlotUtils.OFFHAND ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND,
                             slot == SlotUtils.OFFHAND ? b.mc.player.getInventory().getSelectedSlot() : slot,
-                            b.rotation.get().place, 0, true, true, true)
+                            b.rotation.get().place, 0, true, true, b.allowsSilentSwap())
                             && b.restockDebugLog.get()) {
                             b.restockDebug("Restock.tick did not place source=%s at %s this tick; waiting for the next world probe.",
                                 sourceLabel,
@@ -18615,7 +18639,7 @@ public class HighwayBuilderTHM extends Module {
                         return true;
                     }
 
-                    if (!BlockUtils.place(blockPos, InteractionHand.MAIN_HAND, echestSlot, b.rotation.get().place, 0, true, true, true)
+                    if (!BlockUtils.place(blockPos, InteractionHand.MAIN_HAND, echestSlot, b.rotation.get().place, 0, true, true, b.allowsSilentSwap())
                         && b.restockDebugLog.get()) {
                         b.restockDebug("Food shulker return did not place an ender chest at %s this tick; waiting for the next world probe.",
                             b.formatBlockPos(blockPos)
@@ -18758,7 +18782,7 @@ public class HighwayBuilderTHM extends Module {
                         return true;
                     }
 
-                    if (!BlockUtils.place(blockPos, InteractionHand.MAIN_HAND, echestSlot, b.rotation.get().place, 0, true, true, true)
+                    if (!BlockUtils.place(blockPos, InteractionHand.MAIN_HAND, echestSlot, b.rotation.get().place, 0, true, true, b.allowsSilentSwap())
                         && b.restockDebugLog.get()) {
                         b.restockDebug("Ender chest shulker return did not place an ender chest at %s this tick; waiting for the next world probe.",
                             b.formatBlockPos(blockPos)
@@ -19171,12 +19195,11 @@ public class HighwayBuilderTHM extends Module {
                 // doubleMine() pops at most two (one normal, one packet), so stop scanning at two
                 for (MBlockPos pos : it) {
                     if (toDoubleMine.size() >= 2) break;
-                    if (b.shouldSkipSignBreak(pos.getBlockPos(), pos.getState())) continue;
+                    if (!b.canMine(pos, mineBlocksToPlace)) continue;
                     // only want to double mine blocks that we can mine, that are not instamined, and we are not already mining
                     if (
-                        b.safeCanBreak(pos.getBlockPos(), pos.getState())
-                            && (mineBlocksToPlace || !b.blocksToPlace.get().contains(pos.getState().getBlock()))
-                            && !b.safeCanInstaBreakForBreaking(pos.getBlockPos()) && (!speedMineInstamine || pos.getState().getDestroyProgress(b.mc.player, b.mc.level, pos.getBlockPos()) <= 0.5)
+                        !b.safeCanInstaBreakForBreaking(pos.getBlockPos())
+                            && (!speedMineInstamine || pos.getState().getDestroyProgress(b.mc.player, b.mc.level, pos.getBlockPos()) <= 0.5)
                             && (b.normalMining == null || !pos.getBlockPos().equals(b.normalMining.blockPos))
                             && (b.packetMining == null || !pos.getBlockPos().equals(b.packetMining.blockPos))
                     ) {
@@ -19210,6 +19233,7 @@ public class HighwayBuilderTHM extends Module {
             for (MBlockPos pos : it) {
                 if (b.count >= b.currentMineActionsThisTick()) return;
                 if (b.breakTimer > 0) return;
+                if (!b.isWithinMineRange(pos.getBlockPos())) continue;
 
                 BlockState state = pos.getState();
                 if (state.isAir() || (!mineBlocksToPlace && b.blocksToPlace.get().contains(state.getBlock()))) continue;
@@ -19257,7 +19281,8 @@ public class HighwayBuilderTHM extends Module {
 
             if (b.normalMining == null) {
                 DoubleMineBlock block = new DoubleMineBlock(b, blocks.pop());
-                b.normalMining = block.startDestroying();
+                if (!block.startDestroying()) return;
+                b.normalMining = block;
 
                 b.breakTimer = b.breakDelay.get();
                 if (b.breakTimer > 0) return;
@@ -19268,12 +19293,12 @@ public class HighwayBuilderTHM extends Module {
             if (b.packetMining == null && !blocks.isEmpty()) {
                 DoubleMineBlock block = new DoubleMineBlock(b, blocks.pop());
 
-                if (block != null) {
-                    b.packetMining = b.normalMining.packetMine();
-                    b.normalMining = block.startDestroying();
-
-                    b.breakTimer = b.breakDelay.get();
-                }
+                if (!b.isWithinMineRange(block.blockPos) || !b.isWithinMineRange(b.normalMining.blockPos)) return;
+                b.packetMining = b.normalMining.packetMine();
+                b.normalMining = null;
+                if (!block.startDestroying()) return;
+                b.normalMining = block;
+                b.breakTimer = b.breakDelay.get();
             }
         }
 
@@ -21053,12 +21078,21 @@ public class HighwayBuilderTHM extends Module {
             this.packet = false;
         }
 
-        public DoubleMineBlock startDestroying() {
+        private boolean startDestroying() {
+            if (!b.isWithinMineRange(blockPos) || !b.safeCanBreak(blockPos, blockState)) return false;
+            b.doubleMineStartSending = new ServerboundPlayerActionPacket(
+                ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, blockPos, direction);
+            b.doubleMineStartSent = false;
+            try {
+                b.mc.getConnection().send(b.doubleMineStartSending);
+                if (!b.doubleMineStartSent) return false;
+            } finally {
+                b.doubleMineStartSending = null;
+            }
             b.createOrRefreshForwardBreakCreditIfEligible(this.blockPos, this.blockState);
-            b.mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, this.blockPos, this.direction));
             b.chargeDigPackets(1);
             normalStartTime = b.mc.player.tickCount;
-            return this;
+            return true;
         }
 
         public DoubleMineBlock stopDestroying() {
@@ -21079,7 +21113,7 @@ public class HighwayBuilderTHM extends Module {
         }
 
         public boolean shouldRemove() {
-            boolean distance = !packet && !RangeUtils.isInReach(blockPos);
+            boolean distance = !packet && !b.isWithinMineRange(blockPos);
 
             // a minimum amount of time needs to have elapsed for the timeout check to occur, otherwise it may trigger
             // when it isn't supposed to due to latency

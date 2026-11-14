@@ -81,8 +81,8 @@ public class UpdaterScreen extends WindowScreen {
         AddonUpdater.Entry latest = shownEntries.stream()
             .filter(e -> e.channel() == system.updateChannel.get()).findFirst().orElse(null);
         if (shownQuit) {
-            WButton quit = buttons.add(theme.button("Quit Minecraft")).expandX().widget();
-            quit.action = () -> Minecraft.getInstance().stop();
+            WButton restart = buttons.add(theme.button(AddonUpdater.restartButtonLabel())).expandX().widget();
+            restart.action = AddonUpdater::restartMinecraft;
         } else if (!system.autoUpdate.get() && latest != null) {
             if (AddonUpdater.isInstalled(latest)) buttons.add(theme.label("Installed"));
             else {
@@ -127,7 +127,8 @@ public class UpdaterScreen extends WindowScreen {
                 if (entry.channel() != channel) continue;
                 found = true;
                 builds.add(theme.label(entry.title(), 380)).expandX();
-                if (AddonUpdater.isInstalled(entry)) builds.add(theme.label("Installed"));
+                if (AddonUpdater.isStaged(entry)) builds.add(theme.label("Ready to install"));
+                else if (AddonUpdater.isInstalled(entry)) builds.add(theme.label("Installed"));
                 else {
                     WButton install = builds.add(theme.button("Install")).widget();
                     install.action = () -> AddonUpdater.install(entry,
@@ -140,8 +141,8 @@ public class UpdaterScreen extends WindowScreen {
             if (!found) builds.add(theme.label("No builds available. Check for updates to load history."));
             add(theme.horizontalSeparator()).expandX();
             if (shownQuit) {
-                WButton quit = add(theme.button("Quit Minecraft")).expandX().widget();
-                quit.action = () -> Minecraft.getInstance().stop();
+                WButton restart = add(theme.button(AddonUpdater.restartButtonLabel())).expandX().widget();
+                restart.action = AddonUpdater::restartMinecraft;
             }
             WButton back = add(theme.button("Back to updater")).expandX().widget();
             back.action = () -> Minecraft.getInstance().gui.setScreen(new UpdaterScreen(theme));
@@ -181,15 +182,16 @@ public class UpdaterScreen extends WindowScreen {
             add(theme.horizontalSeparator("Update status")).expandX();
             status = add(theme.label(AddonUpdater.status(), 480)).expandX().widget();
             WHorizontalList buttons = add(theme.horizontalList()).expandX().widget();
-            if (AddonUpdater.isInstalled(entry)) buttons.add(theme.label("Installed"));
+            if (AddonUpdater.isStaged(entry)) buttons.add(theme.label("Ready to install"));
+            else if (AddonUpdater.isInstalled(entry)) buttons.add(theme.label("Installed"));
             else {
                 WButton install = buttons.add(theme.button("Install this build")).expandX().widget();
                 install.action = () -> AddonUpdater.install(entry,
                     () -> { if (Minecraft.getInstance().gui.screen() == this) reload(); });
             }
             if (shownQuit) {
-                WButton quit = buttons.add(theme.button("Quit Minecraft")).expandX().widget();
-                quit.action = () -> Minecraft.getInstance().stop();
+                WButton restart = buttons.add(theme.button(AddonUpdater.restartButtonLabel())).expandX().widget();
+                restart.action = AddonUpdater::restartMinecraft;
             }
             WButton back = buttons.add(theme.button("Back to builds")).expandX().widget();
             back.action = () -> Minecraft.getInstance().gui.setScreen(new HistoryScreen(theme));

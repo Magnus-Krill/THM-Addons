@@ -138,6 +138,9 @@ startup, so `THMHwyMonitor` and `HighwayTools` are registered without a separate
   Its signed feed and JAR installation live in `utils/AddonUpdater`, with server setup in the gitignored
   `UPDATER_SERVER.md`. Feed entries and downloaded JARs must match the installed `github:branch`
   and Minecraft version.
+- The updater restarts through Prism when it recognizes the instance, or starts Fabric with the
+  current Java settings and game arguments. Session arguments travel through pipes. On Windows,
+  a locked addon JAR is replaced after Minecraft exits.
 - `utils/` — shared helpers; notable ones: `THMUtils`, `ThmMembers`/`CapeManager` (backed by
   `APIUtils`), `utils/server/` (server status/reconnect), `utils/kitbot/` (KitBot chat
   integration), `utils/webp` (WebP image decoding for capes/icons), `PacketPlaceTracker` (shared
@@ -151,6 +154,8 @@ Highway", `THMAddon.PVP` = "THM PVP") via `onRegisterCategories()`. `THMTab` is 
 addon-specific settings screen — don't confuse the two when adding a new module's config surface.
 
 **Highway restock inventory:** HighwayBuilder owns supply slots 5-9 through `Manage-hotbar`. Trash limits include hotbar stacks. Offhand refills preserve reserved hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
+
+**Highway offhand build:** Disable silent hotbar swaps while `offhand-build` is on, including main-hand fallbacks and ender chest rebreaks.
 
 **Highway packet budget:** The General toggle alone controls budgeting. Reset it before tick early
 returns and initialize it before double mining. Fast Packet Build uses the allowance actually

@@ -11,15 +11,18 @@ import org.junit.jupiter.api.io.TempDir;
 import xyz.thm.addon.system.THMSystem;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
 import java.security.Signature;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +36,111 @@ class AddonUpdaterTest {
     private static final URI FEED = URI.create("https://updates.example.com/feed.json");
     private static final String COMMIT = "a".repeat(40);
     private static final String HASH = "b".repeat(64);
+
+    @Test
+    void prismRestartUsesTheCurrentInstanceIdAndDataDirectory(@TempDir Path root) throws Exception {
+        Path java = Path.of(ProcessHandle.current().info().command().orElseThrow());
+        Path launcher = root.resolve("prismlauncher.exe");
+        Files.copy(java, launcher, StandardCopyOption.COPY_ATTRIBUTES);
+        Path instance = Files.createDirectories(root.resolve("instances/Meteor Test"));
+        Files.createFile(instance.resolve("instance.cfg"));
+        Files.createFile(root.resolve("prismlauncher.cfg"));
+
+        assertEquals(List.of(launcher.toString(), "--dir", root.toString(), "--launch=Meteor Test"),
+            MinecraftRestart.prismCommand("Meteor Test", instance.toString(), launcher));
+        assertTrue(MinecraftRestart.prismCommand("Another instance", instance.toString(), launcher).isEmpty());
+        assertTrue(MinecraftRestart.prismCommand("Meteor Test", instance.toString(), java).isEmpty());
+    }
+
+    @Test
+    void restartHelperWaitsForGameExitBeforeLaunching(@TempDir Path root) throws Exception {
+        String java = ProcessHandle.current().info().command().orElseThrow();
+        Path source = root.resolve("WaitForExit.java");
+        Files.writeString(source, "class WaitForExit { void main() throws Exception { System.in.read(); } }");
+        Process game = new ProcessBuilder(java, source.toString()).start();
+        try {
+            Path helperRoot = Files.createDirectory(root.resolve("helper"));
+            Path helper = helperRoot.resolve("xyz/thm/addon/utils/MinecraftRestart.class");
+            Files.createDirectories(helper.getParent());
+            Files.write(helper, MinecraftRestart.helperBytecode());
+            Path output = root.resolve("launcher.log");
+            Path pending = Files.writeString(root.resolve("addon.pending"), "new");
+            Path installed = Files.writeString(root.resolve("addon.jar"), "old");
+            Process restart = new ProcessBuilder(java, "-cp", helperRoot.toString(), MinecraftRestart.class.getName(),
+                "wait", helperRoot.toString(), Long.toString(game.pid()), pending.toString(), installed.toString(),
+                "launcher", java, "-version")
+                .redirectErrorStream(true).redirectOutput(output.toFile()).start();
+            try {
+                MinecraftRestart.writeGameArguments(restart, new String[0]);
+                assertFalse(restart.waitFor(2, TimeUnit.SECONDS));
+                assertTrue(game.isAlive());
+                assertEquals(0, Files.size(output));
+                assertEquals("old", Files.readString(installed));
+                game.getOutputStream().close();
+                assertTrue(restart.waitFor(15, TimeUnit.SECONDS));
+                assertEquals(0, restart.exitValue(), Files.readString(output));
+                assertTrue(Files.notExists(helperRoot));
+                assertEquals("new", Files.readString(installed));
+                for (int i = 0; i < 50 && Files.size(output) == 0; i++) Thread.sleep(100);
+                assertTrue(Files.readString(output).contains("version"));
+            } finally {
+                restart.destroyForcibly();
+            }
+        } finally {
+            game.destroyForcibly();
+        }
+    }
+
+    @Test
+    void directRestartPassesGameArgumentsThroughStdin(@TempDir Path root) throws Exception {
+        Path source = root.resolve("KnotClient.java");
+        Files.writeString(source, """
+            package net.fabricmc.loader.impl.launch.knot;
+
+            public class KnotClient {
+                public static void main(String[] args) {
+                    if (!java.util.Arrays.equals(args, new String[] {
+                        "--gameDir", "A Minecraft instance", "--accessToken", "test session token"
+                    })) throw new AssertionError("Wrong game arguments");
+                    if (!"path with spaces and \\\\ quotes\\\"".equals(System.getProperty("thm.test.path")))
+                        throw new AssertionError("Wrong Java option");
+                }
+            }
+            """);
+        Path classes = Files.createDirectories(root.resolve("stub classes"));
+        String java = MinecraftRestart.javaExecutable();
+        String javac = Path.of(System.getProperty("java.home"), "bin",
+            System.getProperty("os.name").startsWith("Windows") ? "javac.exe" : "javac").toString();
+        Path output = root.resolve("restart.log");
+        Process compile = new ProcessBuilder(javac, "-d", classes.toString(), source.toString())
+            .redirectErrorStream(true).redirectOutput(output.toFile()).start();
+        try {
+            assertTrue(compile.waitFor(15, TimeUnit.SECONDS));
+            assertEquals(0, compile.exitValue(), Files.readString(output));
+        } finally {
+            compile.destroyForcibly();
+        }
+
+        Path helperRoot = Files.createDirectory(root.resolve("restart helper"));
+        Path helper = helperRoot.resolve("xyz/thm/addon/utils/MinecraftRestart.class");
+        Files.createDirectories(helper.getParent());
+        Files.write(helper, MinecraftRestart.helperBytecode());
+        Path options = helperRoot.resolve("java.args");
+        Files.write(options, List.of("-Dthm.test.path=path with spaces and \\ quotes\"", "-cp",
+            helperRoot + File.pathSeparator + classes, MinecraftRestart.class.getName(), "fabric", helperRoot.toString())
+            .stream().map(MinecraftRestart::quoteJavaArgument).toList());
+        Process restart = new ProcessBuilder(java, "@" + options).redirectErrorStream(true).redirectOutput(output.toFile()).start();
+        try {
+            MinecraftRestart.writeGameArguments(restart, new String[] {
+                "--gameDir", "A Minecraft instance", "--accessToken", "test session token"
+            });
+            assertTrue(restart.waitFor(15, TimeUnit.SECONDS));
+            assertEquals(0, restart.exitValue(), Files.readString(output));
+            assertTrue(Files.notExists(helperRoot));
+        } finally {
+            restart.destroyForcibly();
+        }
+    }
 
     @Test
     void installedMarkerTracksTheReplacementUntilRestart() throws Exception {
