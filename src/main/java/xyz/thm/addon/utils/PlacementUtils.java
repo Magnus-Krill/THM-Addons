@@ -58,9 +58,7 @@ public class PlacementUtils {
         var connection = mc.getConnection();
         if (player == null || level == null || gameMode == null || connection == null) return false;
         if (packet) {
-            if (!PacketPlaceTracker.trackUseOnSend(connection.getConnection(), hand, hit, () ->
-                ((ClientPlayerInteractionManagerTHMAccessor) gameMode).thm$sendSequencedPacket(level,
-                    sequence -> new ServerboundUseItemOnPacket(hand, hit, sequence)))) return false;
+            if (!sendSequencedPlacement(hand, hit)) return false;
             player.swing(hand);
             return true;
         }
@@ -421,5 +419,15 @@ public class PlacementUtils {
             return true;
         }
         return place.getAsBoolean();
+    }
+
+    public static boolean sendSequencedPlacement(InteractionHand hand, BlockHitResult hit) {
+        var level = mc.level;
+        var gameMode = mc.gameMode;
+        var connection = mc.getConnection();
+        if (level == null || gameMode == null || connection == null) return false;
+        return PacketPlaceTracker.trackUseOnSend(connection.getConnection(), hand, hit, () ->
+            ((ClientPlayerInteractionManagerTHMAccessor) gameMode).thm$sendSequencedPacket(level,
+                sequence -> new ServerboundUseItemOnPacket(hand, hit, sequence)));
     }
 }

@@ -12,14 +12,18 @@ import com.google.gson.JsonParser;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.ConfirmScreen;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.network.chat.Component;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.system.THMSystem;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -32,6 +36,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -49,6 +54,10 @@ public final class AddonUpdater {
     private static volatile String status = "Not checked yet";
     private static volatile boolean restartRequired;
     private static volatile Entry installedUpdate;
+    private static volatile Entry stagedUpdate;
+    private static volatile byte[] restartHelper;
+    private static Path pendingJar;
+    private static Path installedJar;
     private static boolean prompted;
 
     public record Entry(THMSystem.UpdateChannel channel, String branch, String version, String commit,
@@ -61,6 +70,42 @@ public final class AddonUpdater {
     public static boolean restartRequired() { return restartRequired; }
     public static String branch() { return currentBranch(); }
 
+    public static String restartButtonLabel() {
+        return restartHelper == null ? "Quit Minecraft" : "Restart Minecraft";
+    }
+
+    public static void restartMinecraft() {
+        Minecraft mc = Minecraft.getInstance();
+        restartMinecraft(mc, mc.gui.screen());
+    }
+
+    private static void restartMinecraft(Minecraft mc, Screen previous) {
+        if (!restartRequired || !BUSY.compareAndSet(false, true)) {
+            if (mc.gui.screen() != previous) mc.gui.setScreen(previous);
+            return;
+        }
+        try {
+            if (restartHelper != null) {
+                List<String> launcher = MinecraftRestart.launcherCommand();
+                MinecraftRestart.schedule(launcher, mc.gameDirectory.toPath(), restartHelper,
+                    launcher.isEmpty() ? FabricLoader.getInstance().getLaunchArguments(false) : new String[0],
+                    pendingJar, installedJar);
+                status = "Restarting Minecraft...";
+            }
+            mc.stop();
+        } catch (IOException | RuntimeException e) {
+            THMAddon.LOG.warn("Could not schedule Minecraft restart: {}", e.getClass().getSimpleName());
+            BUSY.set(false);
+            status = pendingJar == null ? "Automatic restart failed. Relaunch Minecraft from your launcher after quitting."
+                : "Automatic restart failed. Try the updater again to finish installing the update.";
+            mc.gui.setScreen(new ConfirmScreen(quit -> {
+                if (quit && pendingJar == null && BUSY.compareAndSet(false, true)) mc.stop();
+                else mc.gui.setScreen(previous);
+            }, Component.literal("THM Addon updated"), Component.literal(status),
+                Component.literal(pendingJar == null ? "Quit Minecraft" : "Back"), Component.literal("Later")));
+        }
+    }
+
     public static boolean isInstalled(Entry entry) {
         Entry installed = installedUpdate;
         return entry.commit().equalsIgnoreCase(installed == null ? currentCommit() : installed.commit())
@@ -68,14 +113,19 @@ public final class AddonUpdater {
             && entry.branch().equals(installed == null ? currentBranch() : installed.branch());
     }
 
+    public static boolean isStaged(Entry entry) {
+        return entry.equals(stagedUpdate);
+    }
+
     public static void promptOnTitle(Minecraft mc) {
         if (!restartRequired || prompted || !(mc.gui.screen() instanceof TitleScreen title)) return;
         prompted = true;
-        mc.gui.setScreen(new ConfirmScreen(quit -> {
-            if (quit) mc.stop();
+        String action = restartButtonLabel();
+        mc.gui.setScreen(new ConfirmScreen(restart -> {
+            if (restart) restartMinecraft(mc, title);
             else mc.gui.setScreen(title);
-        }, Component.literal("THM Addon updated"), Component.literal("Quit Minecraft to load the new JAR?"),
-            Component.literal("Quit Minecraft"), Component.literal("Later")));
+        }, Component.literal("THM Addon updated"), Component.literal(action + " to load the new JAR?"),
+            Component.literal(action), Component.literal("Later")));
     }
 
     public static void checkOnStartup() {
@@ -120,6 +170,8 @@ public final class AddonUpdater {
                     .filter(e -> e.channel() == system.updateChannel.get()).findFirst().orElse(null);
                 if (latest == null) {
                     status = "No " + branch + " builds for this channel";
+                } else if (isStaged(latest)) {
+                    status = "Ready to install " + latest.title() + " on restart.";
                 } else if (isInstalled(latest)) {
                     status = restartRequired ? "Update installed. Restart Minecraft to load it."
                         : "Already on the newest " + system.updateChannel.get() + " build";
@@ -149,6 +201,10 @@ public final class AddonUpdater {
 
     private static void installNow(Entry entry) {
         try {
+            if (isStaged(entry)) {
+                status = "Ready to install " + entry.title() + " on restart.";
+                return;
+            }
             if (isInstalled(entry)) {
                 status = restartRequired ? "This build is installed. Restart Minecraft to load it."
                     : "This build is already installed";
@@ -158,13 +214,33 @@ public final class AddonUpdater {
             status = "Downloading " + entry.title() + "...";
             byte[] jar = TrustedHttp.getBytes(entry.url(), TrustedHttp.Kind.API, MAX_JAR_BYTES);
             if (jar == null) throw new IllegalStateException("Could not download JAR");
+            if (!restartRequired) {
+                // The installed JAR may no longer contain this version of the restart helper.
+                try {
+                    restartHelper = MinecraftRestart.helperBytecode();
+                } catch (IOException e) {
+                    THMAddon.LOG.warn("Could not read Minecraft restart helper: {}", e.getClass().getSimpleName());
+                }
+            }
             Path mods = FabricLoader.getInstance().getGameDir().resolve("mods");
             Path current = FabricLoader.getInstance().getModContainer(THMAddon.MOD_ID).orElseThrow()
                 .getOrigin().getPaths().getFirst();
-            replaceJar(current, mods, jar, entry);
-            installedUpdate = entry;
+            Path previousPending = pendingJar;
+            pendingJar = replaceJar(current, mods, jar, entry, restartHelper != null
+                && System.getProperty("os.name").toLowerCase(Locale.ROOT).startsWith("windows"));
+            installedJar = pendingJar == null ? null : current.toRealPath();
+            if (previousPending != null) {
+                try {
+                    Files.deleteIfExists(previousPending);
+                } catch (IOException e) {
+                    THMAddon.LOG.warn("Could not remove the previous staged update: {}", e.getClass().getSimpleName());
+                }
+            }
+            installedUpdate = pendingJar == null ? entry : installedUpdate;
+            stagedUpdate = pendingJar == null ? null : entry;
             restartRequired = true;
-            status = "Installed " + entry.title() + ". Restart Minecraft to load it.";
+            status = pendingJar == null ? "Installed " + entry.title() + ". Restart Minecraft to load it."
+                : "Ready to install " + entry.title() + " on restart.";
         } catch (Exception e) {
             status = "Install failed: " + safeMessage(e);
             THMAddon.LOG.warn("Updater install failed: {}", safeMessage(e));
@@ -172,6 +248,10 @@ public final class AddonUpdater {
     }
 
     static void replaceJar(Path current, Path mods, byte[] bytes, Entry entry) throws Exception {
+        replaceJar(current, mods, bytes, entry, false);
+    }
+
+    static Path replaceJar(Path current, Path mods, byte[] bytes, Entry entry, boolean deferLockedJar) throws Exception {
         status = "Verifying downloaded JAR...";
         byte[] expected = HexFormat.of().parseHex(entry.sha256());
         if (bytes.length > MAX_JAR_BYTES || !MessageDigest.isEqual(
@@ -187,15 +267,23 @@ public final class AddonUpdater {
             throw new IllegalStateException("Addon JAR must be directly inside the mods folder");
         }
         Path pending = Files.createTempFile(mods, ".thm-update-", ".pending");
+        boolean deferred = false;
         try {
             Files.write(pending, bytes);
             status = "Checking addon JAR metadata...";
             validateJar(pending, entry);
             status = "Replacing current addon JAR...";
             Files.copy(current, mods.resolve("thm-addon-previous.jar.bak"), StandardCopyOption.REPLACE_EXISTING);
-            Files.move(pending, current, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            try {
+                Files.move(pending, current, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (FileSystemException e) {
+                if (!deferLockedJar || e instanceof AtomicMoveNotSupportedException) throw e;
+                deferred = true;
+                return pending;
+            }
+            return null;
         } finally {
-            Files.deleteIfExists(pending);
+            if (!deferred) Files.deleteIfExists(pending);
         }
     }
 

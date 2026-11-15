@@ -107,6 +107,17 @@ public final class PacketPlaceTracker {
         INSTANCE.markSent(pos.asLong(), mc.level.getGameTime(), resendTicks);
     }
 
+    public static void markSentForTimedRetry(BlockPos pos, int delay) {
+        if (mc.level == null) return;
+        INSTANCE.markSentForTimedRetry(pos.asLong(), mc.level.getGameTime(), delay);
+    }
+
+    void markSentForTimedRetry(long key, long now, int delay) {
+        markSent(key, now, delay);
+        // A negative interval expires locally instead of sending a probe.
+        resendTicks.put(key, -Math.max(1, delay));
+    }
+
     boolean canSend(long key) {
         return !sentAt.containsKey(key);
     }
@@ -137,7 +148,9 @@ public final class PacketPlaceTracker {
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
-        for (Long pos; (pos = answered.poll()) != null; ) forget(pos);
+        for (Long pos; (pos = answered.poll()) != null; ) {
+            if (resendTicks.get(pos.longValue()) >= 0) forget(pos);
+        }
         if (sentAt.isEmpty() || mc.level == null || mc.player == null) {
             listening = !sentAt.isEmpty();
             return;
@@ -164,10 +177,10 @@ public final class PacketPlaceTracker {
                 resendTicks.remove(key);
                 continue;
             }
-            if (now >= entry.getLongValue() && now - entry.getLongValue() < resendTicks.get(key)) continue;
+            int interval = resendTicks.get(key);
+            if (now >= entry.getLongValue() && now - entry.getLongValue() < Math.abs(interval)) continue;
 
-            if (!canProbe) {
-                // Nothing safe to ask with: let it be placed again rather than stall.
+            if (interval < 0 || !canProbe) {
                 it.remove();
                 resendTicks.remove(key);
                 continue;

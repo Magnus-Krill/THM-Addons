@@ -112,6 +112,7 @@ public final class HighwayPresetManager {
             boolean migrated = moveLegacySetting(settingsJson, "mine-lookahead", "Digging");
             migrated |= moveLegacySetting(settingsJson, "predictive-echest-replace", "Ender Chests");
             migrated |= moveLegacySetting(settingsJson, "packet-budget", "General");
+            migrated |= moveLegacySetting(settingsJson, "packet-build-pacing", "Paving");
             validateSettings(settingsJson, validateModuleSettings);
             Tag settings = JsonOps.INSTANCE.convertTo(NbtOps.INSTANCE, settingsJson);
             if (!(settings instanceof CompoundTag compound)) throw new IOException("Settings must be an object.");
