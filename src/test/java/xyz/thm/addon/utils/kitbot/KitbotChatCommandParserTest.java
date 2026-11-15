@@ -61,6 +61,25 @@ class KitbotChatCommandParserTest {
     }
 
     @Test
+    void recognizesProgressCommandsWithoutAnUpdateHomeRequest() {
+        assertEquals("dug/ringroad", KitbotChatCommandParser.loopUpdateTarget("$update DUG/RINGROAD"));
+        assertEquals("diamond", KitbotChatCommandParser.loopUpdateTarget("$update diamond"));
+        assertEquals("dug1.25m", KitbotChatCommandParser.loopUpdateTarget("$update dug1.25M"));
+        assertEquals("500k", KitbotChatCommandParser.loopUpdateTarget("$update 500k"));
+        assertNull(KitbotChatCommandParser.loopUpdateTarget("$update dugN"));
+        assertNull(KitbotChatCommandParser.loopUpdateTarget("$update ringroad 1000"));
+    }
+
+    @Test
+    void updatesWithoutADirectionArgument() {
+        ParseResult result = parse("$update");
+        assertTrue(result.isValid());
+        assertEquals(CommandType.Update, result.request().type());
+        assertNull(result.request().direction());
+        assertEquals(FollowUpKind.TPY, result.request().defaultFollowUpKind());
+    }
+
+    @Test
     void everyDirectionRoundTrips() {
         for (KitbotFrontend.Direction d : KitbotFrontend.Direction.values()) {
             ParseResult r = parse("$update " + d.command);
@@ -71,7 +90,7 @@ class KitbotChatCommandParserTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"$goto", "$goto X", "$goto N S", "$update", "$update north"})
+    @ValueSource(strings = {"$goto", "$goto X", "$goto N S", "$update north"})
     void rejectsBadDirections(String text) {
         ParseResult r = parse(text);
         assertEquals(ParseStatus.INVALID, r.status());

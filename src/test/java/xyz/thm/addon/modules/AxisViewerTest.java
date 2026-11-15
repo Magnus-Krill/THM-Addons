@@ -103,6 +103,21 @@ class AxisViewerTest {
     }
 
     @Test
+    void detectsAnApprovedDiamondAcrossTheFullRoadWidth() {
+        var direction = HorizontalDirection.SouthEast;
+        var start = new Vec3(373.5, 120, -632.5);
+        var end = new Vec3(597.5, 120, -396.5);
+        assertTrue(AxisViewer.isOnHighway(start.x, start.z, true));
+        assertEquals("diamond-1000", AxisViewer.highwayRouteAt(start.x, start.z, true, direction));
+        assertEquals("diamond-1000", AxisViewer.highwayRouteAt(end.x, end.z, true, direction));
+        assertEquals("diamond-1000", AxisViewer.highwayRoute(start, end, true, direction));
+        assertEquals("0,370,600", AxisViewer.loopProgressLeg("diamond-1000", start, end, direction));
+        assertEquals("other", AxisViewer.highwayRouteAt(start.x + 2, start.z, true, direction));
+        assertEquals("other", AxisViewer.highwayRouteAt(10_000.5, -24_999.5, true, direction), "unknown radii stay other");
+        assertEquals("other", AxisViewer.highwayRouteAt(start.x, start.z, false, direction));
+    }
+
+    @Test
     void rewardEligibilityIncludesAxesGridAndExtensionsButNotUnmappedTerrain() {
         assertTrue(AxisViewer.isOnHighway(0.5, 1234567.5, false));
         assertTrue(AxisViewer.isOnHighway(-1234566.5, 1234567.5, false));

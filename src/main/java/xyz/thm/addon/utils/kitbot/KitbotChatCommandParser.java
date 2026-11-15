@@ -15,6 +15,9 @@ import java.util.*;
 
 public final class KitbotChatCommandParser {
     private static final List<String> COMMANDS = List.of("goto", "update", "kit", "send", "token", "claim");
+    private static final List<String> LOOP_UPDATES = List.of(
+        "ringroad", "diamond", "dug/ringroad", "dug/diamond", "pave/ringroad", "pave/diamond");
+    private static final java.util.regex.Pattern SHORT_RING = java.util.regex.Pattern.compile("(?:dug)?[1-9]\\d*(?:\\.\\d+)?[km]");
     private static final List<String> ALL_DIRECTIONS = List.of(
         "N", "NE", "E", "SE", "S", "SW", "W", "NW",
         "dugN", "dugNE", "dugE", "dugSE", "dugS", "dugSW", "dugW", "dugNW"
@@ -24,7 +27,7 @@ public final class KitbotChatCommandParser {
         "9", "10", "11", "12", "13", "14", "15", "16"
     );
     private static final String GOTO_USAGE = "Usage: $goto <direction> (e.g. dugN, N).";
-    private static final String UPDATE_USAGE = "Usage: $update <direction> (e.g. dugN, N).";
+    private static final String UPDATE_USAGE = "Usage: $update [direction or ring name] (e.g. dugN, dug1.25m).";
     private static final String KIT_USAGE = "Usage: $kit <kit> [amount].";
     private static final String SEND_USAGE = "Usage: $send <player> <kit> [amount].";
 
@@ -80,6 +83,11 @@ public final class KitbotChatCommandParser {
         }
     }
 
+    static String loopUpdateTarget(String message) {
+        String[] words = message.trim().toLowerCase(Locale.ROOT).split("\\s+");
+        return words.length == 2 && words[0].equals("$update") && (LOOP_UPDATES.contains(words[1]) || SHORT_RING.matcher(words[1]).matches()) ? words[1] : null;
+    }
+
     public static ParseResult parse(String rawText, Collection<String> onlinePlayers) {
         return parse(rawText, onlinePlayers, KitbotKitCatalog.getKits());
     }
@@ -98,7 +106,9 @@ public final class KitbotChatCommandParser {
 
         return switch (command) {
             case "goto" -> parseDirectional(CommandType.Goto, KitbotFrontend.Mode.Goto, tokens, GOTO_USAGE);
-            case "update" -> parseDirectional(CommandType.Update, KitbotFrontend.Mode.Update, tokens, UPDATE_USAGE);
+            case "update" -> tokens.length == 1
+                ? new ParseResult(ParseStatus.VALID, new CommandRequest(CommandType.Update, KitbotFrontend.Mode.Update, null, null, null, 1), null)
+                : parseDirectional(CommandType.Update, KitbotFrontend.Mode.Update, tokens, UPDATE_USAGE);
             case "kit" -> parseKit(tokens, kits);
             case "send" -> parseSend(tokens, onlinePlayers == null ? List.of() : onlinePlayers, kits);
             case "token" -> parseNoArg(CommandType.Token, KitbotFrontend.Mode.Token, tokens, "Usage: $token.");
@@ -233,7 +243,11 @@ public final class KitbotChatCommandParser {
         List<String> complete = state.completeTokens();
         String current = state.currentToken();
 
-        if (complete.size() == 1) return matchIgnoreCasePrefix(ALL_DIRECTIONS, current);
+        if (complete.size() == 1) {
+            List<String> directions = matchIgnoreCasePrefix(ALL_DIRECTIONS, current);
+            if (command.equals("update")) directions.addAll(matchIgnoreCasePrefix(LOOP_UPDATES, current));
+            return directions;
+        }
 
         return Collections.emptyList();
     }

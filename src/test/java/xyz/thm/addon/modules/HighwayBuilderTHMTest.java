@@ -8,12 +8,15 @@ package xyz.thm.addon.modules;
 
 import meteordevelopment.meteorclient.utils.misc.HorizontalDirection;
 import meteordevelopment.meteorclient.utils.player.SlotUtils;
+import net.minecraft.SharedConstants;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.network.protocol.game.GamePacketTypes;
+import net.minecraft.server.Bootstrap;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.Test;
 import xyz.thm.addon.modules.HighwayBuilderTHM.State;
@@ -24,6 +27,26 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class HighwayBuilderTHMTest {
+    @Test
+    void allowsManualUpdateWhenBuildingTowardSpawn() {
+        assertTrue(HighwayBuilderTHM.isMainHighwayPosition(0.5, 1_000_000.5, HorizontalDirection.North));
+        assertFalse(HighwayBuilderTHM.isOutboundMainHighway(0.5, 1_000_000.5, true, HorizontalDirection.North));
+        assertFalse(HighwayBuilderTHM.isMainHighwayPosition(21.5, 1_000_000.5, HorizontalDirection.North));
+    }
+
+    @Test
+    void projectsProgressOnOneOfficialLoopLegInTheBuildDirection() {
+        Vec3 from = new Vec3(-899.5, 120, -999.5), to = new Vec3(100.5, 120, -999.5);
+        assertEquals("0,100,1100", AxisViewer.loopProgressLeg("ring-1000", from, to, HorizontalDirection.East));
+        assertEquals("0,1100,100", AxisViewer.loopProgressLeg("ring-1000", to, from, HorizontalDirection.West));
+        assertEquals("", AxisViewer.loopProgressLeg("ring-1000", from, to, HorizontalDirection.West));
+        assertEquals("", AxisViewer.loopProgressLeg("ring-1000", from, to.add(0, 0, 10), HorizontalDirection.East));
+        assertEquals("", AxisViewer.loopProgressLeg("ring-1001", from, to, HorizontalDirection.East));
+        assertEquals("", AxisViewer.loopProgressLeg("unlisted-ring-1000", from, to, HorizontalDirection.East));
+        assertEquals("0,25,500", AxisViewer.loopProgressLeg("diamond-1000",
+            new Vec3(25.5, 120, -974.5), new Vec3(500.5, 120, -499.5), HorizontalDirection.SouthEast));
+    }
+
     @Test
     void legacyAlignmentPreferenceMigratesWithoutChangingTheSavedPreset() {
         CompoundTag legacy = new CompoundTag();
@@ -285,6 +308,24 @@ class HighwayBuilderTHMTest {
     }
 
     @Test
+    void customStatusModeUsesBuildMaterialsBeforeTheExistingFloor() {
+        SharedConstants.tryDetectVersion();
+        Bootstrap.bootStrap();
+        var custom = THMSystem.Mode.None;
+        var paving = THMSystem.Mode.HighwayBuilding;
+        var digging = THMSystem.Mode.HighwayDigging;
+        assertEquals(":pave", HighwayBuilderTHM.apiModeSuffix(
+            HighwayBuilderTHM.modeForStatus(custom, List.of(Blocks.OBSIDIAN, Blocks.CRYING_OBSIDIAN), () -> true)));
+        assertEquals(":dig", HighwayBuilderTHM.apiModeSuffix(
+            HighwayBuilderTHM.modeForStatus(custom, List.of(Blocks.NETHERRACK, Blocks.BLACKSTONE), () -> false)));
+        assertEquals(digging, HighwayBuilderTHM.modeForStatus(custom, List.of(), () -> false));
+        assertEquals(digging, HighwayBuilderTHM.modeForStatus(digging, List.of(Blocks.OBSIDIAN), () -> false));
+        assertEquals(paving, HighwayBuilderTHM.modeForStatus(paving, List.of(Blocks.NETHERRACK), () -> true));
+        assertEquals(digging, HighwayBuilderTHM.modeForStatus(custom, List.of(Blocks.STONE), () -> true));
+        assertEquals(paving, HighwayBuilderTHM.modeForStatus(custom, List.of(Blocks.OBSIDIAN, Blocks.NETHERRACK), () -> false));
+    }
+
+    @Test
     void automaticKitbotUpdatesRequireOutboundTravelOnTheMainRoad() {
         for (var direction : HorizontalDirection.values()) {
             double x = 0.5 + direction.offsetX * 20_000;
@@ -297,25 +338,6 @@ class HighwayBuilderTHMTest {
         assertFalse(HighwayBuilderTHM.isOutboundMainHighway(12500.5, 12500.5, true, HorizontalDirection.SouthWest));
         assertFalse(HighwayBuilderTHM.isOutboundMainHighway(5000.5, 7500.5, true, HorizontalDirection.South));
         assertFalse(HighwayBuilderTHM.isOutboundMainHighway(0.5, 0.5, true, HorizontalDirection.North));
-    }
-
-    @Test
-    void declaredRoadTypeAppliesToUnmappedAndOverlappingGridSegments() {
-        assertEquals("unlisted-ring", HighwayBuilderTHM.UnmappedRoad.Ring.reportRoute("other"));
-        assertEquals("unlisted-ring", HighwayBuilderTHM.UnmappedRoad.Ring.reportRoute("grid"));
-        assertEquals("unlisted-diamond", HighwayBuilderTHM.UnmappedRoad.Diamond.reportRoute("other"));
-        assertEquals("grid", HighwayBuilderTHM.UnmappedRoad.Auto.reportRoute("grid"));
-        assertEquals("main", HighwayBuilderTHM.UnmappedRoad.Ring.reportRoute("main"));
-        assertEquals("ring-62500", HighwayBuilderTHM.UnmappedRoad.Diamond.reportRoute("ring-62500"));
-        assertEquals("diamond-25000", HighwayBuilderTHM.UnmappedRoad.Ring.reportRoute("diamond-25000"));
-    }
-
-    @Test
-    void unlistedStatusUsesTheRadiusFromTheWorkingSide() {
-        assertEquals("unlisted-ring-35000", HighwayBuilderTHM.UnmappedRoad.Ring.statusRoute("grid", -34999.5, 100.5, HorizontalDirection.South));
-        assertEquals("unlisted-ring-35000", HighwayBuilderTHM.UnmappedRoad.Ring.statusRoute("other", 100.5, 35000.5, HorizontalDirection.East));
-        assertEquals("unlisted-diamond-35000", HighwayBuilderTHM.UnmappedRoad.Diamond.statusRoute("other", 10000.5, -24999.5, HorizontalDirection.SouthEast));
-        assertEquals("ring-62500", HighwayBuilderTHM.UnmappedRoad.Ring.statusRoute("ring-62500", 62500.5, 100.5, HorizontalDirection.South));
     }
 
     @Test

@@ -359,7 +359,7 @@ public class KitbotFrontend extends Module {
         boolean autoTransport
     ) {
         private static ManagedRequest directional(KitbotChatCommandParser.CommandType type, Mode mode, Direction direction, boolean autoTransport) {
-            if (direction == null) return null;
+            if (direction == null && mode != Mode.Update) return null;
             return new ManagedRequest(type, mode, direction, null, null, 1, autoTransport);
         }
 
@@ -395,7 +395,7 @@ public class KitbotFrontend extends Module {
         private String commandString() {
             return switch (mode) {
                 case Goto -> "/msg " + KITBOT_NAME + " $goto " + direction.command;
-                case Update -> "/msg " + KITBOT_NAME + " $update " + direction.command;
+                case Update -> "/msg " + KITBOT_NAME + " $update" + (direction == null ? "" : " " + direction.command);
                 case Kit -> String.format(Locale.ROOT, "/msg %s $kit %s %d", KITBOT_NAME, kitLabel, amount);
                 case Send -> String.format(Locale.ROOT, "/msg %s $send %s %s %d", KITBOT_NAME, playerName, kitLabel, amount);
                 case Token -> "/msg " + KITBOT_NAME + " $token";
@@ -665,7 +665,8 @@ public class KitbotFrontend extends Module {
             if (UPDATE_CANT_PATTERN.matcher(message).find()) {
                 return failureActionsLocked(FailureReason.PermissionDenied, message, "You are not allowed to issue that update.", now);
             }
-            if (UPDATE_REQUESTED_PATTERN.matcher(message).find() || UPDATE_HIGHWAY_REQUESTED_PATTERN.matcher(message).find()) {
+            if (UPDATE_REQUESTED_PATTERN.matcher(message).find() || UPDATE_HIGHWAY_REQUESTED_PATTERN.matcher(message).find()
+                || message.contains("You have requested a highway update, sending tpa")) {
                 return new PendingActions(progressLocked(message, now), null, null, null);
             }
             if (message.contains("Teleport failed or timed out")) {
@@ -682,6 +683,18 @@ public class KitbotFrontend extends Module {
             }
             if (UPDATE_DISTANCE_PATTERN.matcher(message).find()) {
                 return failureActionsLocked(FailureReason.PermissionDenied, message, "That update is too far from the last point. Contact Highwayman or above.", now);
+            }
+            if (activeRequest.direction == null) {
+                if (message.contains("This progress is already on the map.")
+                    || (message.contains("Saved ") && message.contains(" progress ("))) {
+                    return new PendingActions(succeedLocked(message, now), null, null, null);
+                }
+                if (message.contains("Enable Send-Status in HighwayBuilder")
+                    || message.contains("Automatic updates require a main highway")
+                    || message.contains("Could not save highway progress")
+                    || message.contains("Stand on a main highway where KitBot can see you")) {
+                    return failureActionsLocked(FailureReason.GenericError, message, null, now);
+                }
             }
             if (UPDATE_SUCCESS_PATTERN.matcher(message).find()) {
                 LifecycleEvent successEvent = succeedLocked(message, now);

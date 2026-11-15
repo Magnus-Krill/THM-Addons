@@ -28,10 +28,10 @@ Applying a different profile saves the complete current HighwayBuilder configura
 For users upgrading from an earlier version, the existing HighwayBuilder configuration becomes the `None` profile baseline. Selecting or applying `None` does not force preset values over those settings.
 
 With status logging enabled, HighwayBuilder reports `pave` for `HighwayBuilding` and `dig` for
-`HighwayDigging` on startup, profile changes and the usual five-minute status interval. Kitbot
-uses a recent confirmation for the status board and API proof-of-work classification on the same
-direction. `None` sends the original status format without a mode field, so Kitbot estimates from
-block counts. Proof-of-work validation still applies.
+`HighwayDigging` on startup, work-mode changes and the usual five-minute status interval. With `None`,
+HighwayBuilder reports the mode from its configured placement materials. Custom materials
+without a clear mode use the floor and height when building starts. Kitbot uses the mode
+for the status board, map checkpoints, and recent same-direction proof-of-work classification.
 
 Status and proof-of-work submissions include the addon version. Proof of work also checks the
 Axis Viewer network: axes, Nether rings, diamonds, grid roads and extensions keep their normal
@@ -231,12 +231,16 @@ migrate in module configs, Highway Profiles and custom presets.
 
 | Setting | Default / Options | What to change it for |
 | --- | --- | --- |
-| `kitbot-update-on-finish` | `true` | Updates the outbound main highway on finish before disconnecting. |
-| `kitbot-periodic-update` | `true` | Sends periodic `$update` requests while building away from spawn on a main highway. |
+| `kitbot-update-on-finish` | `true` | Updates the outbound main highway or saves official loop progress when building stops. |
+| `kitbot-periodic-update` | `true` | Updates the outbound main highway or checkpoints official loop progress while building. |
 | `kitbot-update-interval-minutes` | `30`, range `30-60` | Minutes between automatic updates (minimum 30 so KitBot1 is not flooded). Changing it restarts the countdown unless an update is pending. The countdown uses real time and survives relogs; it only starts fresh after the builder was inactive for more than 10 minutes. |
 
-Periodic and finish `$update` requests share KitBot Frontend's request window with kit orders.
-Both require a main axis or main diagonal in the 6b6t Nether and a build direction away from spawn.
+Main-road updates share KitBot Frontend's request window with kit orders and require an outbound main axis or diagonal.
+The add-on detects approved Nether rings and diamonds from your building position and direction.
+Send-Status reports the measured part of the leg.
+Use `$update` to let KitBot read your latest authenticated mode and route. For a main highway, KitBot checks your position after teleporting to choose the axis.
+Ring names such as `$update dug1.25m` and `$update 500k` also check the reported radius and mode.
+Loop checkpoints require no teleport or home.
 Updates wait during queued or active restocks and collection. A restock order waits for an
 outstanding update's request window to close. Periodic update failures report a warning and leave
 the restock order alone. Stopping during restock skips the finish update.
@@ -377,8 +381,8 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 
 | Setting | Default / Range / Options | Visible when | Behavior |
 | --- | --- | --- | --- |
-| `kitbot-update-on-finish` | `true` | Always | Updates the outbound main highway on finish before disconnecting. |
-| `kitbot-periodic-update` | `true` | Always | Updates the outbound main highway while building and defers during restock. |
+| `kitbot-update-on-finish` | `true` | Always | Updates the outbound main highway or saves official loop progress when building stops. |
+| `kitbot-periodic-update` | `true` | Always | Updates the outbound main highway or checkpoints official loop progress. |
 | `kitbot-update-interval-minutes` | `30`, range `30-60` | `kitbot-periodic-update` is on | Minutes between automatic updates; real-time countdown that survives relogs. |
 
 ### THM-HighwayBuilder: Experimental
@@ -423,11 +427,10 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | --- | --- | --- | --- |
 | `print-statistics` | `true` | Always | Prints HighwayBuilder statistics in chat when the module disables. |
 | `auto-screenshot-statistics` | `false` | `print-statistics` is on | Captures chat or disconnect statistics after rendering. |
-| `Send-Status` | `true` | Always | Sends a status update every 5 minutes with digging/paving, axis, name, and API token. |
+| `Send-Status` | `true` | Always | Sends build mode, direction, and measured official loop progress every five minutes. |
 | `sends-statistics(Webhook)` | `false` | `print-statistics` is on | Sends HighwayBuilder statistics to a webhook when the module disables. |
 | `webhook` | `MyWebhookInHere` | `print-statistics` and `sends-statistics(Webhook)` are on | Webhook URL used for statistics delivery. |
 | `sends-statistics(API)` | `false` | `print-statistics` is on | Sends statistics to the API when the module disables. |
-| `unmapped-road` | `Auto` | API statistics are on | Select `Ring` or `Diamond` for an unlisted route, including where it overlaps the grid. Main highways and listed rings and diamonds are detected automatically. |
 
 Proof screenshots wait for two completed visible frames. Disconnect captures wait up to 30 seconds
 for the matching reason and statistics screen, with loading overlays cleared. Chat captures wait

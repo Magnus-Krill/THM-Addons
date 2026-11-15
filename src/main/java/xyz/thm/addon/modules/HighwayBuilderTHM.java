@@ -270,6 +270,11 @@ public class HighwayBuilderTHM extends Module {
 
     private boolean suppressThmHwyMonitorSync;
 
+    private static final class HighwayMaterials {
+        private static final List<Block> PAVING = List.of(Blocks.OBSIDIAN, Blocks.CRYING_OBSIDIAN, Blocks.NETHERITE_BLOCK);
+        private static final List<Block> DIGGING = List.of(Blocks.NETHERRACK, Blocks.BASALT, Blocks.BLACKSTONE, Blocks.SOUL_SOIL);
+    }
+
     public enum Floor implements DescribedOption {
         Replace,
         PlaceMissing;
@@ -871,14 +876,14 @@ public class HighwayBuilderTHM extends Module {
 
     private final Setting<Boolean> kitbotUpdateOnFinish = sgKitBotIntegration.add(new BoolSetting.Builder()
         .name("kitbot-update-on-finish")
-        .description("Updates the outbound main highway on finish before disconnecting.")
+        .description("Updates the main highway or saves mapped loop progress when building stops.")
         .defaultValue(true)
         .build()
     );
 
     private final Setting<Boolean> kitbotPeriodicUpdate = sgKitBotIntegration.add(new BoolSetting.Builder()
         .name("kitbot-periodic-update")
-        .description("Periodically updates the main highway while building away from spawn.")
+        .description("Periodically updates the main highway or saves mapped loop progress.")
         .defaultValue(true)
         .build()
     );
@@ -1144,6 +1149,7 @@ public class HighwayBuilderTHM extends Module {
         .name("blocks-to-place")
         .description("Blocks it is allowed to place.")
         .defaultValue(Blocks.OBSIDIAN)
+        .onChanged(blocks -> this.customStatusMode = null)
         .filter(block -> Block.isShapeFullBlock(block.defaultBlockState().getCollisionShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO)))
         .build()
     );
@@ -1801,7 +1807,7 @@ public class HighwayBuilderTHM extends Module {
 
     private final Setting<Boolean> statuslog = sgStatistics.add(new BoolSetting.Builder()
         .name("Send-Status")
-        .description("Sends the status every 5 min (Digging/Paving,Axis,Name,hash)")
+        .description("Reports build mode, direction, and mapped ring or diamond progress to KitBot.")
         .defaultValue(true)
         .build()
     );
@@ -1832,14 +1838,6 @@ public class HighwayBuilderTHM extends Module {
         .description("Sends statistics to a Api when disabling Highway Builder.")
         .defaultValue(false)
         .visible(printStatistics::get)
-        .build()
-    );
-
-    private final Setting<UnmappedRoad> unmappedRoad = sgStatistics.add(new EnumSetting.Builder<UnmappedRoad>()
-        .name("unmapped-road")
-        .description("Declares the type of an unmapped road for status and statistics.")
-        .defaultValue(UnmappedRoad.Auto)
-        .visible(() -> statuslog.get() || printStatistics.get() && sendStatisticsapi.get())
         .build()
     );
 
@@ -1919,6 +1917,12 @@ public class HighwayBuilderTHM extends Module {
     private long lastTickDebugAtMs;
     private int placeTimer, breakTimer, count, syncId, statusLogTimer;
     private THMSystem.Mode statusLogMode;
+    private THMSystem.Mode customStatusMode;
+    private THMSystem.Mode loopProgressMode;
+    private HorizontalDirection loopProgressDirection;
+    private Vec3 loopProgressStart;
+    private int loopProgressStartWork;
+    private long lastStatusTimestamp;
     private int forwardMineCount, forwardPlaceCount;
     private int forwardLatchedPlaceSlot = -1;
     private int forwardLatchedMineSlot = -1;
@@ -2442,39 +2446,6 @@ public class HighwayBuilderTHM extends Module {
         }
     }
 
-    public enum UnmappedRoad implements DescribedOption {
-        Auto("other", "Use automatic road detection."),
-        Ring("unlisted-ring", "Report an unmapped road as an unlisted ring."),
-        Diamond("unlisted-diamond", "Report an unmapped road as an unlisted diamond.");
-
-        private final String routeId;
-        private final String description;
-
-        UnmappedRoad(String routeId, String description) {
-            this.routeId = routeId;
-            this.description = description;
-        }
-
-        @Override
-        public String description() { return description; }
-
-        String reportRoute(String detected) {
-            return this != Auto && (detected.equals("other") || detected.equals("grid")) ? routeId : detected;
-        }
-
-        String statusRoute(String detected, double x, double z, HorizontalDirection direction) {
-            String route = reportRoute(detected);
-            double radius;
-            if (route.equals("unlisted-ring") && !direction.diagonal) {
-                radius = Math.abs((direction.offsetX == 0 ? x : z) - 0.5);
-            } else if (route.equals("unlisted-diamond") && direction.diagonal) {
-                radius = Math.abs(x - 0.5) + Math.abs(z - 0.5);
-            } else return route;
-            long rounded = Math.round(radius);
-            return rounded > 0 && rounded <= 30_000_000 ? route + "-" + rounded : route;
-        }
-    }
-
     public enum WebhookContent implements DescribedOption {
         Text,
         Image,
@@ -2817,42 +2788,95 @@ public class HighwayBuilderTHM extends Module {
         return null;
     }
 
-    private void sendStatusLog() {
-        if (!statuslog.get() || mc.player == null || mc.level == null || dir == null) return;
+    private String currentLoopRoute() {
+        if (mc.player == null || mc.level == null || mc.level.dimension() != Level.NETHER || dir == null) return "";
+        String route = AxisViewer.highwayRouteAt(mc.player.getX(), mc.player.getZ(), true, dir);
+        return AxisViewer.isOfficialLoop(route) ? route : "";
+    }
 
-        // Silent on purpose — see enforceCreativeStatisticsGuard().
-        if (mc.player.isCreative()) {
-            highwayDebug("HB status log skipped: player is in creative.");
-            return;
+    public boolean canRequestDetectedUpdate() {
+        if (mc.player == null || mc.level == null || isNot6B6T() || mc.level.dimension() != Level.NETHER) return false;
+        return isMainHighwayPosition(mc.player.getX(), mc.player.getZ(), dir) || !currentLoopRoute().isEmpty();
+    }
+
+    static boolean isMainHighwayPosition(double x, double z, HorizontalDirection direction) {
+        return THMUtils.getCurrentHighway(x, z, true, direction) != null;
+    }
+
+    public boolean canRequestLoopUpdate(String target) {
+        String kind = target.endsWith("diamond") ? "diamond-" : "ring-";
+        return isActive() && !isNot6B6T() && currentLoopRoute().startsWith(kind);
+    }
+
+    static THMSystem.Mode modeForStatus(THMSystem.Mode profile, List<Block> materials, BooleanSupplier useDugFloor) {
+        if (profile != THMSystem.Mode.None) return profile;
+        if (materials.isEmpty()) return THMSystem.Mode.HighwayDigging;
+        boolean paving = false;
+        boolean digging = false;
+        for (Block material : materials) {
+            paving |= HighwayMaterials.PAVING.contains(material);
+            digging |= HighwayMaterials.DIGGING.contains(material);
         }
+        if (paving != digging) return paving ? THMSystem.Mode.HighwayBuilding : THMSystem.Mode.HighwayDigging;
+        return useDugFloor.getAsBoolean() ? THMSystem.Mode.HighwayDigging : THMSystem.Mode.HighwayBuilding;
+    }
 
+    private THMSystem.Mode currentStatusMode() {
+        return modeForStatus(THMSystem.get().getMode(), blocksToPlace.get(), this::customStatusUsesDugFloor);
+    }
+
+    private boolean customStatusUsesDugFloor() {
+        // Keep the fallback stable as a custom run moves between paved and dug floor.
+        if (customStatusMode == null) {
+            customStatusMode = inferDugModeForUpdate(false, false) ? THMSystem.Mode.HighwayDigging : THMSystem.Mode.HighwayBuilding;
+        }
+        return customStatusMode == THMSystem.Mode.HighwayDigging;
+    }
+
+    private void trackLoopProgress(THMSystem.Mode mode) {
+        if (loopProgressStart != null && loopProgressMode == mode && loopProgressDirection == dir) return;
+        loopProgressStart = mc.player.position();
+        loopProgressMode = mode;
+        loopProgressDirection = dir;
+        loopProgressStartWork = mode == THMSystem.Mode.HighwayDigging ? blocksBroken : blocksPlaced;
+    }
+
+    private boolean sendStatusLog(boolean saveLoop) {
+        if (!statuslog.get() || mc.player == null || mc.level == null || dir == null || mc.player.isCreative()) return false;
         if (isNot6B6T()) {
             warning("Status not sent. You are not on 6B6T");
-            return;
+            return false;
         }
-        if (THMSystem.get() == null || !THMSystem.get().hasApiToken()) {
+        THMSystem system = THMSystem.get();
+        if (system == null || !system.hasApiToken()) {
             warning("Status not sent. No valid API token set - get one from the Discord bot's player panel.");
-            return;
+            return false;
         }
 
+        THMSystem.Mode mode = currentStatusMode();
+        trackLoopProgress(mode);
         String playerName = mc.player.getName().tryCollapseToString();
-        String axis = dir.toString();
-
-        String mode = apiModeSuffix(THMSystem.get().getMode());
         double x = mc.player.getX(), z = mc.player.getZ();
-        String detectedRoute = AxisViewer.highwayRouteAt(x, z, mc.level.dimension() == Level.NETHER, dir);
-        String route = unmappedRoad.get().statusRoute(detectedRoute, x, z, dir);
-        String statusMessage = String.format("%s:%s:%d:%d:%s%s:route=%s",
-            playerName,
-            axis,
-            blocksBroken,
-            blocksPlaced,
-            generateTimestamp(),
-            mode,
-            route
-        );
+        boolean nether = mc.level.dimension() == Level.NETHER;
+        String route = AxisViewer.highwayRouteAt(x, z, nether, dir);
+        String loop = "";
+        if (nether && AxisViewer.isOfficialLoop(route) && statsContinuity != null && statsContinuity.valid()
+            && (mode == THMSystem.Mode.HighwayDigging ? blocksBroken : blocksPlaced) > loopProgressStartWork) {
+            loop = AxisViewer.loopProgressLeg(route, loopProgressStart, mc.player.position(), dir);
+            if (loop.isEmpty()) {
+                loopProgressStart = null;
+                trackLoopProgress(mode);
+            }
+        }
+        if (saveLoop && loop.isEmpty()) return false;
 
+        long timestamp = Math.max(lastStatusTimestamp + 1, generateTimestamp());
+        lastStatusTimestamp = timestamp;
+        String statusMessage = String.format(Locale.ROOT, "%s:%s:%d:%d:%d%s:route=%s",
+            playerName, dir, blocksBroken, blocksPlaced, timestamp, apiModeSuffix(mode), route);
+        if (!loop.isEmpty()) statusMessage += ":loop=" + loop + (saveLoop ? ",save" : "");
         sendStatus(statusMessage);
+        return true;
     }
 
     static String apiModeSuffix(THMSystem.Mode mode) {
@@ -3023,7 +3047,7 @@ public class HighwayBuilderTHM extends Module {
                 width.set(5);
                 height.set(3);
                 // Mutable: Meteor's block-list GUI adds straight into the setting's live list.
-                blocksToPlace.set(new ArrayList<>(List.of(Blocks.OBSIDIAN,Blocks.CRYING_OBSIDIAN,Blocks.NETHERITE_BLOCK)));
+                blocksToPlace.set(new ArrayList<>(HighwayMaterials.PAVING));
                 mineAboveRailings.set(true);
                 railings.set(true);
                 floor.set(Floor.Replace);
@@ -3067,7 +3091,7 @@ public class HighwayBuilderTHM extends Module {
             case HighwayDigging -> {
                 width.set(5);
                 height.set(4);
-                blocksToPlace.set(new ArrayList<>(List.of(Blocks.NETHERRACK, Blocks.BASALT, Blocks.BLACKSTONE, Blocks.SOUL_SOIL)));
+                blocksToPlace.set(new ArrayList<>(HighwayMaterials.DIGGING));
                 mineAboveRailings.set(true);
                 railings.set(true);
                 floor.set(Floor.Replace);
@@ -3090,6 +3114,8 @@ public class HighwayBuilderTHM extends Module {
 
     @Override
     public void onActivate() {
+        customStatusMode = null;
+        loopProgressStart = null;
         packetBuildWindowSends = 0;
         if (mc.player == null || mc.level == null) return;
         if (!Utils.canUpdate()) return;
@@ -3424,7 +3450,9 @@ public class HighwayBuilderTHM extends Module {
         }
 
         if (kitbotUpdateOnFinish.get() && !isReconnectFailureDeactivate && !isAutoLogTerminalDeactivate) {
-            if (restockingAtStop || KitbotFrontend.hasActiveWindow()) {
+            if (!restockingAtStop && !currentLoopRoute().isEmpty()) {
+                if (sendStatusLog(true)) info("Sent final map progress to KitBot1.");
+            } else if (restockingAtStop || KitbotFrontend.hasActiveWindow()) {
                 info("Skipping finish $update while restock or another KitBot request is active.");
             } else if (!isOnKitbotUpdateHighway()) {
                 info("Skipping finish $update outside an outbound main highway.");
@@ -4041,6 +4069,12 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private void sendKitbotPeriodicUpdate() {
+        if (!kitbotRestockBusy() && !currentLoopRoute().isEmpty()) {
+            if (sendStatusLog(true)) info("Sent periodic map progress to KitBot1.");
+            kitbotPeriodicUpdatePending = false;
+            kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + kitbotPeriodicUpdateIntervalMs();
+            return;
+        }
         if (kitbotRestockBusy() || KitbotFrontend.hasActiveWindow()) {
             kitbotPeriodicUpdatePending = true;
             kitbotPeriodicUpdateNextAtMs = System.currentTimeMillis() + Math.max(1_000L, KitbotFrontend.getRemainingWindowMs());
@@ -5536,13 +5570,14 @@ public class HighwayBuilderTHM extends Module {
 
         if (statuslog.get()) {
             statusLogTimer++;
-            THMSystem.Mode mode = THMSystem.get().getMode();
-            if (statusLogTimer >= 6000 || mode != statusLogMode) { // 5 minutes or a profile change
-                sendStatusLog();
+            THMSystem.Mode mode = currentStatusMode();
+            trackLoopProgress(mode);
+            if (statusLogTimer >= 6000 || mode != statusLogMode) { // 5 minutes or a work-mode change
+                sendStatusLog(false);
                 statusLogTimer = 0;
                 statusLogMode = mode;
             }
-        }
+        } else loopProgressStart = null;
 
         tickAdvertisement();
         tickKitbotPeriodicUpdate();
@@ -11339,6 +11374,8 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private void startFreshStatsSession() {
+        customStatusMode = null;
+        loopProgressStart = null;
         statsSessionTerminalOrFinalizing = false;
         retiredStatsReportSnapshot = null;
         start = mc.player.position();
@@ -12099,8 +12136,7 @@ public class HighwayBuilderTHM extends Module {
                             String server = mc.getCurrentServer() != null ? mc.getCurrentServer().ip : "singleplayer";
                             String dimension = manualPause != null ? manualPause.dimension()
                                 : continuity != null ? continuity.dimension() : mc.level.dimension().identifier().toString();
-                            String detectedRoute = AxisViewer.highwayRoute(start, end, dimension.equals("minecraft:the_nether"), dir);
-                            String route = unmappedRoad.get().reportRoute(detectedRoute);
+                            String route = AxisViewer.highwayRoute(start, end, dimension.equals("minecraft:the_nether"), dir);
                             String statsMessageapi = String.format(Locale.ROOT, "%s:%s:%.0f:%s:%s:%s:%s%s:route=%s",
                                 playerName,
                                 server,

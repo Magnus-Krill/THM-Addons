@@ -9,6 +9,8 @@ package xyz.thm.addon.utils.kitbot;
 import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.game.SendMessageEvent;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.utils.player.ChatUtils;
+import xyz.thm.addon.modules.HighwayBuilderTHM;
 import meteordevelopment.orbit.EventHandler;
 import xyz.thm.addon.modules.KitbotFrontend;
 
@@ -41,6 +43,18 @@ public final class KitbotChatRouter {
         String message = event.message.trim();
         if (!message.startsWith("$")) return;
 
+        String loopTarget = KitbotChatCommandParser.loopUpdateTarget(message);
+        if (loopTarget != null) {
+            event.cancel();
+            HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
+            if (builder == null || !builder.canRequestLoopUpdate(loopTarget)) {
+                ChatUtils.warning("Start HighwayBuilder on the requested official Nether ring road or diamond.");
+                return;
+            }
+            ChatUtils.sendPlayerMsg("/msg " + KitbotFrontend.KITBOT_NAME + " $update " + loopTarget);
+            return;
+        }
+
         KitbotChatCommandParser.ParseResult result = KitbotChatCommandParser.parse(message, KitbotChatCommandParser.getOnlinePlayerNames());
         if (!result.isRecognized()) return;
 
@@ -52,6 +66,14 @@ public final class KitbotChatRouter {
         if (!result.isValid()) {
             frontend.warning(result.errorMessage());
             return;
+        }
+
+        if (result.request().type() == KitbotChatCommandParser.CommandType.Update && result.request().direction() == null) {
+            HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
+            if (builder != null && builder.isActive() && !builder.canRequestDetectedUpdate()) {
+                frontend.warning("Update on a main highway or an official Nether ring road or diamond.");
+                return;
+            }
         }
 
         if (!KitbotFrontend.submitChatRequest(result.request())) {

@@ -200,6 +200,8 @@ public class AxisViewer extends Module {
         3750000
     );
 
+    private static final double DIAMOND_LINE_MARGIN = 5 * Math.sqrt(2);
+
     public static String highwayType(double x, double z, boolean nether, HorizontalDirection direction) {
         String route = highwayRouteAt(x, z, nether, direction);
         if (route.startsWith("ring-")) return "ring";
@@ -209,10 +211,14 @@ public class AxisViewer extends Module {
 
     static String highwayRoute(Vec3 start, Vec3 end, boolean nether, HorizontalDirection direction) {
         if (direction == null) return "other";
+        String route = highwayRouteAt(start.x, start.z, nether, direction);
+        String endRoute = highwayRouteAt(end.x, end.z, nether, direction);
+        if (route.startsWith("diamond-") && route.equals(endRoute)) {
+            return loopProgressLeg(route, start, end, direction).isEmpty() ? "other" : route;
+        }
         double crossTrack = (end.x - start.x) * direction.offsetZ - (end.z - start.z) * direction.offsetX;
         if (Math.abs(crossTrack) >= 10) return "other";
-        String route = highwayRouteAt(start.x, start.z, nether, direction);
-        if (route.equals(highwayRouteAt(end.x, end.z, nether, direction))) return route;
+        if (route.equals(endRoute)) return route;
         if (nether && isOnGridLine(start.x - 0.5, start.z - 0.5, direction)
             && isOnGridLine(end.x - 0.5, end.z - 0.5, direction)) return "grid";
         return "other";
@@ -229,15 +235,60 @@ public class AxisViewer extends Module {
         if (ax < 5 && dx == 0 || az < 5 && dz == 0
             || Math.abs(x - z) < 5 && dx == dz || Math.abs(x + z) < 5 && dx == -dz) return "main";
         if (!nether) return "other";
-        for (int radius : RING_ROADS) {
-            if (dx == 0 && Math.abs(ax - radius) < 5 && az < radius + 5
-                || dz == 0 && Math.abs(az - radius) < 5 && ax < radius + 5) return "ring-" + radius;
-        }
-        for (int radius : DIAMONDS) {
-            if (dx != 0 && dz != 0 && Math.abs(ax + az - radius) < 5
-                && (ax < 5 || az < 5 || Math.signum(x) * dx + Math.signum(z) * dz == 0)) return "diamond-" + radius;
+        if (direction.diagonal) {
+            // The diagonal dot products are scaled by sqrt(2) relative to block distance.
+            double cross = Math.abs(x * dz - z * dx);
+            double along = Math.abs(x * dx + z * dz);
+            for (int radius : DIAMONDS) {
+                if (Math.abs(cross - radius) < DIAMOND_LINE_MARGIN && along < radius + DIAMOND_LINE_MARGIN) {
+                    return "diamond-" + radius;
+                }
+            }
+        } else {
+            for (int radius : RING_ROADS) {
+                if (dx == 0 && Math.abs(ax - radius) < 5 && az < radius + 5
+                    || dz == 0 && Math.abs(az - radius) < 5 && ax < radius + 5) return "ring-" + radius;
+            }
         }
         return isOnGridLine(x, z, direction) ? "grid" : "other";
+    }
+
+    static boolean isOfficialLoop(String route) {
+        boolean ring = route.startsWith("ring-");
+        if (!ring && !route.startsWith("diamond-")) return false;
+        int radius = Integer.parseInt(route.substring(route.indexOf('-') + 1));
+        return (ring ? RING_ROADS : DIAMONDS).contains(radius);
+    }
+
+    static String loopProgressLeg(String route, Vec3 from, Vec3 to, HorizontalDirection direction) {
+        if (!isOfficialLoop(route) || from == null || to == null || direction == null) return "";
+        boolean ring = route.startsWith("ring-");
+        int radius = Integer.parseInt(route.substring(route.indexOf('-') + 1));
+        int[] x = ring ? new int[] {-radius, radius, radius, -radius} : new int[] {0, radius, 0, -radius};
+        int[] z = ring ? new int[] {-radius, -radius, radius, radius} : new int[] {-radius, 0, radius, 0};
+        int limit = ring ? 2 * radius : radius;
+        for (int side = 0; side < 4; side++) {
+            int next = (side + 1) % 4;
+            int dx = Integer.signum(x[next] - x[side]);
+            int dz = Integer.signum(z[next] - z[side]);
+            int sense = dx == direction.offsetX && dz == direction.offsetZ ? 1
+                : dx == -direction.offsetX && dz == -direction.offsetZ ? -1 : 0;
+            if (sense == 0) continue;
+            int start = loopOffset(from, x[side], z[side], dx, dz, limit);
+            int end = loopOffset(to, x[side], z[side], dx, dz, limit);
+            if (start >= 0 && end >= 0 && (end - start) * sense > 0) return side + "," + start + "," + end;
+        }
+        return "";
+    }
+
+    private static int loopOffset(Vec3 pos, int x, int z, int dx, int dz, int limit) {
+        double offsetX = pos.x - 0.5 - x;
+        double offsetZ = pos.z - 0.5 - z;
+        int lengthSquared = dx * dx + dz * dz;
+        double along = (offsetX * dx + offsetZ * dz) / lengthSquared;
+        double lineMargin = lengthSquared == 2 ? DIAMOND_LINE_MARGIN : 5;
+        if (Math.abs(dx * offsetZ - dz * offsetX) >= lineMargin || along < -4 || along > limit + 4) return -1;
+        return (int) Math.clamp(Math.round(along), 0, limit);
     }
 
     private static boolean isOnGridLine(double x, double z, HorizontalDirection direction) {
@@ -261,7 +312,7 @@ public class AxisViewer extends Module {
             if (Math.abs(Math.max(ax, az) - radius) < 5) return true;
         }
         for (int radius : DIAMONDS) {
-            if (Math.abs(ax + az - radius) < 5) return true;
+            if (Math.abs(ax + az - radius) < DIAMOND_LINE_MARGIN) return true;
         }
         if (ax < GRID_RADIUS + 5 && az < GRID_RADIUS + 5
             && (Math.abs(x - Math.round(x / GRID_STEP) * GRID_STEP) < 5

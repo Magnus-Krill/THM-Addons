@@ -124,7 +124,7 @@ public final class CapeManager {
         try {
             byte[] bytes = Files.readAllBytes(file.toPath());
             NativeImage image = NativeImage.read(bytes);
-            Identifier textureId = Identifier.fromNamespaceAndPath("thm-addon", "cape/" + id);
+            Identifier textureId = Identifier.fromNamespaceAndPath("thm-addon", "cape/" + id.toLowerCase(Locale.ROOT));
             Minecraft.getInstance().getTextureManager().register(
                 textureId, new DynamicTexture(() -> "thm-cape/" + id, image)
             );

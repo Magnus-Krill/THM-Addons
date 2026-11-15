@@ -185,7 +185,8 @@ do not treat the stock veto itself as a fatal error.
 
 **Highway KitBot updates:** Send periodic and finish updates through `KitbotFrontend.sendUpdate`
 to share the request window with restock orders. Defer during queued/active restock and collection;
-update outcomes must not finish or fail a kit order. Automatic updates require outbound building on a main axis or diagonal.
+update outcomes must not finish or fail a kit order. Main-road updates require outbound building.
+Official Nether rings and diamonds use authenticated status checkpoints, without teleport or home handling. The None profile reports its mode from placement materials, with a stable floor and height fallback.
 
 **Highway autosetup:** HighwayBuilder configures and enables Speed Mine, Reach, Velocity, and KillAura on startup and resume. It also enables Criticals with its existing settings. KillAura setup leaves addon settings such as Smart Timing alone.
 
