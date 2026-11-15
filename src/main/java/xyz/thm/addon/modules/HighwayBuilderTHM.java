@@ -16649,7 +16649,14 @@ public class HighwayBuilderTHM extends Module {
                     }
                     if (keepSign) return;
                     int toolSlot = findAndMoveBestToolToHotbar(b, blockState, false, false);
-                    if (toolSlot == -1) return;
+                    if (toolSlot == -1) {
+                        if (b.restockTask.hasPendingPickaxes()
+                            && b.restockTask.prioritizePickaxesBeforeActiveTask("missing pickaxe for ender chest obstruction")) {
+                            leaveMiningAtAnchor(b);
+                            b.setState(Restock, Restock);
+                        }
+                        return;
+                    }
                     if (speedmineRebreakMode && Speedmine.INSTANCE != null) {
                         if (!Speedmine.INSTANCE.isMining(bp)) Speedmine.INSTANCE.requestFreshBreak(bp);
                     } else {
@@ -16754,7 +16761,7 @@ public class HighwayBuilderTHM extends Module {
                 return count;
             }
 
-            private void completeAndReturnToAnchor(HighwayBuilderTHM b, String reason) {
+            private void leaveMiningAtAnchor(HighwayBuilderTHM b) {
                 if (speedmineRebreakMode && Speedmine.INSTANCE != null) {
                     b.restoreSpeedmineAutoRebreak();
                     if (Speedmine.INSTANCE.isActive()) Speedmine.INSTANCE.toggle();
@@ -16764,6 +16771,10 @@ public class HighwayBuilderTHM extends Module {
                     b.mc.player.setPos(returnX, returnY, returnZ);
                     returnAnchorSaved = false;
                 }
+            }
+
+            private void completeAndReturnToAnchor(HighwayBuilderTHM b, String reason) {
+                leaveMiningAtAnchor(b);
 
                 if (b.restockTask.isCurrentTaskSuccessful()) {
                     b.completeRestockTaskAndContinue();

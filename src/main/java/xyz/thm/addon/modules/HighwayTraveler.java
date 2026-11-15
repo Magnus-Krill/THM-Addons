@@ -43,6 +43,7 @@ import xyz.thm.addon.utils.ElytraPathPlanner;
 import xyz.thm.addon.utils.THMUtils;
 
 import java.util.*;
+import java.util.function.BiPredicate;
 
 /**
  * WARNING: The Wasp travel method utilizes rigid flight vectors to override standard Minecraft physics.
@@ -610,8 +611,12 @@ public class HighwayTraveler extends Module {
         if (methodSetting.get() == TravelMethod.FLY && !flyInitialized && !initFly()) return;
 
         if (endConfirmTicks >= 0) {
-            tickEndConfirm(p);
-            return;
+            if (stopAtEnd.get() != StopAtEnd.OFF) {
+                tickEndConfirm(p);
+                return;
+            }
+            endConfirmTicks = -1;
+            suspectedEnd = null;
         }
 
         if (stopAtEnd.get() != StopAtEnd.OFF && travelState != TravelState.BACKUP) {
@@ -1097,18 +1102,18 @@ public class HighwayTraveler extends Module {
     private boolean paveEndsAt(int x, int z) {
         for (int i = 0; i < endRows.get(); i++) {
             int rx = x + fwdX * i, rz = z + fwdZ * i;
-            if (!mc.level.hasChunk(rx >> 4, rz >> 4) || rowHasPave(rx, rz)) return false;
+            if (!isLoadedUnpavedRow(rx, rz, -fwdZ, fwdX, mc.level::hasChunk, this::isPaveFloor)) return false;
         }
         return true;
     }
 
-    /** A hole in one lane is damage, not the end: a row only counts as unpaved with no pave across the middle three lanes. */
-    private boolean rowHasPave(int x, int z) {
-        int sideX = -fwdZ, sideZ = fwdX;
+    static boolean isLoadedUnpavedRow(int x, int z, int sideX, int sideZ,
+                                     BiPredicate<Integer, Integer> hasChunk, BiPredicate<Integer, Integer> hasPave) {
         for (int lane = -1; lane <= 1; lane++) {
-            if (isPaveFloor(x + sideX * lane, z + sideZ * lane)) return true;
+            int laneX = x + sideX * lane, laneZ = z + sideZ * lane;
+            if (!hasChunk.test(laneX >> 4, laneZ >> 4) || hasPave.test(laneX, laneZ)) return false;
         }
-        return false;
+        return true;
     }
 
     /** Two blocks: releasing forward still slides the player about a third of a block. */
