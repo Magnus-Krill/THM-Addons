@@ -248,6 +248,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
 
         //System/Tab
         Tabs.add(new THMTab());
+        LocalClientBridge.start(highwayBuilder);
         LOG.info("[THM/Init] Addon registration complete; themes/tab registered, bozeLoaded={}", loader.isModLoaded("boze-loader"));
 
     }

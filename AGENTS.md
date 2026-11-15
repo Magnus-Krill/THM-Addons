@@ -130,7 +130,8 @@ startup, so `THMHwyMonitor` and `HighwayTools` are registered without a separate
 - `gui/` (+ `gui/themes`, `gui/widgets`) — custom GUI themes and screens. `HighwayBuilderScreen`
   replaces HighwayBuilder's flat settings list (tabs + search + status/start/stop/profiles). The
   swap happens in `GuiScreenMixin` on `Gui#setScreen`, not on `GuiTheme.moduleScreen`: third-party
-  themes (e.g. Catppuccin) override that method with their own module screen.
+  themes (e.g. Catppuccin) override that method with their own module screen. Defer live layout
+  refreshes while the left mouse button is held to keep slider bounds stable.
 - `system/` — `THMSystem` (persisted addon-wide config/state) and `THMTab` (the "THM Addon" tab
   in Meteor's GUI, separate from module categories). The updater button sits at the top of this tab;
   channel and auto-update preferences live in `UpdaterScreen` and persist in `THMSystem.updaterSettings`.
@@ -163,6 +164,18 @@ left after mining, independently of Experimental. Preserve pending-target duplic
 
 **Highway legacy airplace:** Paving's default-off `legacy-air-place` restores the 1.21.11
 center/UP click only for unsupported packet placements. Keep confirmation and duplicate guards.
+Smart uses the closest usable contact face. Reachable unsupported targets in the active scheduler
+row pause supported placements and placement lookahead until they are resolved.
+Experimental Packet Build toggles independently test sequenced sends, timed Air Place retries,
+and direct center/UP clicks. The default confirmation path still uses probes.
+Pacing defaults on in Paving with a cap of nine sends per 310 ms. Migrate saved Experimental values.
+With Check Behind, hold movement for reachable repairs even
+when the active row has no forward boundary. Double Mine promotes N to P after a sent STOP.
+
+**Local client diagnostics:** `-Dthm.localClientBridge=true` enables a private Unix socket.
+Find its path in `latest.log` and send one JSON line per connection. Methods are `status`,
+`settings`, `modules`, `inventory`, `start`, `stop` and `chat` (with a `message` string).
+Run actions on the client thread and keep chat messages local. Exclude secrets from responses.
 
 **Highway KitBot stock guard:** Remaining supplies or an unchecked bank trigger bounded local
 restock recovery before order entry. Reopen enabled sources and preserve the configured bank order;

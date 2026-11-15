@@ -51,6 +51,32 @@ class HighwayBuilderTHMTest {
     }
 
     @Test
+    void pacingMovesToPavingAndKeepsTheSavedValue() {
+        CompoundTag pacing = new CompoundTag();
+        pacing.putString("name", "packet-build-pacing");
+        pacing.putBoolean("value", true);
+        ListTag values = new ListTag();
+        values.add(pacing);
+        CompoundTag experimental = new CompoundTag();
+        experimental.putString("name", "Experimental");
+        experimental.put("settings", values);
+        ListTag groups = new ListTag();
+        groups.add(experimental);
+        CompoundTag source = new CompoundTag();
+        source.put("groups", groups);
+
+        CompoundTag migrated = HighwayBuilderTHM.migratePacingSettings(source);
+        var result = migrated.getListOrEmpty("groups");
+        assertTrue(((CompoundTag) result.getFirst()).getListOrEmpty("settings").isEmpty());
+        CompoundTag paving = (CompoundTag) result.getLast();
+        assertEquals("Paving", paving.getStringOr("name", ""));
+        assertEquals(pacing, paving.getListOrEmpty("settings").getFirst());
+        assertEquals(1, groups.size());
+        assertEquals(1, values.size());
+        assertSame(migrated, HighwayBuilderTHM.migratePacingSettings(migrated));
+    }
+
+    @Test
     void kitbotDeliveryRequiresTheEntireOrderAboveExistingStock() {
         assertFalse(HighwayBuilderTHM.hasExpectedKitDelivery(10, 6, 15));
         assertTrue(HighwayBuilderTHM.hasExpectedKitDelivery(10, 6, 16));
@@ -81,6 +107,14 @@ class HighwayBuilderTHMTest {
         var alwaysBlocked = Set.of(GamePacketTypes.SERVERBOUND_SWING, GamePacketTypes.SERVERBOUND_CLIENT_TICK_END);
         assertEquals(6, HighwayBuilderTHM.packetBudgetCosts(true, 23, true, false, 20, 0, type -> false).plan(false, 20, 0).mine());
         assertEquals(10, HighwayBuilderTHM.packetBudgetCosts(true, 23, true, false, 20, 0, alwaysBlocked::contains).plan(false, 20, 0).mine());
+    }
+
+    @Test
+    void reachableBehindRepairsHoldMovementEvenWithoutAFrontBoundary() {
+        assertFalse(HighwayBuilderTHM.canAdvanceForward(true, 42, Double.POSITIVE_INFINITY));
+        assertFalse(HighwayBuilderTHM.canAdvanceForward(true, 42, 44));
+        assertTrue(HighwayBuilderTHM.canAdvanceForward(false, 42, Double.POSITIVE_INFINITY));
+        assertFalse(HighwayBuilderTHM.canAdvanceForward(false, 42, 42));
     }
 
     @Test
@@ -129,6 +163,18 @@ class HighwayBuilderTHMTest {
         assertEquals(target, south.getBlockPos());
         assertEquals(Direction.SOUTH, south.getDirection());
         assertEquals(new Vec3(5.5, 120.5, -1), south.getLocation());
+    }
+
+    @Test
+    void smartPacketPlacementChoosesTheNearestUsableContactFace() {
+        BlockPos target = new BlockPos(5, 120, -2);
+        Vec3 eye = new Vec3(2, 121, -1.5);
+        var supports = EnumSet.of(Direction.DOWN, Direction.WEST, Direction.EAST);
+
+        assertEquals(Direction.WEST, HighwayBuilderTHM.nearestPacketSupport(target, eye, supports::contains));
+        supports.remove(Direction.WEST);
+        assertEquals(Direction.DOWN, HighwayBuilderTHM.nearestPacketSupport(target, eye, supports::contains));
+        assertNull(HighwayBuilderTHM.nearestPacketSupport(target, eye, side -> false));
     }
 
     @Test

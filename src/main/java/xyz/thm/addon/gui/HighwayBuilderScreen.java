@@ -269,6 +269,8 @@ public class HighwayBuilderScreen extends WindowScreen {
     @Override
     public void tick() {
         super.tick();
+        // Live labels can invalidate the layout while a slider is using its current bounds.
+        if (mouseHeld()) return;
         updateStatus();
 
         // Settings.tick would rebuild the list from every group, dropping the tab and search.
@@ -280,9 +282,7 @@ public class HighwayBuilderScreen extends WindowScreen {
                 setting.lastWasVisible = visible;
             }
         }
-        // Widgets don't follow a setting changed from code, so redraw when adaptive moved a rate slider -
-        // but not mid-drag, and never on the player's own edits (those don't bump the counter).
-        boolean adaptiveMoved = module.adaptiveRateWrites() != shownAdaptiveWrites && !mouseHeld();
+        boolean adaptiveMoved = module.adaptiveRateWrites() != shownAdaptiveWrites;
         if (visibilityChanged || adaptiveMoved) fillContent(search);
     }
 

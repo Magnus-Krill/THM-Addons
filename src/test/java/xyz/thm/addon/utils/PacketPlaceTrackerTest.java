@@ -54,6 +54,25 @@ class PacketPlaceTrackerTest {
     }
 
     @Test
+    void timedRetryReleasesAnUnansweredTargetWithoutSendingAProbe() {
+        var tracker = new PacketPlaceTracker();
+        var target = new BlockPos(4, 64, 7);
+        var normal = target.east();
+        tracker.markSentForTimedRetry(target.asLong(), 100, 5);
+        tracker.markSent(normal.asLong(), 100, 5);
+
+        assertTrue(tracker.tick(104, key -> true, key -> true, true).isEmpty());
+        assertFalse(tracker.canSend(target.asLong()));
+        assertEquals(List.of(normal), tracker.tick(105, key -> true, key -> true, true));
+        assertTrue(tracker.canSend(target.asLong()));
+        assertFalse(tracker.canSend(normal.asLong()));
+
+        tracker.markSentForTimedRetry(target.asLong(), 106, 5);
+        assertTrue(tracker.tick(107, key -> true, key -> key != target.asLong(), true).isEmpty());
+        assertTrue(tracker.canSend(target.asLong()));
+    }
+
+    @Test
     void unloadingReleasesPendingPlacementWithoutReadingOrProbingTheChunk() {
         var tracker = new PacketPlaceTracker();
         long pos = new BlockPos(5, 64, -2).asLong();
