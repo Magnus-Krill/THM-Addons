@@ -9762,6 +9762,12 @@ public class HighwayBuilderTHM extends Module {
 
             if (recoveryPending) return tickRecovery();
 
+            if (b.state == State.KitbotOrder && b.kitbotNextSubmitAtMs > 0L) {
+                if (System.currentTimeMillis() < b.kitbotNextSubmitAtMs) return false;
+                b.kitbotNextSubmitAtMs = 0L;
+                markProgress("kitbot-retry-window-ended");
+            }
+
             detectSignatureProgress("pre-tick");
 
             if (lastProgressAge == -1) {
@@ -9833,7 +9839,6 @@ public class HighwayBuilderTHM extends Module {
             if (b.state == State.KitbotOrder) {
                 if (b.kitbotOrderInFlight) return 0;
                 if (b.kitbotOrderFrontendSucceeded && !b.kitbotEnclosureRestorePending) return 0;
-                if (b.kitbotNextSubmitAtMs > 0L && System.currentTimeMillis() < b.kitbotNextSubmitAtMs) return 0;
                 return RESTOCK_WATCHDOG_SETUP_TIMEOUT_TICKS;
             }
 
@@ -16649,14 +16654,13 @@ public class HighwayBuilderTHM extends Module {
                     }
                     if (keepSign) return;
                     int toolSlot = findAndMoveBestToolToHotbar(b, blockState, false, false);
-                    if (toolSlot == -1) {
-                        if (b.restockTask.hasPendingPickaxes()
-                            && b.restockTask.prioritizePickaxesBeforeActiveTask("missing pickaxe for ender chest obstruction")) {
-                            leaveMiningAtAnchor(b);
-                            b.setState(Restock, Restock);
-                        }
+                    if (b.restockTask.hasPendingPickaxes()
+                        && b.restockTask.prioritizePickaxesBeforeActiveTask("pickaxe restock before clearing ender chest obstruction")) {
+                        leaveMiningAtAnchor(b);
+                        b.setState(Restock, Restock);
                         return;
                     }
+                    if (toolSlot == -1) return;
                     if (speedmineRebreakMode && Speedmine.INSTANCE != null) {
                         if (!Speedmine.INSTANCE.isMining(bp)) Speedmine.INSTANCE.requestFreshBreak(bp);
                     } else {
