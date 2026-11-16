@@ -6,8 +6,9 @@
 
 package xyz.thm.addon.gui;
 
+import meteordevelopment.meteorclient.gui.GuiTheme;
+import meteordevelopment.meteorclient.gui.GuiThemes;
 import meteordevelopment.meteorclient.gui.WidgetScreen;
-import meteordevelopment.meteorclient.gui.screens.ModulesScreen;
 import net.minecraft.client.Minecraft;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.system.THMSystem;
@@ -44,13 +45,14 @@ public enum ClickGuiAnimation implements DescribedOption {
     }
 
     public static ClickGuiAnimation forScreen(WidgetScreen screen) {
-        if (!(screen instanceof ModulesScreen)) return Default;
+        GuiTheme theme = GuiThemes.get();
+        if (theme == null || !theme.isModulesScreen(screen)) return Default;
         THMSystem system = THMSystem.get();
         return system == null ? Default : system.clickGuiAnimation.get();
     }
 
     public static WidgetScreen transitioningScreen() {
-        return Minecraft.getInstance().gui.screen() instanceof ModulesScreen screen
+        return Minecraft.getInstance().gui.screen() instanceof WidgetScreen screen
             && screen.animProgress < 1 && forScreen(screen) != Default ? screen : null;
     }
 

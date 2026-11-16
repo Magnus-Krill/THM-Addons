@@ -10,6 +10,7 @@
     "BaritoneBuilderMixin",
     "BaritoneWorkerMixin",
     "BlockedServersMixin",
+    "catppuccin.RoundedUniformsMixin",
     "ButtonWidgetStyleMixin",
     "ChatInputSuggestorMixin",
     "EdgeRenderMixin",

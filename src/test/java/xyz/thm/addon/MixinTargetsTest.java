@@ -67,7 +67,9 @@ class MixinTargetsTest {
                         for (String targetName : targets) {
                             ClassNode target = read(targetName);
                             if (target == null) {
-                                failures.add(name + ": missing target " + targetName);
+                                boolean optional = annotations(mixin.visibleAnnotations, mixin.invisibleAnnotations).stream()
+                                    .anyMatch(a -> a.desc.equals("Lorg/spongepowered/asm/mixin/Pseudo;"));
+                                if (!optional) failures.add(name + ": missing target " + targetName);
                                 continue;
                             }
                             for (var field : mixin.fields) {

@@ -51,6 +51,12 @@ class MinecraftStartupTest {
             preferredGraphicsBackend:"%s"
             """.formatted(OPTIONS_VERSION, backend.toLowerCase(Locale.ROOT)));
         var command = new ArrayList<>(Files.readAllLines(launch));
+        String catppuccin = System.getenv("THM_TEST_CATPPUCCIN_JAR");
+        if (catppuccin != null && !catppuccin.isBlank()) {
+            Path addon = Path.of(catppuccin).toAbsolutePath();
+            assertTrue(Files.isRegularFile(addon), "Catppuccin test JAR is missing: " + addon);
+            command.add(1, "-Dfabric.addMods=" + addon);
+        }
         boolean testBridge = withPatchy && File.separatorChar == '/';
         if (testBridge) command.add(1, "-Dthm.localClientBridge=true");
         if (!withPatchy) {

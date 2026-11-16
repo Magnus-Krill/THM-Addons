@@ -132,8 +132,8 @@ startup, so `THMHwyMonitor` and `HighwayTools` are registered without a separate
   swap happens in `GuiScreenMixin` on `Gui#setScreen`, not on `GuiTheme.moduleScreen`: third-party
   themes (e.g. Catppuccin) override that method with their own module screen. Defer live layout
   refreshes while the left mouse button is held to keep slider bounds stable.
-  `ClickGuiAnimation` uses Meteor's screen progress for Modules transitions. Panel offsets and
-  collapse progress apply during rendering only.
+  `ClickGuiAnimation` uses the active theme's Modules screen check and Meteor's transition progress.
+  Apply offsets before each theme draws its panels. Keep Catppuccin's rounded-renderer hook optional.
 - `system/` — `THMSystem` (persisted addon-wide config/state) and `THMTab` (the "THM Addon" tab
   in Meteor's GUI, separate from module categories). The updater button sits at the top of this tab;
   channel and auto-update preferences live in `UpdaterScreen` and persist in `THMSystem.updaterSettings`.

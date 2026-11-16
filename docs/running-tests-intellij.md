@@ -66,6 +66,9 @@ Run this test through Gradle so Loom prepares its launch command. A graphics dis
 for both backends are required. CI uses `xvfb-run -a ./gradlew test` with Mesa. Each case checks
 the active backend and exercises the main menu.
 
+Set `THM_TEST_CATPPUCCIN_JAR` to an absolute path to a Catppuccin addon JAR for the same Minecraft
+version to also exercise the GUI transitions with Catppuccin in each startup case.
+
 ## What's covered
 
 | Test | What it checks |

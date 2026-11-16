@@ -34,7 +34,7 @@ import net.minecraft.world.item.Items;
 import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.meteor.KeyInputEvent;
 import meteordevelopment.meteorclient.gui.GuiThemes;
-import meteordevelopment.meteorclient.gui.screens.ModulesScreen;
+import meteordevelopment.meteorclient.gui.WidgetScreen;
 import meteordevelopment.meteorclient.gui.tabs.Tabs;
 import meteordevelopment.meteorclient.gui.tabs.WindowTabScreen;
 import meteordevelopment.meteorclient.gui.tabs.builtin.GuiTab;
@@ -44,6 +44,8 @@ import meteordevelopment.meteorclient.gui.widgets.input.WDropdown;
 import meteordevelopment.meteorclient.settings.ItemSetting;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.misc.input.KeyAction;
+import meteordevelopment.meteorclient.utils.render.color.Color;
+import org.joml.Vector4f;
 import org.lwjgl.glfw.GLFW;
 import xyz.thm.addon.gui.ClickGuiAnimation;
 import xyz.thm.addon.gui.MainMenuFx;
@@ -63,6 +65,7 @@ import java.io.UncheckedIOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.util.LinkedHashMap;
+import java.util.Arrays;
 
 public final class StartupClient implements ClientModInitializer {
     private long readyAt;
@@ -82,6 +85,16 @@ public final class StartupClient implements ClientModInitializer {
                 verifyKitbotUpdateIsolation();
                 verifyServerFolders(client);
                 verifyClickGuiAnimations(client);
+                if (Arrays.asList(GuiThemes.getNames()).contains("Catppuccin")) {
+                    String theme = GuiThemes.get().name;
+                    try {
+                        GuiThemes.select("Catppuccin");
+                        verifyJoinButtonLayout(client, client.gui.screen());
+                        verifyClickGuiAnimations(client);
+                    } finally {
+                        GuiThemes.select(theme);
+                    }
+                }
                 Files.writeString(client.gameDirectory.toPath().resolve("startup-ok"), Long.toString(now - readyAt));
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
@@ -98,8 +111,8 @@ public final class StartupClient implements ClientModInitializer {
         var savedAnimation = setting.get();
         var speed = THMSystem.get().clickGuiAnimationSpeed;
         int savedSpeed = speed.get();
-        var icons = ((MeteorGuiTheme) GuiThemes.get()).categoryIcons;
-        boolean savedIcons = icons.get();
+        var icons = GuiThemes.get() instanceof MeteorGuiTheme theme ? theme.categoryIcons : null;
+        boolean savedIcons = icons != null && icons.get();
         var shift = new KeyEvent(GLFW.GLFW_KEY_RIGHT_SHIFT, 0, GLFW.GLFW_MOD_SHIFT);
         try {
             Tabs.get(GuiTab.class).openScreen(GuiThemes.get());
@@ -109,13 +122,14 @@ public final class StartupClient implements ClientModInitializer {
                 throw new IllegalStateException("Click GUI Animation is missing from the GUI tab");
             }
             client.gui.setScreen(title);
-            icons.set(true);
+            if (icons != null) icons.set(true);
             speed.set(100);
             for (ClickGuiAnimation animation : ClickGuiAnimation.values()) {
                 if (animation == ClickGuiAnimation.Default) continue;
                 setting.set(animation);
                 MeteorClient.EVENT_BUS.post(KeyInputEvent.get(shift, KeyAction.Press));
-                if (!(client.gui.screen() instanceof ModulesScreen modules) || modules.animProgress != 0) {
+                if (!(client.gui.screen() instanceof WidgetScreen modules)
+                    || !GuiThemes.get().isModulesScreen(modules) || modules.animProgress != 0) {
                     throw new IllegalStateException(animation + " did not start when opening Modules");
                 }
 
@@ -125,12 +139,23 @@ public final class StartupClient implements ClientModInitializer {
                     throw new IllegalStateException(animation + " did not draw an intermediate opening frame");
                 }
                 if (animation == ClickGuiAnimation.Fade) {
-                    boolean[] translucentIcon = {false};
-                    midOpen.forEachItem(item -> {
-                        int alpha = ((ClickGuiAnimation.ItemTint) (Object) item).thm$itemTint() >>> 24;
-                        if (alpha > 0 && alpha < 255) translucentIcon[0] = true;
-                    });
-                    if (!translucentIcon[0]) throw new IllegalStateException("Category icons did not fade with the panels");
+                    if (icons != null) {
+                        boolean[] translucentIcon = {false};
+                        midOpen.forEachItem(item -> {
+                            int alpha = ((ClickGuiAnimation.ItemTint) (Object) item).thm$itemTint() >>> 24;
+                            if (alpha > 0 && alpha < 255) translucentIcon[0] = true;
+                        });
+                        if (!translucentIcon[0]) throw new IllegalStateException("Category icons did not fade with the panels");
+                    } else if (GuiThemes.get().name.equals("Catppuccin")) {
+                        var roundedUniforms = Class.forName("me.pindour.catppuccin.renderer.rounded.modern.RoundedUniforms");
+                        var setColor = roundedUniforms.getDeclaredMethod("setColor", Vector4f.class, Color.class);
+                        setColor.setAccessible(true);
+                        var rgba = new Vector4f();
+                        setColor.invoke(null, rgba, new Color(255, 255, 255, 255));
+                        if (Math.abs(rgba.w - modules.animProgress) > 1.0 / 255.0) {
+                            throw new IllegalStateException("Catppuccin panel chrome did not fade");
+                        }
+                    }
 
                     double normalProgress = modules.animProgress;
                     speed.set(50);
@@ -157,7 +182,7 @@ public final class StartupClient implements ClientModInitializer {
                 if (client.gui.screen() != title) throw new IllegalStateException(animation + " did not return to the title screen");
             }
         } finally {
-            icons.set(savedIcons);
+            if (icons != null) icons.set(savedIcons);
             setting.set(savedAnimation);
             speed.set(savedSpeed);
             if (client.gui.screen() != title) client.gui.setScreen(title);

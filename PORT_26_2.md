@@ -15,6 +15,8 @@ with Mesa software rendering.
 The startup matrix also verified the animation dropdown in the GUI tab and the Join 6b6t
 toggle and button style in both title screen layouts.
 All four startup cases passed with randomized Scatter exits and the Animation Speed slider.
+Catppuccin 2.4.0 passed all four cases with all six presets, rounded-panel fading, and
+the Join 6b6t toggle. The standard build also passed with Catppuccin absent.
 
 ## 2026-11-08: Multiplayer folders and Join 6b6t
 
