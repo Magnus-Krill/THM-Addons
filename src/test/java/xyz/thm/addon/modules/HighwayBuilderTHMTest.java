@@ -142,6 +142,18 @@ class HighwayBuilderTHMTest {
     }
 
     @Test
+    void legacyPlacementLookbackChecksFourRowsAndSkipsUnreachableTargets() {
+        BlockPos first = new BlockPos(8, 63, 12);
+        BlockPos second = first.east();
+        assertEquals(List.of(first, first.north(), first.north(2), first.north(3)),
+            HighwayBuilderTHM.legacyPlacementLookback(List.of(first), 0, 1, pos -> true));
+        assertEquals(List.of(first, second, first.offset(-1, 0, -1), second.offset(-1, 0, -1),
+                second.offset(-2, 0, -2), first.offset(-3, 0, -3), second.offset(-3, 0, -3)),
+            HighwayBuilderTHM.legacyPlacementLookback(List.of(first, second), 1, 1,
+                pos -> !pos.equals(first.offset(-2, 0, -2))));
+    }
+
+    @Test
     void miningRespectsConfiguredRangeAndPlayerReach() {
         Vec3 eyes = new Vec3(0.5, 1.62, 0.5);
         BlockPos target = new BlockPos(5, 1, 0);
@@ -484,13 +496,13 @@ class HighwayBuilderTHMTest {
     @Test
     void offhandRefillUsesSpareInventoryBeforeManagedOrUnmanagedHotbarStacks() {
         var stock = new HashSet<>(Arrays.asList(0, 6, 15));
-        assertEquals(15, HighwayBuilderTHM.selectOffhandSupplySlot(36, stock::contains, i -> i == 6));
+        assertEquals(15, HighwayBuilderTHM.selectSupplySlot(36, stock::contains, i -> i == 6));
         stock.remove(15);
-        assertEquals(0, HighwayBuilderTHM.selectOffhandSupplySlot(36, stock::contains, i -> i == 6));
+        assertEquals(0, HighwayBuilderTHM.selectSupplySlot(36, stock::contains, i -> i == 6));
         stock.remove(0);
-        assertEquals(6, HighwayBuilderTHM.selectOffhandSupplySlot(36, stock::contains, i -> i == 6));
+        assertEquals(6, HighwayBuilderTHM.selectSupplySlot(36, stock::contains, i -> i == 6));
         stock.clear();
-        assertEquals(-1, HighwayBuilderTHM.selectOffhandSupplySlot(36, stock::contains, i -> i == 6));
+        assertEquals(-1, HighwayBuilderTHM.selectSupplySlot(36, stock::contains, i -> i == 6));
     }
 
     @Test

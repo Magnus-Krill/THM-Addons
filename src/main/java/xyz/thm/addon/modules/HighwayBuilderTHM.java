@@ -1357,7 +1357,7 @@ public class HighwayBuilderTHM extends Module {
 
     private final Setting<Boolean> checkBehind = sgGeneral.add(new BoolSetting.Builder()
         .name("check-behind")
-        .description("Repairs missing floor and railings behind the player, as far back as place range reaches.")
+        .description("Rechecks floor and railings behind you for gaps to repair.")
         .defaultValue(true)
         .build()
     );
@@ -6374,24 +6374,19 @@ public class HighwayBuilderTHM extends Module {
             render(event, blockPosProvider.getFloor(), mBlockPos -> canPlace(mBlockPos, false), false);
             if (checkBehind.get()) {
                 if (railings.get()) {
-                    render(event, blockPosProvider.getBehindRailings(0), mBlockPos -> canPlace(mBlockPos, false), false);
+                    render(event, legacyBehindPlacementRows(blockPosProvider.getBehindRailings(0)), mBlockPos -> canPlace(mBlockPos, false), false);
 
                     if (cornerBlock.get()) {
-                        render(event, blockPosProvider.getBehindRailings(-1), mBlockPos -> {
-                            boolean valid = false;
-                            for (MBlockPos pos : blockPosProvider.getBehindRailings(0)) {
-                                if (!blocksToPlace.get().contains(pos.getState().getBlock()) && pos.add(0, -1, 0).equals(mBlockPos)) {
-                                    valid = true;
-                                    break;
-                                }
-                            }
-
-                            return valid && canPlace(mBlockPos, false);
-                        }, false);
+                        Set<BlockPos> supports = new HashSet<>();
+                        for (MBlockPos pos : legacyBehindPlacementRows(blockPosProvider.getBehindRailings(0))) {
+                            if (!blocksToPlace.get().contains(pos.getState().getBlock())) supports.add(pos.getBlockPos().below());
+                        }
+                        render(event, legacyBehindPlacementRows(blockPosProvider.getBehindRailings(-1)),
+                            pos -> supports.contains(pos.getBlockPos()) && canPlace(pos, false), false);
                     }
                 }
 
-                render(event, blockPosProvider.getBehindFloor(), mBlockPos -> canPlace(mBlockPos, false), false);
+                render(event, legacyBehindPlacementRows(blockPosProvider.getBehindFloor()), mBlockPos -> canPlace(mBlockPos, false), false);
             }
             if (state == State.PlaceShulkerBlockade || state == State.PlaceEChestBlockade) {
                 render(event, blockPosProvider.getBlockade(false, getEffectiveBlockadeType()), mBlockPos -> canPlace(mBlockPos, false), false);
@@ -8855,13 +8850,13 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private int findOffhandSupplySlot(Predicate<ItemStack> predicate) {
-        return selectOffhandSupplySlot(36, i -> {
+        return selectSupplySlot(36, i -> {
             ItemStack stack = mc.player.getInventory().getItem(i);
             return predicate.test(stack) && (!isHotbarSlotReserved(i) || stack.getCount() > 1);
         }, this::isHotbarSlotReserved);
     }
 
-    static int selectOffhandSupplySlot(int size, IntPredicate matches, IntPredicate reserved) {
+    static int selectSupplySlot(int size, IntPredicate matches, IntPredicate reserved) {
         int fallback = -1;
         for (int offset = 0; offset < size; offset++) {
             int slot = (offset + 9) % size;
@@ -13273,8 +13268,10 @@ public class HighwayBuilderTHM extends Module {
         return false;
     }
 
-    private boolean isHotbarSlotReserved(int hotbarSlot) {
-        return manageHotbar.get() && hotbarSlot >= 4 && hotbarSlot <= 8;
+    public boolean isHotbarSlotReserved(int hotbarSlot) {
+        HotbarManager manager = HotbarManager.active();
+        return manager != null ? manager.managesSlot(hotbarSlot)
+            : manageHotbar.get() && hotbarSlot >= 4 && hotbarSlot <= 8;
     }
 
     private void syncFoodManagementOnActivate() {
@@ -13305,6 +13302,11 @@ public class HighwayBuilderTHM extends Module {
 
     private int getPreferredHotbarSlot(Item item) {
         if (!manageHotbar.get() || item == null || item == Items.AIR) return -1;
+        HotbarManager manager = HotbarManager.active();
+        return manager != null ? manager.findManagedSlot(item) : getDefaultHotbarSlot(item);
+    }
+
+    private int getDefaultHotbarSlot(Item item) {
         if (BuiltInRegistries.ITEM.wrapAsHolder(item).is(ItemTags.PICKAXES)) return 7;
         if (isConfiguredFoodItem(item)) return 4;
         if (item == Items.ENDER_CHEST) return 6;
@@ -13313,6 +13315,10 @@ public class HighwayBuilderTHM extends Module {
             if (isDroppableTrashItem(item)) return 5;
         }
         return -1;
+    }
+
+    boolean canSortHotbarStack(ItemStack stack) {
+        return !stack.is(ItemTags.PICKAXES) || isUsableHighwayPickaxe(stack);
     }
 
     private void tickHotbarSupplies() {
@@ -13327,13 +13333,13 @@ public class HighwayBuilderTHM extends Module {
             hotbarSortTicks = Math.max(inventoryDelay.get(), 1);
             return;
         }
-        if (!manageHotbar.get()) return;
+        if (!manageHotbar.get() || HotbarManager.active() != null) return;
 
         for (int target = 4; target <= 8; target++) {
             int hotbarSlot = target;
             int source = selectHotbarSupplySlot(36, target, i -> {
                 ItemStack stack = mc.player.getInventory().getItem(i);
-                if (stack.isEmpty() || getPreferredHotbarSlot(stack.getItem()) != hotbarSlot) return false;
+                if (stack.isEmpty() || getDefaultHotbarSlot(stack.getItem()) != hotbarSlot) return false;
                 if (hotbarSlot == 5) return isStableFullTrashBlockStack(stack);
                 if (hotbarSlot == 7) return isUsableHighwayPickaxe(stack);
                 return true;
@@ -13348,7 +13354,7 @@ public class HighwayBuilderTHM extends Module {
 
     static int selectHotbarSupplySlot(int size, int target, IntPredicate matches) {
         if (matches.test(target)) return target;
-        return selectOffhandSupplySlot(size, matches, i -> false);
+        return selectSupplySlot(size, matches, i -> false);
     }
 
     static Set<Integer> selectTrashKeepSlots(int size, int budget, IntPredicate eligible, Comparator<Integer> preference) {
@@ -14535,6 +14541,52 @@ public class HighwayBuilderTHM extends Module {
                 tasks.add(new ForwardTask(back, type));
             }
         }
+    }
+
+    private MBPIterator legacyBehindPlacementRows(MBPIterator behind) {
+        if (!legacyMode.get() || packetBuild.get()) return behind;
+
+        List<BlockPos> positions = legacyPlacementLookback(snapshotTemplate(behind), dir.offsetX, dir.offsetZ,
+            pos -> isWithinConfiguredForwardRange(pos) && mc.level.hasChunk(pos.getX() >> 4, pos.getZ() >> 4));
+        return new MBPIterator() {
+            private final MBlockPos pos = new MBlockPos();
+            private int index;
+            private int savedIndex;
+
+            @Override
+            public void save() {
+                savedIndex = index;
+                index = 0;
+            }
+
+            @Override
+            public void restore() {
+                index = savedIndex;
+            }
+
+            @Override
+            public boolean hasNext() {
+                return index < positions.size();
+            }
+
+            @Override
+            public MBlockPos next() {
+                if (!hasNext()) throw new NoSuchElementException();
+                BlockPos target = positions.get(index++);
+                return pos.set(target.getX(), target.getY(), target.getZ());
+            }
+        };
+    }
+
+    static List<BlockPos> legacyPlacementLookback(List<BlockPos> firstRow, int forwardX, int forwardZ, Predicate<BlockPos> reachable) {
+        List<BlockPos> positions = new ArrayList<>();
+        for (int row = 0; row < 4; row++) {
+            for (BlockPos base : firstRow) {
+                BlockPos pos = base.offset(-forwardX * row, 0, -forwardZ * row);
+                if (reachable.test(pos)) positions.add(pos);
+            }
+        }
+        return positions;
     }
 
     private void addForwardLaneTasks(List<ForwardTask> tasks, MBPIterator iterator, ForwardTaskType type, int rowId) {
@@ -20739,7 +20791,7 @@ public class HighwayBuilderTHM extends Module {
         @Override
         public MBPIterator getFloor(boolean includeBehind) {
             if (!includeBehind) return getFloor();
-            return new MBPIteratorChain(getFloor(), this::getBehindFloor);
+            return new MBPIteratorChain(getFloor(), () -> legacyBehindPlacementRows(getBehindFloor()));
         }
 
         @Override
@@ -20825,7 +20877,7 @@ public class HighwayBuilderTHM extends Module {
         @Override
         public MBPIterator getRailings(int state, boolean includeBehind) {
             if (!includeBehind) return getRailings(state);
-            return new MBPIteratorChain(getRailings(state), () -> getBehindRailings(state));
+            return new MBPIteratorChain(getRailings(state), () -> legacyBehindPlacementRows(getBehindRailings(state)));
         }
 
         @Override
@@ -21171,7 +21223,7 @@ public class HighwayBuilderTHM extends Module {
         @Override
         public MBPIterator getFloor(boolean includeBehind) {
             if (!includeBehind) return getFloor();
-            return new MBPIteratorChain(getFloor(), this::getBehindFloor);
+            return new MBPIteratorChain(getFloor(), () -> legacyBehindPlacementRows(getBehindFloor()));
         }
 
         @Override
@@ -21282,7 +21334,7 @@ public class HighwayBuilderTHM extends Module {
         @Override
         public MBPIterator getRailings(int state, boolean includeBehind) {
             if (!includeBehind) return getRailings(state);
-            return new MBPIteratorChain(getRailings(state), () -> getBehindRailings(state));
+            return new MBPIteratorChain(getRailings(state), () -> legacyBehindPlacementRows(getBehindRailings(state)));
         }
 
         @Override

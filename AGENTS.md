@@ -34,7 +34,7 @@ The wrapper uses Gradle 9.8.2 with Loom 1.19.3. Dependency versions live in `gra
 - `./gradlew build` — full build with parallel JUnit tests and the Minecraft startup test on every run;
   failures fail the build. The jar lands in `build/libs`.
 - `tools/scripts/test-async.sh` — background build and JUnit tests; prints the log and exit-code paths.
-  `MinecraftStartupTest` runs concurrently with the Java tests. It opens an isolated OpenGL client
+  JUnit schedules `MinecraftStartupTest` first alongside the Java tests. It opens an isolated OpenGL client
   with and without Patchy, waits one second at the main menu and closes it each time.
   Missing startup, crashes and a three-minute timeout fail.
   JUnit targets 16 concurrent test classes. Methods within each class stay sequential.
@@ -154,7 +154,7 @@ startup, so `THMHwyMonitor` and `HighwayTools` are registered without a separate
 Highway", `THMAddon.PVP` = "THM PVP") via `onRegisterCategories()`. `THMTab` is a separate,
 addon-specific settings screen — don't confuse the two when adding a new module's config surface.
 
-**Highway restock inventory:** HighwayBuilder owns supply slots 5-9 through `Manage-hotbar`. Trash limits include hotbar stacks. Offhand refills preserve reserved hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
+**Highway restock inventory:** `Manage-hotbar` defaults to supply slots 5-9 and uses active Hotbar Manager assignments when available. Hotbar Manager pauses during builder-owned restocks. Trash limits include hotbar stacks. Offhand refills preserve reserved hotbar slots. Keep the EChest reserve outside the hand used for packet-only replacement. Container targets round standing Y like the blockade iterators; single EChests need a clear lid.
 
 **Highway restock stalls:** MineEnderChests clears obstructions and honors sign protection. Prioritize queued pickaxe restock before retrying the obstruction. ThrowOutTrash times out after repeated attempts without progress.
 
@@ -198,7 +198,7 @@ and packet budgets. Successful sends keep their per-tick reservation across radi
 Meteor Scaffold is unmodified. The budget reserves complete placement transactions;
 `PaketLimiter` always allows hotbar slot changes to preserve swap recovery.
 
-**Shared inventory swaps:** `SwapManager` owns silent hotbar holds and nested temporary actions. `DeepSwapManager` stages inventory items with checked restoration and preserves managed HighwayBuilder slots. Use `InventoryManager.withItem` for temporary item use; do not add another global swap-back record. Inventory swaps never stop movement. Packet slot tracking advances on `PacketEvent.Sent`; multi-click inventory transactions check the limiter budget first.
+**Shared inventory swaps:** `SwapManager` owns silent hotbar holds and nested temporary actions. `DeepSwapManager` stages inventory items with checked restoration and preserves managed hotbar slots. Use `InventoryManager.withItem` for temporary item use; do not add another global swap-back record. Inventory swaps never stop movement. Packet slot tracking advances on `PacketEvent.Sent`; multi-click inventory transactions check the limiter budget first.
 
 **Placement helpers:** `PlacementUtils` finds real support faces, samples visible click points for strict placements, and finds short support paths one step at a time. Placement modules keep their own packet budgets and confirmation rules.
 

@@ -25,14 +25,22 @@ import net.minecraft.client.renderer.state.gui.BlitRenderState;
 import net.minecraft.client.renderer.state.gui.GuiRenderState;
 import net.minecraft.client.resources.language.I18n;
 import net.minecraft.network.chat.CommonComponents;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.StringTag;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
+import meteordevelopment.meteorclient.settings.ItemSetting;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import org.lwjgl.glfw.GLFW;
 import xyz.thm.addon.gui.MainMenuFx;
 import xyz.thm.addon.gui.ServerFolderSidebar;
 import xyz.thm.addon.accessor.ServerFolderView;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
+import xyz.thm.addon.modules.HotbarManager;
 import xyz.thm.addon.modules.KitbotFrontend;
 import xyz.thm.addon.system.THMSystem;
+import xyz.thm.addon.utils.DeepSwapManager;
 import xyz.thm.addon.utils.PacketBudget;
 
 import java.io.IOException;
@@ -55,6 +63,7 @@ public final class StartupClient implements ClientModInitializer {
             closing = true;
             try {
                 verifyPacketBudget();
+                verifyHotbarManager();
                 verifyKitbotUpdateIsolation();
                 verifyServerFolders(client);
                 Files.writeString(client.gameDirectory.toPath().resolve("startup-ok"), Long.toString(now - readyAt));
@@ -230,6 +239,38 @@ public final class StartupClient implements ClientModInitializer {
             }
         } finally {
             builder.loadSettingsSnapshot(saved);
+        }
+    }
+
+    private static void verifyHotbarManager() throws ReflectiveOperationException {
+        var modules = Modules.get();
+        var manager = modules.get(HotbarManager.class);
+        var builder = modules.get(HighwayBuilderTHM.class);
+        var preferred = HighwayBuilderTHM.class.getDeclaredMethod("getPreferredHotbarSlot", Item.class);
+        preferred.setAccessible(true);
+        var first = (ItemSetting) manager.settings.get("slot-1");
+        var legacy = new CompoundTag();
+        var items = new ListTag();
+        items.add(StringTag.valueOf("minecraft:obsidian"));
+        legacy.put("value", items);
+
+        if (!builder.isHotbarSlotReserved(8) || (int) preferred.invoke(builder, Items.OBSIDIAN) != 8) {
+            throw new IllegalStateException("HighwayBuilder lost its default placement slot");
+        }
+        manager.enable();
+        try {
+            first.fromTag(legacy);
+            if (!builder.isHotbarSlotReserved(0) || !DeepSwapManager.get().reserved(0)
+                || (int) preferred.invoke(builder, Items.OBSIDIAN) != 0) {
+                throw new IllegalStateException("HighwayBuilder ignored the restored custom slot");
+            }
+            first.set(Items.AIR);
+            if (builder.isHotbarSlotReserved(0) || (int) preferred.invoke(builder, Items.OBSIDIAN) != 8) {
+                throw new IllegalStateException("Clearing a custom slot did not release it");
+            }
+        } finally {
+            first.reset();
+            manager.disable();
         }
     }
 

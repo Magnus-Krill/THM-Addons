@@ -7,6 +7,7 @@
 package xyz.thm.addon;
 
 import com.google.gson.JsonParser;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -28,6 +29,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@Order(1)
 class MinecraftStartupTest {
     @ParameterizedTest(name = "Patchy present: {0}")
     @ValueSource(booleans = {true, false})

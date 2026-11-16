@@ -56,7 +56,7 @@ For a background build and test run on Linux, use `tools/scripts/test-async.sh`.
 and prints the log and result paths. The result file appears when finished: `0` means success.
 JUnit targets 16 concurrent test classes, with sequential methods inside each class.
 
-`MinecraftStartupTest` runs concurrently with the other Java tests. It starts a separate client
+JUnit schedules `MinecraftStartupTest` first alongside the other Java tests. It starts a separate client
 under `build/client-startup/`, waits one second at the main menu, then closes it. A crash, early
 exit or three-minute startup timeout fails the test. Its console and Minecraft logs stay in that
 run's directory. The test mod is excluded from the shipped addon JAR.

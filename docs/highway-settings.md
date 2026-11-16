@@ -55,7 +55,7 @@ Restock and KitBot enclosures use Netherrack first, then any suitable full block
 
 TPS safety enclosures also use Netherrack. After TPS recovers, the builder removes its enclosure blocks on all four sides before moving forward. Existing nearby blocks are left alone.
 
-With `Manage-hotbar` enabled, HighwayBuilder keeps food in slot 5, trash blocks in slot 6, ender chests in slot 7, a usable pickaxe in slot 8, and configured placement blocks in slot 9. It refills empty supply slots from inventory and pauses sorting during restocks, open containers, and item use. Offhand building-block refills use spare inventory stacks first and leave at least one item in reserved hotbar slots.
+With `Manage-hotbar` enabled, HighwayBuilder defaults to food in slot 5, trash blocks in slot 6, ender chests in slot 7, a usable pickaxe in slot 8, and placement blocks in slot 9. Enable **Hotbar Manager** to use its per-slot item assignments while building. Use **Clear** to free a slot for supplies outside that layout. Hotbar Manager also works on its own, and pauses sorting during HighwayBuilder restocks. Offhand building-block refills use spare inventory stacks first and leave at least one item in reserved hotbar slots.
 
 `keep-trash-block-stacks` counts hotbar and main-inventory stacks together. A limit of `1` keeps one trash block stack across both. Protected items remain excluded from trash cleanup.
 
@@ -292,7 +292,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `packet-mode` | `false` | Always | Enables Packet Build and Packet Borer, leaving already-enabled pieces alone. |
 | `packet-budget` | `true` | Always | Caps mining and placing independently of Experimental. Disabling it removes this internal cap. Fast Packet Build uses the capacity left after mining in the same tick, including double mining. Active Paket Limiter Always Block rules exclude canceled packet types. |
 | `packets-per-tick` | `23`, range `4-200` | `packet-budget` is on | The tick's packet allowance, including movement and optional silent swaps. |
-| `check-behind` | `true` | Always | Holds forward movement while the scheduler repairs reachable gaps or obstructions behind the player. Legacy Mode checks one row. |
+| `check-behind` | `true` | Always | Repairs reachable gaps or obstructions behind the player. Legacy Mode rechecks floor and railings up to four rows back with normal placement and one row with Packet Build. |
 | `ghost-block-check` | `false` | `enable-experimental` and `check-behind` are on | Before moving into the next row, has the server confirm the floor/railings of the row behind (one use-on-block packet per two blocks, needs an empty hand, pickaxe or totem). A ghost block turns into a hole client-side and is re-placed first. Forward scheduler only. |
 | `advertise` | `false` | Always | Sends THM advertisement messages in chat. |
 | `advertise-interval` | `5`, range `1-60` minutes | `advertise` is on | Delay between advertisement messages. |
@@ -357,7 +357,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `eject-useless-shulkers` | `true` | Always | Drops shulkers that do not contain protected items, place blocks, pickaxes, or food. |
 | `search-ender-chest` | `false` | Always | Searches your ender chest for usable items. |
 | `search-shulkers` | `true` | Always | Searches shulker contents for usable items. |
-| `Manage-hotbar` | `true` | Always | Maintains HighwayBuilder supply slots and refills them from inventory. |
+| `Manage-hotbar` | `true` | Always | Uses the default supply slots or the active Hotbar Manager layout. |
 | `Anti-drop` | `false` | Always | Prevents dropping items the module considers needed. |
 | `offhand-build` | `true` | Always | Mines with the pickaxe in hand and places your block from the offhand. AutoTotem is paused and Meteor Offhand cannot swap the slot while building; the builder puts a totem there at low health or with an enemy near. While ender chests are being mined the offhand holds the chests instead, so a chest can be placed and mined in the same tick without swapping; the offhand returns to your placement block afterwards. |
 | `Anti-hunger` | `true` | Always | Turns Meteor's AntiHunger on while building and off again when it stops. If you already had it on, it is left alone. |

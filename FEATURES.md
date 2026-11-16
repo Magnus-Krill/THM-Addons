@@ -32,6 +32,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 
 ## Inventory and Utility
 - `Loadouts` — Saves item components and quantities, restores inventory layouts, and refills them from open containers. Legacy item-only saves remain supported.
+- `hotbar-manager` — Refills configurable hotbar slots and supplies a custom layout for HighwayBuilder.
 - `auto-totem` — Meteor AutoTotem with atomic offhand swaps and optional pop-triggered refill.
 - `auto-armor` — Meteor AutoArmor with optional mending equipment rotation.
 - `auto-fish` — Meteor AutoFish with optional post-catch random look-around and short backward/return movement before recasting.

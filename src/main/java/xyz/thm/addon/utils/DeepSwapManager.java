@@ -17,6 +17,7 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.ItemStack;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
+import xyz.thm.addon.modules.HotbarManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -46,13 +47,9 @@ public final class DeepSwapManager {
         if (sessions.size() >= 3 || sessions.stream().anyMatch(s -> s.source == source)) return -1;
         ItemStack sourceStack = mc.player.getInventory().getItem(source);
         if (sourceStack.isEmpty()) return -1;
-        HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
         int buffer = -1;
-        for (int i = 8; i >= 0; i--) {
-            int slot = i;
-            if (slot == mc.player.getInventory().getSelectedSlot() || SwapManager.get().reserved(slot)
-                || sessions.stream().anyMatch(s -> s.hotbar == slot)
-                || builder != null && builder.isActive() && builder.manageHotbar.get() && slot >= 4) continue;
+        for (int slot = 8; slot >= 0; slot--) {
+            if (slot == mc.player.getInventory().getSelectedSlot() || reserved(slot)) continue;
             if (buffer < 0 || mc.player.getInventory().getItem(slot).isEmpty()) buffer = slot;
             if (mc.player.getInventory().getItem(slot).isEmpty()) break;
         }
@@ -70,24 +67,39 @@ public final class DeepSwapManager {
     }
 
     public boolean reserved(int slot) {
-        if (sessions.stream().anyMatch(session -> session.source == slot || session.hotbar == slot)) return true;
+        return temporarilyReserved(slot) || managedHotbarSlot(slot);
+    }
+
+    public boolean temporarilyReserved(int slot) {
+        return sessions.stream().anyMatch(session -> session.source == slot || session.hotbar == slot)
+            || Inventory.isHotbarSlot(slot) && SwapManager.get().reserved(slot);
+    }
+
+    private boolean managedHotbarSlot(int slot) {
         if (!Inventory.isHotbarSlot(slot)) return false;
         HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
-        return SwapManager.get().reserved(slot)
-            || builder != null && builder.isActive() && builder.manageHotbar.get() && slot >= 4;
+        if (builder != null && builder.isActive()) return builder.isHotbarSlotReserved(slot);
+        HotbarManager manager = HotbarManager.active();
+        return manager != null && manager.managesSlot(slot);
     }
 
     public boolean swapIntoHotbar(int source, int hotbar) {
-        return Inventory.isHotbarSlot(hotbar) && swapIntoSlot(source, hotbar);
+        return Inventory.isHotbarSlot(hotbar) && swapIntoSlot(source, hotbar, false);
+    }
+
+    public boolean swapManagedHotbar(int source, int hotbar) {
+        return Inventory.isHotbarSlot(hotbar) && swapIntoSlot(source, hotbar, true);
     }
 
     public boolean swapIntoOffhand(int source) {
-        return swapIntoSlot(source, SlotUtils.OFFHAND);
+        return swapIntoSlot(source, SlotUtils.OFFHAND, false);
     }
 
-    private boolean swapIntoSlot(int source, int target) {
+    private boolean swapIntoSlot(int source, int target, boolean manageLayout) {
         return source >= 0 && source < 36 && source != target && canClick(false)
-            && !reserved(source) && !reserved(target) && InventoryManager.clickBudget(1) > 0 && click(source, target);
+            && !temporarilyReserved(source) && !temporarilyReserved(target)
+            && (manageLayout || !managedHotbarSlot(source) && !managedHotbarSlot(target))
+            && InventoryManager.clickBudget(1) > 0 && click(source, target);
     }
 
     public void onUserAction() {

@@ -243,6 +243,7 @@ tasks.test {
     dependsOn(prepareStartupTest)
     useJUnitPlatform()
     systemProperty("thm.startup.command", startupLaunch.get().asFile.absolutePath)
+    systemProperty("junit.jupiter.testclass.order.default", "org.junit.jupiter.api.ClassOrderer\$OrderAnnotation")
     systemProperty("junit.jupiter.execution.parallel.enabled", "true")
     systemProperty("junit.jupiter.execution.parallel.mode.classes.default", "concurrent")
     systemProperty("junit.jupiter.execution.parallel.config.strategy", "fixed")
