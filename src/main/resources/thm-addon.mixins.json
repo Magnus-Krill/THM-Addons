@@ -17,6 +17,7 @@
     "GhostPipelineMixin",
     "GhostRenderMixin",
     "GuiBackgroundMixin",
+    "GuiItemRenderStateMixin",
     "GuiScreenMixin",
     "HighwayBuilderCameraMixin",
     "HighwayBuilderEntityMixin",
@@ -62,6 +63,8 @@
     "meteor.DefaultSettingsWidgetFactoryMixin",
     "meteor.DropdownTooltipMixin",
     "meteor.EXPThrowerMixin",
+    "meteor.GuiRendererAnimationMixin",
+    "meteor.GuiTabScreenMixin",
     "meteor.GuiThemeMixin",
     "meteor.KillAuraMixin",
     "meteor.LogoutSpotsEntryPoseMixin",
@@ -86,7 +89,9 @@
     "meteor.ThmMeteorWindowMixin",
     "meteor.TimerMixin",
     "meteor.WidgetContainerMixin",
-    "meteor.WidgetScreenRootMixin"
+    "meteor.WidgetScreenAnimationMixin",
+    "meteor.WidgetScreenRootMixin",
+    "meteor.WindowAnimationMixin"
   ],
   "client": [
     "AnarchyJoinMixin",

@@ -54,15 +54,17 @@ fail the build; no separate test command or script is required.
 
 For a background build and test run on Linux, use `tools/scripts/test-async.sh`. It returns immediately
 and prints the log and result paths. The result file appears when finished: `0` means success.
-JUnit targets 16 concurrent test classes, with sequential methods inside each class.
+JUnit targets 16 concurrent test classes. Methods within each class run sequentially by default.
 
-JUnit schedules `MinecraftStartupTest` first alongside the other Java tests. It starts a separate client
-under `build/client-startup/`, waits one second at the main menu, then closes it. A crash, early
-exit or three-minute startup timeout fails the test. Its console and Minecraft logs stay in that
-run's directory. The test mod is excluded from the shipped addon JAR.
+JUnit schedules `MinecraftStartupTest` first alongside the other Java tests. It starts four clients
+concurrently, testing OpenGL and Vulkan with and without Patchy. Each uses its own directory under
+`build/client-startup/` and closes after one second at the main menu. A crash, early exit or
+three-minute startup timeout fails the test. The logs stay in each client's run directory.
+The test mod is excluded from the shipped addon JAR.
 
-Run this test through Gradle so Loom prepares its launch command. A graphics display is required;
-CI uses `xvfb-run -a ./gradlew test` with Mesa. This checks OpenGL startup, not world or server behavior.
+Run this test through Gradle so Loom prepares its launch command. A graphics display and drivers
+for both backends are required. CI uses `xvfb-run -a ./gradlew test` with Mesa. Each case checks
+the active backend and exercises the main menu.
 
 ## What's covered
 

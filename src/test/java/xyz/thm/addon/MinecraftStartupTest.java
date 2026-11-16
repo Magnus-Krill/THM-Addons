@@ -7,9 +7,12 @@
 package xyz.thm.addon;
 
 import com.google.gson.JsonParser;
+import net.minecraft.DetectedVersion;
 import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.File;
 import java.net.StandardProtocolFamily;
@@ -21,6 +24,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
@@ -31,13 +35,21 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Order(1)
 class MinecraftStartupTest {
-    @ParameterizedTest(name = "Patchy present: {0}")
-    @ValueSource(booleans = {true, false})
-    void reachesTheMainMenuAndClosesAfterOneSecond(boolean withPatchy) throws Exception {
+    private static final int OPTIONS_VERSION = DetectedVersion.tryDetectVersion().dataVersion().version();
+
+    @Execution(ExecutionMode.CONCURRENT)
+    @ParameterizedTest(name = "{0}, Patchy present: {1}")
+    @CsvSource({"OpenGL, true", "OpenGL, false", "Vulkan, true", "Vulkan, false"})
+    void reachesTheMainMenuAndClosesAfterOneSecond(String backend, boolean withPatchy) throws Exception {
         Path launch = Path.of(System.getProperty("thm.startup.command"));
         Path run = Files.createTempDirectory(launch.getParent(), "run-");
         Path log = run.resolve("console.log");
-        Files.writeString(run.resolve("options.txt"), "onboardAccessibility:false\npauseOnLostFocus:false\npreferredGraphicsBackend:\"opengl\"\n");
+        Files.writeString(run.resolve("options.txt"), """
+            version:%d
+            onboardAccessibility:false
+            pauseOnLostFocus:false
+            preferredGraphicsBackend:"%s"
+            """.formatted(OPTIONS_VERSION, backend.toLowerCase(Locale.ROOT)));
         var command = new ArrayList<>(Files.readAllLines(launch));
         boolean testBridge = withPatchy && File.separatorChar == '/';
         if (testBridge) command.add(1, "-Dthm.localClientBridge=true");
@@ -60,7 +72,9 @@ class MinecraftStartupTest {
                 "Minecraft must remain at the main menu for at least one second.");
             String decision = withPatchy ? "Enabled BlockedServersMixin"
                 : "Skipped BlockedServersMixin because com.mojang.patchy.BlockedServers is missing";
-            assertTrue(Files.readString(log).contains(decision), "Missing mixin decision: " + decision + ". Log: " + log);
+            String console = Files.readString(log);
+            assertTrue(console.contains("Using graphics backend " + backend + ","), "Expected " + backend + ". Log: " + log);
+            assertTrue(console.contains(decision), "Missing mixin decision: " + decision + ". Log: " + log);
             if (socket != null) assertFalse(Files.exists(socket), "Client must remove its diagnostic socket on shutdown.");
         } finally {
             if (client.isAlive()) {

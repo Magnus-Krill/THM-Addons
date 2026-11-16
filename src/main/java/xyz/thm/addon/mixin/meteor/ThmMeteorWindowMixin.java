@@ -7,11 +7,13 @@
 package xyz.thm.addon.mixin.meteor;
 
 import meteordevelopment.meteorclient.gui.GuiTheme;
+import meteordevelopment.meteorclient.gui.WidgetScreen;
 import meteordevelopment.meteorclient.gui.renderer.GuiRenderer;
 import meteordevelopment.meteorclient.gui.themes.meteor.MeteorGuiTheme;
 import meteordevelopment.meteorclient.gui.themes.meteor.widgets.WMeteorWindow;
 import meteordevelopment.meteorclient.gui.utils.BaseWidget;
 import meteordevelopment.meteorclient.gui.widgets.WWidget;
+import meteordevelopment.meteorclient.gui.widgets.containers.WWindow;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
@@ -19,6 +21,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import xyz.thm.addon.gui.ClickGuiAnimation;
 import xyz.thm.addon.gui.ThmChrome;
 import xyz.thm.addon.gui.themes.ThmTheme;
 import xyz.thm.addon.shaders.ShaderBackground;
@@ -36,7 +39,11 @@ import xyz.thm.addon.shaders.ShaderBackground;
  * and height, so the window rect and header height are both recoverable from them plus this.x/y.
  */
 @Mixin(value = WMeteorWindow.class, remap = false)
-public abstract class ThmMeteorWindowMixin {
+public abstract class ThmMeteorWindowMixin extends WWindow {
+    protected ThmMeteorWindowMixin(WWidget icon, String title) {
+        super(icon, title);
+    }
+
     // At onRender HEAD the framebuffer holds only what's behind the window (Meteor batches its own
     // quads and flushes them later), so blurring this window's rect now frosts the backdrop and the
     // body/widgets draw sharp on top. Meteor renders in framebuffer-pixel space; renderBlurredRegion
@@ -48,13 +55,16 @@ public abstract class ThmMeteorWindowMixin {
 
         int strength = meteor.blur.get();
         if (strength <= 0) return;
+        WidgetScreen screen = ClickGuiAnimation.transitioningScreen();
+        if (screen != null) strength = (int) Math.round(strength * screen.animProgress);
+        if (strength <= 0) return;
 
-        WWidget self = (WWidget) (Object) this;
+        double visibleHeight = header.height + (height - header.height) * animProgress;
         double sf = Minecraft.getInstance().getWindow().getGuiScale();
-        int x1 = (int) Math.round(self.x / sf);
-        int y1 = (int) Math.round(self.y / sf);
-        int x2 = (int) Math.round((self.x + self.width) / sf);
-        int y2 = (int) Math.round((self.y + self.height) / sf);
+        int x1 = (int) Math.round(x / sf);
+        int y1 = (int) Math.round(y / sf);
+        int x2 = (int) Math.round((x + width) / sf);
+        int y2 = (int) Math.round((y + visibleHeight) / sf);
         ShaderBackground.renderBlurredRegion(x1, y1, x2, y2, strength);
     }
 

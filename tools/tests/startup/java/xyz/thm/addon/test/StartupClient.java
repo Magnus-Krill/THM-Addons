@@ -11,6 +11,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
@@ -30,11 +31,25 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
+import meteordevelopment.meteorclient.MeteorClient;
+import meteordevelopment.meteorclient.events.meteor.KeyInputEvent;
+import meteordevelopment.meteorclient.gui.GuiThemes;
+import meteordevelopment.meteorclient.gui.screens.ModulesScreen;
+import meteordevelopment.meteorclient.gui.tabs.Tabs;
+import meteordevelopment.meteorclient.gui.tabs.WindowTabScreen;
+import meteordevelopment.meteorclient.gui.tabs.builtin.GuiTab;
+import meteordevelopment.meteorclient.gui.themes.meteor.MeteorGuiTheme;
+import meteordevelopment.meteorclient.gui.widgets.containers.WContainer;
+import meteordevelopment.meteorclient.gui.widgets.input.WDropdown;
 import meteordevelopment.meteorclient.settings.ItemSetting;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.utils.misc.input.KeyAction;
 import org.lwjgl.glfw.GLFW;
+import xyz.thm.addon.gui.ClickGuiAnimation;
 import xyz.thm.addon.gui.MainMenuFx;
+import xyz.thm.addon.gui.MainMenuSettingsScreen;
 import xyz.thm.addon.gui.ServerFolderSidebar;
+import xyz.thm.addon.gui.ThmStyledButtons;
 import xyz.thm.addon.accessor.ServerFolderView;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
 import xyz.thm.addon.modules.HotbarManager;
@@ -66,6 +81,7 @@ public final class StartupClient implements ClientModInitializer {
                 verifyHotbarManager();
                 verifyKitbotUpdateIsolation();
                 verifyServerFolders(client);
+                verifyClickGuiAnimations(client);
                 Files.writeString(client.gameDirectory.toPath().resolve("startup-ok"), Long.toString(now - readyAt));
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
@@ -76,9 +92,87 @@ public final class StartupClient implements ClientModInitializer {
         });
     }
 
+    private static void verifyClickGuiAnimations(Minecraft client) throws ReflectiveOperationException {
+        Screen title = client.gui.screen();
+        var setting = THMSystem.get().clickGuiAnimation;
+        var savedAnimation = setting.get();
+        var speed = THMSystem.get().clickGuiAnimationSpeed;
+        int savedSpeed = speed.get();
+        var icons = ((MeteorGuiTheme) GuiThemes.get()).categoryIcons;
+        boolean savedIcons = icons.get();
+        var shift = new KeyEvent(GLFW.GLFW_KEY_RIGHT_SHIFT, 0, GLFW.GLFW_MOD_SHIFT);
+        try {
+            Tabs.get(GuiTab.class).openScreen(GuiThemes.get());
+            var window = WindowTabScreen.class.getDeclaredField("window");
+            window.setAccessible(true);
+            if (!hasAnimationDropdown((WContainer) window.get(client.gui.screen()))) {
+                throw new IllegalStateException("Click GUI Animation is missing from the GUI tab");
+            }
+            client.gui.setScreen(title);
+            icons.set(true);
+            speed.set(100);
+            for (ClickGuiAnimation animation : ClickGuiAnimation.values()) {
+                if (animation == ClickGuiAnimation.Default) continue;
+                setting.set(animation);
+                MeteorClient.EVENT_BUS.post(KeyInputEvent.get(shift, KeyAction.Press));
+                if (!(client.gui.screen() instanceof ModulesScreen modules) || modules.animProgress != 0) {
+                    throw new IllegalStateException(animation + " did not start when opening Modules");
+                }
+
+                var midOpen = new GuiRenderState();
+                modules.renderCustom(new GuiGraphicsExtractor(client, midOpen, 0, 0), 0, 0, 4);
+                if (modules.animProgress <= 0 || modules.animProgress >= 1) {
+                    throw new IllegalStateException(animation + " did not draw an intermediate opening frame");
+                }
+                if (animation == ClickGuiAnimation.Fade) {
+                    boolean[] translucentIcon = {false};
+                    midOpen.forEachItem(item -> {
+                        int alpha = ((ClickGuiAnimation.ItemTint) (Object) item).thm$itemTint() >>> 24;
+                        if (alpha > 0 && alpha < 255) translucentIcon[0] = true;
+                    });
+                    if (!translucentIcon[0]) throw new IllegalStateException("Category icons did not fade with the panels");
+
+                    double normalProgress = modules.animProgress;
+                    speed.set(50);
+                    modules.animProgress = 0;
+                    modules.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 4);
+                    if (modules.animProgress != normalProgress / 2) {
+                        throw new IllegalStateException("Animation Speed did not scale the transition");
+                    }
+                    speed.set(100);
+                }
+
+                modules.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 8);
+                var scatter = (ClickGuiAnimation.ScatterSeed) modules;
+                int openingSeed = scatter.thm$scatterSeed();
+                MeteorClient.EVENT_BUS.post(KeyInputEvent.get(shift, KeyAction.Press));
+                if (animation == ClickGuiAnimation.Scatter && scatter.thm$scatterSeed() == openingSeed) {
+                    throw new IllegalStateException("Scatter reused its opening paths on close");
+                }
+                modules.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 4);
+                if (client.gui.screen() != modules || modules.animProgress <= 0 || modules.animProgress >= 1) {
+                    throw new IllegalStateException(animation + " did not draw an intermediate closing frame");
+                }
+                modules.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 8);
+                if (client.gui.screen() != title) throw new IllegalStateException(animation + " did not return to the title screen");
+            }
+        } finally {
+            icons.set(savedIcons);
+            setting.set(savedAnimation);
+            speed.set(savedSpeed);
+            if (client.gui.screen() != title) client.gui.setScreen(title);
+        }
+    }
+
+    private static boolean hasAnimationDropdown(WContainer container) {
+        return container.cells.stream().anyMatch(cell ->
+            cell.widget() instanceof WDropdown<?> dropdown && dropdown.get() instanceof ClickGuiAnimation
+                || cell.widget() instanceof WContainer child && hasAnimationDropdown(child));
+    }
+
     private static void verifyServerFolders(Minecraft client) {
         Screen title = client.gui.screen();
-        verifyJoinButtonLayout(title);
+        verifyJoinButtonLayout(client, title);
 
         var folders = THMSystem.get().serverFolders;
         var saved = folders.toTag();
@@ -170,13 +264,16 @@ public final class StartupClient implements ClientModInitializer {
         }
     }
 
-    private static void verifyJoinButtonLayout(Screen title) {
+    private static void verifyJoinButtonLayout(Minecraft client, Screen title) {
         var window = THMSystem.get().mainMenuWindow;
-        boolean saved = window.get();
+        var shortcut = THMSystem.get().mainMenuJoin6b6t;
+        boolean savedWindow = window.get(), savedShortcut = shortcut.get();
         int width = title.width, height = title.height;
+        var left = new MouseButtonInfo(GLFW.GLFW_MOUSE_BUTTON_LEFT, 0);
         try {
             for (boolean styled : new boolean[] {true, false}) {
                 window.set(styled);
+                shortcut.set(true);
                 title.resize(420, 240);
                 var join = button(title, MainMenuFx.JOIN_6B6T);
                 var multiplayer = button(title, I18n.get("menu.multiplayer"));
@@ -185,9 +282,26 @@ public final class StartupClient implements ClientModInitializer {
                     || join.getY() < button(title, I18n.get("menu.quit")).getBottom() || join.getBottom() > title.height - 10) {
                     throw new IllegalStateException("Join 6b6t did not fit below Options and Quit Game, styled=" + styled);
                 }
+                if (ThmStyledButtons.isStyled(join) != styled) {
+                    throw new IllegalStateException("Join 6b6t did not follow the title screen style");
+                }
+                button(title, "THM Menu").onPress(left);
+                if (!(client.gui.screen() instanceof MainMenuSettingsScreen menu)) {
+                    throw new IllegalStateException("THM Menu did not open");
+                }
+                menu.children().stream().filter(Checkbox.class::isInstance).map(Checkbox.class::cast)
+                    .filter(box -> box.getMessage().getString().equals("Join 6b6t Button"))
+                    .findFirst().orElseThrow().onPress(left);
+                menu.onClose();
+                if (shortcut.get() || title.children().stream().anyMatch(child -> child instanceof Button button
+                    && button.getMessage().getString().equals(MainMenuFx.JOIN_6B6T))) {
+                    throw new IllegalStateException("Disabling Join 6b6t in THM Menu did not hide the shortcut");
+                }
             }
         } finally {
-            window.set(saved);
+            window.set(savedWindow);
+            shortcut.set(savedShortcut);
+            if (client.gui.screen() != title) client.gui.setScreen(title);
             title.resize(width, height);
         }
     }

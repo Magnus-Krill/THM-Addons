@@ -71,8 +71,11 @@ public class MainMenuSettingsScreen extends Screen {
         int contentWidth = windowWidth - 20;
         int y = y1 + 16;
 
-        y = addCheckbox("Styled Window", system.mainMenuWindow.get(), contentX, y, contentWidth,
+        int checkboxWidth = (contentWidth - 4) / 2;
+        addCheckbox("Styled Window", system.mainMenuWindow.get(), contentX, y, checkboxWidth,
             v -> system.mainMenuWindow.set(v));
+        y = addCheckbox("Join 6b6t Button", system.mainMenuJoin6b6t.get(), contentX + checkboxWidth + 4, y,
+            contentWidth - checkboxWidth - 4, v -> system.mainMenuJoin6b6t.set(v));
         y = addCheckbox("Particle Trail", system.mainMenuParticles.get(), contentX, y, contentWidth,
             v -> system.mainMenuParticles.set(v));
         y = addCheckbox("Random Shader", random, contentX, y, contentWidth, v -> {
@@ -187,12 +190,10 @@ public class MainMenuSettingsScreen extends Screen {
         return (count + columns - 1) / columns;
     }
 
-    // Mirrors init()'s Y increments exactly (16 top pad, 3 checkboxes, shader row(s), blur
-    // slider, close button + bottom pad) - kept in sync by hand since it has to know the final
-    // height *before* x1/y1 (and therefore any real widget) can be positioned.
+    // Compute the height before positioning widgets.
     private int computeContentHeight(boolean random) {
         int y = 16;
-        y += ROW_HEIGHT * 3; // Styled Window, Particle Trail, Random Shader
+        y += ROW_HEIGHT * 3; // Checkbox rows
         y += random ? (12 + gridRows() * 14 + 4) : ROW_HEIGHT; // shader pool grid vs. shader choice
         y += ROW_HEIGHT * 2; // resolution/FPS and blur
         y += ROW_HEIGHT; // preview shader button

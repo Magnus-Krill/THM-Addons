@@ -11,13 +11,17 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.render.GuiRenderer;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.renderer.CubeMap;
+import net.minecraft.client.renderer.state.gui.GuiItemRenderState;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.gui.ClickGuiAnimation;
 import xyz.thm.addon.gui.MainMenuFx;
 import xyz.thm.addon.shaders.ShaderBackground;
 import xyz.thm.addon.shaders.ShaderManager;
@@ -32,6 +36,11 @@ public abstract class GuiBackgroundMixin {
     @Unique private boolean thm$prepareLogged;
     @Unique private int thm$lastBlurStrength = -1;
     @Unique private boolean thm$lastBlurDrawn;
+
+    @ModifyConstant(method = "submitBlitFromItemAtlas", constant = @Constant(intValue = -1))
+    private int thm$applyItemTint(int color, GuiItemRenderState item) {
+        return ((ClickGuiAnimation.ItemTint) (Object) item).thm$itemTint();
+    }
 
     @Inject(method = "render", at = @At("HEAD"))
     private void thm$logRenderEntry(CallbackInfo ci) {

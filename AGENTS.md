@@ -34,10 +34,10 @@ The wrapper uses Gradle 9.8.2 with Loom 1.19.3. Dependency versions live in `gra
 - `./gradlew build` — full build with parallel JUnit tests and the Minecraft startup test on every run;
   failures fail the build. The jar lands in `build/libs`.
 - `tools/scripts/test-async.sh` — background build and JUnit tests; prints the log and exit-code paths.
-  JUnit schedules `MinecraftStartupTest` first alongside the Java tests. It opens an isolated OpenGL client
-  with and without Patchy, waits one second at the main menu and closes it each time.
-  Missing startup, crashes and a three-minute timeout fail.
-  JUnit targets 16 concurrent test classes. Methods within each class stay sequential.
+  JUnit schedules `MinecraftStartupTest` first alongside the Java tests. It runs four isolated
+  clients concurrently, testing OpenGL and Vulkan with and without Patchy. Each verifies its
+  backend and closes after one second at the main menu. Missing startup, crashes and a three-minute timeout fail.
+  JUnit targets 16 concurrent test classes. Other test methods in each class run sequentially by default.
 - `./gradlew checkBuildRules` — standalone block-state checks for Baritone build rules; initializes vanilla registries without starting a client.
 - `./gradlew checkShaders` — OpenGL/Vulkan compiler and linker tests for backgrounds, blur, and
   trip shaders. Requires `glslangValidator` on PATH (`glslang` on Arch, `glslang-tools` on Ubuntu).
@@ -132,6 +132,8 @@ startup, so `THMHwyMonitor` and `HighwayTools` are registered without a separate
   swap happens in `GuiScreenMixin` on `Gui#setScreen`, not on `GuiTheme.moduleScreen`: third-party
   themes (e.g. Catppuccin) override that method with their own module screen. Defer live layout
   refreshes while the left mouse button is held to keep slider bounds stable.
+  `ClickGuiAnimation` uses Meteor's screen progress for Modules transitions. Panel offsets and
+  collapse progress apply during rendering only.
 - `system/` — `THMSystem` (persisted addon-wide config/state) and `THMTab` (the "THM Addon" tab
   in Meteor's GUI, separate from module categories). The updater button sits at the top of this tab;
   channel and auto-update preferences live in `UpdaterScreen` and persist in `THMSystem.updaterSettings`.

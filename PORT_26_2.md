@@ -6,6 +6,16 @@
 
 # Minecraft 26.2 port progress
 
+## 2026-11-16: Click GUI animations
+
+The isolated title-screen checks passed on OpenGL and Vulkan. Right Shift opened and closed
+the Modules screen with all six presets, and Fade produced translucent category icons.
+Gradle now runs the four backend and Patchy combinations concurrently. All four also passed
+with Mesa software rendering.
+The startup matrix also verified the animation dropdown in the GUI tab and the Join 6b6t
+toggle and button style in both title screen layouts.
+All four startup cases passed with randomized Scatter exits and the Animation Speed slider.
+
 ## 2026-11-08: Multiplayer folders and Join 6b6t
 
 Added a folder sidebar, local server aliases and search to the Vanilla multiplayer screen.

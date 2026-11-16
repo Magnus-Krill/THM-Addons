@@ -32,7 +32,7 @@ jobs:
       - name: Install graphics test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y glslang-tools xvfb xauth libgl1-mesa-dri libglx-mesa0
+          sudo apt-get install -y glslang-tools xvfb xauth libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers libvulkan1
       - name: Run all tests
         run: xvfb-run -a ./gradlew --no-daemon clean test --console=plain
       - name: Upload test reports

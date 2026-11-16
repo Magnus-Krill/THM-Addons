@@ -99,9 +99,10 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 ## UI
 
 - Drag servers into folders in the multiplayer list. Right-click a folder to create a subfolder. Search by name, alias, or address.
-- **Join 6b6t** below Options and Quit Game uses the first saved 6b6t address or falls back to `6b6t.org`.
+- **Join 6b6t** below Options and Quit Game uses the first saved 6b6t address or falls back to `6b6t.org`. Toggle it in **THM Menu → Join 6b6t Button**.
 - THM capes use Minecraft's normal cape renderer.
 - The THM tab shows the cracked-account password only for offline UUIDs; hiding it preserves its saved value.
 - Custom THM categories: `THM Highway` and `THM PVP`.
 - Disconnect button on the vanilla "Loading terrain" screen, which otherwise has no way out when it hangs.
 - GUI themes: `Dark`, `Snowy`, `Lambda`, `Stardust`, `Midnight`, `Monochrome`, `Nether`.
+- **GUI → Appearance → Click GUI Animation** changes how the Modules screen opens and closes. Choose Fade, Scatter, Drop, Unfold, Split, or Ripple. Set **Animation Speed** to 25–300% for any preset.

@@ -14,6 +14,7 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.nbt.CompoundTag;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.gui.ClickGuiAnimation;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.settings.StringMultiSelect;
@@ -48,6 +49,9 @@ public class THMSystem extends System<THMSystem> {
     public final Settings updaterSettings = new Settings();
     private final SettingGroup sgUpdater = updaterSettings.createGroup("Updater");
 
+    public final Settings guiSettings = new Settings();
+    private final SettingGroup sgGuiAppearance = guiSettings.createGroup("Appearance");
+
     // Separate settings object for the Main Menu screen, opened from a button on the title screen
     public final Settings mainMenuSettings = new Settings();
     private final SettingGroup sgMainMenu = mainMenuSettings.createGroup("Main Menu");
@@ -67,6 +71,22 @@ public class THMSystem extends System<THMSystem> {
         .name("thm-side-color")
         .description("Translucent THM fill color - the window body of the THM window/theme.")
         .defaultValue(new meteordevelopment.meteorclient.utils.render.color.SettingColor(145, 60, 255, 75))
+        .build()
+    );
+
+    public final Setting<ClickGuiAnimation> clickGuiAnimation = sgGuiAppearance.add(new EnumSetting.Builder<ClickGuiAnimation>()
+        .name("click-gui-animation")
+        .description("Animates the Modules screen when it opens or closes.")
+        .defaultValue(ClickGuiAnimation.Default)
+        .build()
+    );
+
+    public final Setting<Integer> clickGuiAnimationSpeed = sgGuiAppearance.add(new IntSetting.Builder()
+        .name("animation-speed")
+        .description("Sets custom animation speed as a percentage.")
+        .defaultValue(100)
+        .range(25, 300)
+        .sliderRange(25, 300)
         .build()
     );
 
@@ -246,6 +266,13 @@ public class THMSystem extends System<THMSystem> {
         .build()
     );
 
+    public final Setting<Boolean> mainMenuJoin6b6t = sgMainMenu.add(new BoolSetting.Builder()
+        .name("join-6b6t")
+        .description("Shows the Join 6b6t button on the title screen.")
+        .defaultValue(true)
+        .build()
+    );
+
     public final Setting<Boolean> mainMenuParticles = sgMainMenu.add(new BoolSetting.Builder()
         .name("particle-trail")
         .description("Shows a mouse particle trail on the title screen.")
@@ -379,6 +406,7 @@ public class THMSystem extends System<THMSystem> {
         tag.putString("version", THMAddon.VERSION);
         tag.put("settings", settings.toTag());
         tag.put("updaterSettings", updaterSettings.toTag());
+        tag.put("guiSettings", guiSettings.toTag());
         tag.put("mainMenuSettings", mainMenuSettings.toTag());
         tag.put("serverFolders", serverFolders.toTag());
         tag.putString(ACTIVE_HIGHWAY_PROFILE_TAG, (activeHighwayProfile == null ? Mode.None : activeHighwayProfile).name());
@@ -395,6 +423,7 @@ public class THMSystem extends System<THMSystem> {
         // Older configs stored the Updater group in the main tab settings.
         updaterSettings.fromTag(tag.getCompound(tag.contains("updaterSettings") ? "updaterSettings" : "settings")
             .orElse(new CompoundTag()));
+        guiSettings.fromTag(tag.getCompoundOrEmpty(tag.contains("guiSettings") ? "guiSettings" : "settings"));
         if (tag.contains("mainMenuSettings")) {
             mainMenuSettings.fromTag(tag.getCompound("mainMenuSettings").orElse(new CompoundTag()));
         }

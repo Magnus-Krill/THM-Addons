@@ -19,6 +19,7 @@ import meteordevelopment.meteorclient.systems.modules.Category;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.Utils;
 import meteordevelopment.meteorclient.utils.notebot.decoder.SongDecoders;
+import meteordevelopment.meteorclient.utils.render.DisplayItemUtils;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -61,8 +62,8 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
 
     static {METADATA = FabricLoader.getInstance().getModContainer(MOD_ID).orElseThrow().getMetadata();
         VERSION = METADATA.getVersion().getFriendlyString();
-        MAIN = new Category("THM Highway", Items.OBSIDIAN::getDefaultInstance);
-        PVP = new Category("THM PVP", Items.END_CRYSTAL::getDefaultInstance);}
+        MAIN = new Category("THM Highway", () -> DisplayItemUtils.toStack(Items.OBSIDIAN));
+        PVP = new Category("THM PVP", () -> DisplayItemUtils.toStack(Items.END_CRYSTAL));}
 
     public static File GetConfigFile(String key, String filename) {
         return new File(new File(new File(new File(MeteorClient.FOLDER, "thm"), key), Utils.getFileWorldName()), filename);
