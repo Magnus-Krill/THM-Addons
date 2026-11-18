@@ -30,6 +30,7 @@ import net.minecraft.world.item.Items;
 import org.slf4j.Logger;
 import xyz.thm.addon.commands.*;
 import xyz.thm.addon.gui.themes.*;
+import xyz.thm.addon.gui.themes.bephax.BepGuiTheme;
 import xyz.thm.addon.hud.*;
 import xyz.thm.addon.modules.*;
 import xyz.thm.addon.system.THMTab;
@@ -163,9 +164,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         HighwayPresetManager.initialize(highwayBuilder);
         Modules.get().add(new AxisViewer());
         Modules.get().add(new DiscordNotifs());
-        Modules.get().add(new AntiDrop());
         Modules.get().add(new THMScaffold());
-        Modules.get().add(new CatchUpPacing());
         Modules.get().add(new ShulkerOverview());
         Modules.get().add(new Nuker());
         Modules.get().add(new PaketLimiter());
@@ -247,6 +246,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         GuiThemes.add(MonochromeTheme.INSTANCE);
         GuiThemes.add(Nether.INSTANCE);
         GuiThemes.add(ThmTheme.INSTANCE);
+        if (!loader.isModLoaded("bephax")) GuiThemes.add(new BepGuiTheme());
 
         //System/Tab
         Tabs.add(new THMTab());

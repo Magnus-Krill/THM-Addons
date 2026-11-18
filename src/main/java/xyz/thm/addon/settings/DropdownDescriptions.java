@@ -6,6 +6,7 @@
 
 package xyz.thm.addon.settings;
 
+import meteordevelopment.meteorclient.gui.utils.AlignmentX;
 import meteordevelopment.meteorclient.gui.widgets.input.WDropdown;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.utils.entity.SortPriority;
@@ -21,6 +22,11 @@ public final class DropdownDescriptions {
     public static String description(Object value) {
         return switch (value) {
             case DescribedOption option -> option.description();
+            case AlignmentX alignment -> switch (alignment) {
+                case Left -> "Align module names to the left.";
+                case Center -> "Center module names.";
+                case Right -> "Align module names to the right.";
+            };
             case ShapeMode mode -> switch (mode) {
                 case Lines -> "Draw outlines only.";
                 case Sides -> "Draw filled faces only.";

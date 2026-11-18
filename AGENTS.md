@@ -206,7 +206,9 @@ Meteor Scaffold is unmodified. The budget reserves complete placement transactio
 
 **Loadouts:** New saves store stack components and minimum quantities through the 26.2 registry codec. Read legacy item-ID strings without inventing components. Preserve unreadable files and write replacements atomically. `checkInventoryRules` verifies item components, shulker contents and queue-through rays without a client.
 
-**Optional utilities:** `ShulkerOverview` uses `RenderUtilsTHM.renderItemBadge` and bounds its component cache. `CatchUpPacing` carries deferred ticks through `DeltaTracker.Timer`; it defaults off. AutoArmor mending rotation, AutoTotem pop refill and Speedmine tool-latency checks are also opt-in.
+**Highway utility settings:** General's `catch-up-pacing` carries deferred ticks through `DeltaTracker.Timer`. Inventory's `Anti-drop` filters Meteor drop events with a scoped cursor recovery bypass. Both default off and run only while HighwayBuilder is active. `ModulesMixin` migrates the former standalone settings.
+
+**Optional utilities:** `ShulkerOverview` uses `RenderUtilsTHM.renderItemBadge` and bounds its component cache. AutoArmor mending rotation, AutoTotem pop refill and Speedmine tool-latency checks are opt-in.
 
 **Meteor Offhand:** `OffhandMixin` adds `held-item-filter`: Off, Only when holding, or Only when not holding. `held-items` supplies the whitelist/blocklist. Filtering includes Offhand's totem swaps and releases its lock when blocked. `ModuleMixin` migrates the old toggle.
 

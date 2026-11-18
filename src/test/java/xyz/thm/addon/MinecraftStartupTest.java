@@ -44,6 +44,8 @@ class MinecraftStartupTest {
         Path launch = Path.of(System.getProperty("thm.startup.command"));
         Path run = Files.createTempDirectory(launch.getParent(), "run-");
         Path log = run.resolve("console.log");
+        // Meteor enables Discord Presence on first run if its config directory is absent.
+        Files.createDirectory(run.resolve("meteor-client"));
         Files.writeString(run.resolve("options.txt"), """
             version:%d
             onboardAccessibility:false

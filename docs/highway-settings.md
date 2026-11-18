@@ -142,6 +142,7 @@ migrate in module configs, Highway Profiles and custom presets.
 | `use-thm-speed` | `false` | Lets HighwayBuilder own horizontal movement speed while active. |
 | `highway-speed` | `5.0`, range `1.0-6.0`; shown when `use-thm-speed` is on | Forward/backward speed used by THM speed control. |
 | `pause-on-lag` | `false` | Throttles actions from TPS and pauses below 10 TPS. |
+| `catch-up-pacing` | `false` | Spreads out client catch-up ticks after freezes. |
 | `tps-safety-enclosure` | `true` | Builds a small safety enclosure during confirmed low/unknown TPS pauses. |
 | `destroy-crystal-traps` | `true` | Uses a bow to safely defuse crystal traps from range. |
 | `manage-thm-highway-monitor` | `true`; shown only when Baritone is installed | Lets HighwayBuilder toggle/manage THM Highway Monitor. |
@@ -284,6 +285,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `legacy-mode` | `false` | Always | Uses the older forward path instead of the rolling row scheduler. |
 | `disconnect-on-toggle` | `true` | Always | Disconnects automatically when the module turns itself off, such as when blocks run out. |
 | `pause-on-lag` | `false` | Always | Throttles mining/placing from TPS and pauses below 10 TPS. |
+| `catch-up-pacing` | `false` | Always | Caps catch-up bursts at three client ticks per 60 ms and defers extra ticks. |
 | `destroy-crystal-traps` | `true` | Always | Uses a bow to defuse crystal traps safely from distance. |
 | `manage-thm-highway-monitor` | `true` when Baritone is installed | Baritone is installed | Lets HighwayBuilder enable and manage THM Highway Monitor while active. |
 | `fall-save-air-place` | `false` | `manage-thm-highway-monitor` is on | Places one safety block per tick while the player remains below the managed operating level, is still descending by position and velocity, and has no direct support. Turning monitor management off also turns fall-save off. |
@@ -358,7 +360,10 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `search-ender-chest` | `false` | Always | Searches your ender chest for usable items. |
 | `search-shulkers` | `true` | Always | Searches shulker contents for usable items. |
 | `Manage-hotbar` | `true` | Always | Uses the default supply slots or the active Hotbar Manager layout. |
-| `Anti-drop` | `false` | Always | Prevents dropping items the module considers needed. |
+| `Anti-drop` | `false` | Always | Blocks protected item drops while HighwayBuilder is active. |
+| `anti-drop-all-items` | `false` | Anti-drop | Blocks all item drops. |
+| `anti-drop-items` | Obsidian, ender chests, diamond and netherite pickaxes | Anti-drop with all-items off | Sets which items to protect. |
+| `anti-drop-check-shulkers` | `false` | Anti-drop with all-items off | Protects shulkers containing any listed item. |
 | `offhand-build` | `true` | Always | Mines with the pickaxe in hand and places your block from the offhand. AutoTotem is paused and Meteor Offhand cannot swap the slot while building; the builder puts a totem there at low health or with an enemy near. While ender chests are being mined the offhand holds the chests instead, so a chest can be placed and mined in the same tick without swapping; the offhand returns to your placement block afterwards. |
 | `Anti-hunger` | `true` | Always | Turns Meteor's AntiHunger on while building and off again when it stops. If you already had it on, it is left alone. |
 | `minimum-empty-slots` | `1`, minimum `0`, slider `0-9` | Always | Empty inventory slots to preserve after obsidian mining. |

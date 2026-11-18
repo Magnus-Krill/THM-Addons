@@ -19,6 +19,7 @@ import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import meteordevelopment.meteorclient.MeteorClient;
+import meteordevelopment.meteorclient.events.entity.DropItemsEvent;
 import meteordevelopment.meteorclient.events.entity.player.PlayerMoveEvent;
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
 import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
@@ -70,6 +71,7 @@ import net.minecraft.client.gui.screens.DisconnectedScreen;
 import net.minecraft.client.gui.screens.inventory.ContainerScreen;
 import net.minecraft.client.gui.screens.inventory.ShulkerBoxScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import net.minecraft.client.player.ClientInput;
 import net.minecraft.core.BlockPos;
@@ -102,6 +104,7 @@ import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.ChatVisiblity;
 import net.minecraft.world.entity.player.Input;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.*;
@@ -123,6 +126,7 @@ import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.accessor.StuckEatingRetryBridge;
 import xyz.thm.addon.accessor.StuckEatingRetryResult;
 import xyz.thm.addon.mixin.accessor.ClientPlayerInteractionManagerTHMAccessor;
+import xyz.thm.addon.mixin.accessor.DeltaTrackerTimerAccessor;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.settings.ItemPriorityList;
 import xyz.thm.addon.system.THMSystem;
@@ -918,6 +922,15 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
+    private final TickPacer catchUpTickPacer = new TickPacer();
+    private final Setting<Boolean> catchUpPacing = sgGeneral.add(new BoolSetting.Builder()
+        .name("catch-up-pacing")
+        .description("Spreads out catch-up ticks after client freezes.")
+        .defaultValue(false)
+        .onChanged(value -> catchUpTickPacer.clear())
+        .build()
+    );
+
     private final Setting<Integer> resumeTPS = sgGeneral.add(new IntSetting.Builder()
         .name("resume-tps")
         .description("Deprecated. TPS throttle now resumes automatically at 10 TPS.")
@@ -1570,10 +1583,35 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
-    public final Setting<Boolean> antidrop = sgInventory.add(new BoolSetting.Builder()
+    private boolean bypassingAntiDrop;
+    private final Setting<Boolean> antiDrop = sgInventory.add(new BoolSetting.Builder()
         .name("Anti-drop")
-        .description("Stops you from dropping needed items")
+        .description("Prevents accidental item drops.")
         .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Boolean> antiDropAllItems = sgInventory.add(new BoolSetting.Builder()
+        .name("anti-drop-all-items")
+        .description("Blocks drops of every item.")
+        .defaultValue(false)
+        .visible(antiDrop::get)
+        .build()
+    );
+
+    private final Setting<List<Item>> antiDropItems = sgInventory.add(new ItemListSetting.Builder()
+        .name("anti-drop-items")
+        .description("Items protected against dropping.")
+        .defaultValue(Items.OBSIDIAN, Items.ENDER_CHEST, Items.DIAMOND_PICKAXE, Items.NETHERITE_PICKAXE)
+        .visible(() -> antiDrop.get() && !antiDropAllItems.get())
+        .build()
+    );
+
+    private final Setting<Boolean> antiDropCheckShulkers = sgInventory.add(new BoolSetting.Builder()
+        .name("anti-drop-check-shulkers")
+        .description("Blocks drops of shulkers containing protected items.")
+        .defaultValue(false)
+        .visible(() -> antiDrop.get() && !antiDropAllItems.get())
         .build()
     );
 
@@ -3114,6 +3152,7 @@ public class HighwayBuilderTHM extends Module {
 
     @Override
     public void onActivate() {
+        catchUpTickPacer.clear();
         customStatusMode = null;
         loopProgressStart = null;
         packetBuildWindowSends = 0;
@@ -3311,7 +3350,6 @@ public class HighwayBuilderTHM extends Module {
             }
         }
         hotbarSortTicks = 0;
-        if (!Modules.get().get(AntiDrop.class).isActive() && antidrop.get()) { Modules.get().get(AntiDrop.class).toggle();}
         enableAntiHungerIfNeeded();
         syncManagedSpeedMineOwnership();
         syncNoSwapAutoTotem();
@@ -3319,6 +3357,7 @@ public class HighwayBuilderTHM extends Module {
     }
     @Override
     public void onDeactivate() {
+        catchUpTickPacer.clear();
         boolean restockingAtStop = kitbotRestockBusy();
         initialAlignmentTarget = null;
         initialAlignmentLevel = null;
@@ -3430,7 +3469,6 @@ public class HighwayBuilderTHM extends Module {
             mc.options.setCameraType(previousPerspective);
             perspectiveChanged = false;
         }
-        if (Modules.get().get(AntiDrop.class).isActive() && antidrop.get()) { Modules.get().get(AntiDrop.class).toggle();}
         restoreAntiHunger();
         if (disabledAutoTotem) { // no-swap-loadout no longer owns the offhand; give AutoTotem back
             AutoTotem autoTotem = Modules.get().get(AutoTotem.class);
@@ -5481,6 +5519,7 @@ public class HighwayBuilderTHM extends Module {
         minePacketsLeft = 0;
         minePacketAttempted = false;
         tickPacketChoke();
+        if (catchUpPacing.get() && mc.level != null) catchUpTickPacer.record(System.nanoTime());
         if (mc.player == null || mc.level == null) return;
         long rateNow = System.nanoTime();
         pendingBlockPlacements.confirm(rateNow,
@@ -6244,6 +6283,7 @@ public class HighwayBuilderTHM extends Module {
 
     @EventHandler
     private void onGameLeave(GameLeftEvent event) {
+        catchUpTickPacer.clear();
         if (!isActive()) return;
         notifyDesktop(notifyDisconnect, "THM Highway Builder", "Disconnected while Highway Builder was active.");
         if (hasActiveInMemoryStatsSession() && !statsSessionTerminalOrFinalizing) {
@@ -13432,8 +13472,34 @@ public class HighwayBuilderTHM extends Module {
         return mc.player.containerMenu.getCarried().isEmpty();
     }
 
-    private boolean protectUsefulCursorStackFromDrop(String reason) {
-        return protectUsefulCursorStackFromDrop(reason, false);
+    public int limitCatchUpTicks(int wanted, DeltaTracker.Timer timer) {
+        if (!isActive() || !catchUpPacing.get() || mc.level == null) return wanted;
+        int requested = Math.min(10, wanted);
+        int allowed = catchUpTickPacer.allow(requested, System.nanoTime());
+        if (allowed < requested) {
+            var access = (DeltaTrackerTimerAccessor) timer;
+            access.thm$setResidual(access.thm$getResidual() + requested - allowed);
+        }
+        return allowed;
+    }
+
+    @EventHandler
+    private void onDrop(DropItemsEvent event) {
+        if (!antiDrop.get() || bypassingAntiDrop) return;
+        List<Item> protectedDrops = antiDropItems.get();
+        ItemStack stack = event.itemStack;
+        if (antiDropAllItems.get() || protectedDrops.contains(stack.getItem())) {
+            event.cancel();
+        } else if (antiDropCheckShulkers.get() && Utils.isShulker(stack.getItem())) {
+            ItemStack[] contents = new ItemStack[27];
+            Utils.getItemsInContainerItem(stack, contents);
+            for (ItemStack item : contents) {
+                if (protectedDrops.contains(item.getItem())) {
+                    event.cancel();
+                    return;
+                }
+            }
+        }
     }
 
     private boolean protectUsefulCursorStackFromDrop(String reason, boolean bypassAntiDrop) {
@@ -13499,34 +13565,32 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private void dropCursorHandBypassingAntiDrop() {
-        AntiDrop antiDrop = Modules.get().get(AntiDrop.class);
-        boolean wasActive = antiDrop != null && antiDrop.isActive();
-        if (wasActive) antiDrop.toggle();
-        InvUtils.dropHand();
-        if (wasActive) antiDrop.toggle();
+        if (!mc.player.containerMenu.getCarried().isEmpty()) dropCursorOutsideBypassingAntiDrop();
     }
 
     private void forceCursorDropAttemptBypassingAntiDrop(String reason) {
         if (mc.player == null || mc.gameMode == null || mc.player.containerMenu == null) return;
 
-        AntiDrop antiDrop = Modules.get().get(AntiDrop.class);
-        boolean wasActive = antiDrop != null && antiDrop.isActive();
-        if (wasActive) antiDrop.toggle();
+        dropCursorOutsideBypassingAntiDrop();
 
+        if (restockDebugLog.get()) {
+            restockDebug("Issued unconditional cursor drop attempt (%s).", reason);
+        }
+    }
+
+    private void dropCursorOutsideBypassingAntiDrop() {
+        boolean previousBypass = bypassingAntiDrop;
+        bypassingAntiDrop = true;
         try {
             mc.gameMode.handleContainerInput(
                 mc.player.containerMenu.containerId,
-                -999,
+                AbstractContainerMenu.SLOT_CLICKED_OUTSIDE,
                 0,
                 ContainerInput.PICKUP,
                 mc.player
             );
         } finally {
-            if (wasActive) antiDrop.toggle();
-        }
-
-        if (restockDebugLog.get()) {
-            restockDebug("Issued unconditional cursor drop attempt (%s).", reason);
+            bypassingAntiDrop = previousBypass;
         }
     }
 

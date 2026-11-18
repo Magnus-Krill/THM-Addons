@@ -9,7 +9,7 @@
 This document lists the modules, HUD widgets, and utilities shipped with THM Addons. Module names match the in-game Meteor module list.
 
 ## Highway and Travel
-- `THM-HighwayBuilder` — Automatically builds highways according to THM standards, with startup and periodic mapped-highway alignment.
+- `THM-HighwayBuilder` — Builds highways with mapped-road alignment, optional catch-up pacing, and item-drop protection.
 - `THM Highway Monitor` — Monitors alignment and recovers HighwayBuilder from drift, with reconnect or chunk-refresh recovery. Requires Baritone.
 - `Highway-Tools` — Highway utilities: axis walker, highway teleporter, boundary finder, and highway checker. Requires Baritone.
 - `axis-viewer` — Displays world axes and Nether highways, including XaeroPlus rings, diamonds, the 50k grid, and 125k extensions.
@@ -37,12 +37,10 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `auto-armor` — Meteor AutoArmor with optional mending equipment rotation.
 - `auto-fish` — Meteor AutoFish with optional post-catch random look-around and short backward/return movement before recasting.
 - `shulker-overview` — Shows the dominant contents on shulker item icons, with a bounded component cache.
-- `catch-up-pacing` — Optionally spreads client catch-up ticks after freezes.
 - `offhand` — Meteor Offhand with main-hand item whitelist and blocklist modes for swaps.
 - `offhand-manager` — Automatically manages your offhand (optimized for highway work).
 - `chest-tracker` — Track items in containers.
 - `paket-limiter` — Limits outgoing packets per tick with a bypass list.
-- `AntiDrop` — Stops you from dropping certain items.
 - `NotebotStealer` — Records nearby noteblock songs as `.nbs` for Notebot, one file per song (skips tuning, splits on 3s of silence). Notebot also plays Future `.notebot` songs.
 - `THM Stash mover` — Keeps named kit-pair deposit storage topped off with full shulker kits.
 - `friends-sync` — Runs commands when friends or THM members join. `%player%` is replaced with their name.
@@ -104,5 +102,5 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - The THM tab shows the cracked-account password only for offline UUIDs; hiding it preserves its saved value.
 - Custom THM categories: `THM Highway` and `THM PVP`.
 - Disconnect button on the vanilla "Loading terrain" screen, which otherwise has no way out when it hangs.
-- GUI themes: `Dark`, `Snowy`, `Lambda`, `Stardust`, `Midnight`, `Monochrome`, `Nether`.
+- GUI themes: `Dark`, `Snowy`, `Lambda`, `Stardust`, `Midnight`, `Monochrome`, `Nether`, `BepHax`.
 - **GUI → Appearance → Click GUI Animation** changes how the Modules screen opens and closes. Choose Fade, Scatter, Drop, Unfold, Split, or Ripple. Set **Animation Speed** to 25–300% for any preset.

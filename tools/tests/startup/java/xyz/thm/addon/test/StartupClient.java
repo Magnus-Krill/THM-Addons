@@ -6,6 +6,7 @@
 
 package xyz.thm.addon.test;
 
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.Minecraft;
@@ -29,6 +30,7 @@ import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
+import net.minecraft.nbt.TagParser;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
 import meteordevelopment.meteorclient.MeteorClient;
@@ -52,6 +54,7 @@ import xyz.thm.addon.gui.MainMenuFx;
 import xyz.thm.addon.gui.MainMenuSettingsScreen;
 import xyz.thm.addon.gui.ServerFolderSidebar;
 import xyz.thm.addon.gui.ThmStyledButtons;
+import xyz.thm.addon.gui.themes.bephax.BepGuiTheme;
 import xyz.thm.addon.accessor.ServerFolderView;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
 import xyz.thm.addon.modules.HotbarManager;
@@ -81,10 +84,12 @@ public final class StartupClient implements ClientModInitializer {
             closing = true;
             try {
                 verifyPacketBudget();
+                verifyHighwayUtilityMigration();
                 verifyHotbarManager();
                 verifyKitbotUpdateIsolation();
                 verifyServerFolders(client);
                 verifyClickGuiAnimations(client);
+                verifyBepHaxTheme(client);
                 if (Arrays.asList(GuiThemes.getNames()).contains("Catppuccin")) {
                     String theme = GuiThemes.get().name;
                     try {
@@ -98,11 +103,30 @@ public final class StartupClient implements ClientModInitializer {
                 Files.writeString(client.gameDirectory.toPath().resolve("startup-ok"), Long.toString(now - readyAt));
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
-            } catch (ReflectiveOperationException e) {
+            } catch (ReflectiveOperationException | CommandSyntaxException e) {
                 throw new IllegalStateException("Module regression check failed", e);
             }
             client.stop();
         });
+    }
+
+    private static void verifyBepHaxTheme(Minecraft client) throws ReflectiveOperationException {
+        var original = GuiThemes.get();
+        var title = client.gui.screen();
+        try {
+            GuiThemes.select("BepHax");
+            if (!(GuiThemes.get() instanceof BepGuiTheme)) {
+                throw new IllegalStateException("BepHax is missing from the theme selector");
+            }
+            Tabs.get(GuiTab.class).openScreen(GuiThemes.get());
+            var settings = (WidgetScreen) client.gui.screen();
+            settings.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 4);
+            client.gui.setScreen(title);
+            verifyClickGuiAnimations(client);
+        } finally {
+            GuiThemes.select(original.name);
+            client.gui.setScreen(title);
+        }
     }
 
     private static void verifyClickGuiAnimations(Minecraft client) throws ReflectiveOperationException {
@@ -378,6 +402,38 @@ public final class StartupClient implements ClientModInitializer {
             }
         } finally {
             builder.loadSettingsSnapshot(saved);
+        }
+    }
+
+    private static void verifyHighwayUtilityMigration() throws CommandSyntaxException {
+        var modules = Modules.get();
+        var saved = modules.toTag();
+        var builder = modules.get(HighwayBuilderTHM.class);
+        var legacy = TagParser.parseCompoundFully("""
+            {modules:[
+                {name:"THM-HighwayBuilder",settings:{groups:[{name:"Inventory",settings:[
+                    {name:"anti-drop-items",value:["minecraft:diamond"]}
+                ]}]}},
+                {name:"catch-up-pacing",active:true},
+                {name:"AntiDrop",active:true,settings:{groups:[{name:"General",settings:[
+                    {name:"check-shulkers",value:true},{name:"items",value:["minecraft:obsidian"]}
+                ]}]}}
+            ]}
+            """);
+        try {
+            modules.fromTag(legacy);
+            if (!builder.settings.get("catch-up-pacing", Boolean.class).get()
+                || !builder.settings.get("Anti-drop", Boolean.class).get()
+                || !builder.settings.get("anti-drop-check-shulkers", Boolean.class).get()
+                || !builder.settings.get("anti-drop-items").get().equals(java.util.List.of(Items.DIAMOND))) {
+                throw new IllegalStateException("HighwayBuilder lost migrated settings or overwrote its item filter");
+            }
+            if (modules.get("catch-up-pacing") != null || modules.get("AntiDrop") != null
+                || builder.limitCatchUpTicks(8, null) != 8) {
+                throw new IllegalStateException("Highway utilities ran independently of HighwayBuilder");
+            }
+        } finally {
+            modules.fromTag(saved);
         }
     }
 
