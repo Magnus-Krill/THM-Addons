@@ -143,12 +143,6 @@ public final class AddonUpdater {
                 status = "Updater disabled in development run";
                 return;
             }
-            String url = GeneratedApiEndpoints.updaterUrl();
-            String key = GeneratedApiEndpoints.updaterPublicKey();
-            if (url == null || url.isBlank() || key.isBlank()) {
-                status = "Updater API is not configured in this build";
-                return;
-            }
             if (!hasApiToken()) {
                 status = "Set a valid personal API token to access member updates";
                 return;
@@ -160,10 +154,10 @@ public final class AddonUpdater {
             }
             try {
                 status = "Checking " + branch + " updates...";
-                String response = TrustedHttp.getString(url, TrustedHttp.Kind.API, TrustedHttp.MAX_JSON_BYTES);
+                String response = TrustedHttp.getString(APIUtils.UPDATE_FEED_URL, TrustedHttp.Kind.API, TrustedHttp.MAX_JSON_BYTES);
                 if (response == null) throw new IllegalStateException("Member update API refused the request or is unavailable");
                 status = "Verifying signed update feed...";
-                entries = parseSignedFeed(response, URI.create(url), key,
+                entries = parseSignedFeed(response, URI.create(APIUtils.UPDATE_FEED_URL), APIUtils.UPDATE_PUBLIC_KEY,
                     FabricLoader.getInstance().getModContainer("minecraft").orElseThrow().getMetadata().getVersion().getFriendlyString(), branch);
                 THMSystem system = THMSystem.get();
                 Entry latest = system == null ? null : entries.stream()

@@ -17,9 +17,7 @@ for each test.
 2. Open the project as a Gradle project (open the folder containing `build.gradle.kts`). After the
    Gradle sync, `src/test/java` shows up as a green test folder.
 3. **Settings → Build, Execution, Deployment → Build Tools → Gradle → Run tests using:** leave this
-   on **Gradle** (the default). Gradle runs `generateApiEndpoints` before the tests, and the
-   `GeneratedApiEndpointsTest` needs that. With "IntelliJ IDEA" selected it only works after one
-   normal build.
+   on **Gradle** (the default) so the Minecraft startup test has its generated launch command.
 4. Install `glslangValidator` on PATH (`glslang` on Arch, `glslang-tools` on Ubuntu) for the shader
    tests. Local runs skip shader checks when the compiler is unavailable. Restart IntelliJ if you
    changed its PATH.
@@ -74,7 +72,6 @@ version to also exercise the GUI transitions with Catppuccin in each startup cas
 | Test | What it checks |
 | --- | --- |
 | `TrustedHttpTest` | SSRF guard: private, loopback and metadata addresses blocked; URL scheme and credential rules; logs never contain the API host or URL. |
-| `GeneratedApiEndpointsTest` | Every encrypted API URL decrypts to the value in `secrets.properties` (or the example file). |
 | `RangeUtilsTest` | Nuker-style reach: distance to the nearest point of the block, edges count. |
 | `Vp8LDecoderTest` | WebP decoder: pixel-exact against libwebp for several images and the shipped icons; truncated or corrupted files never crash it. |
 | `KitbotChatCommandParserTest` | `$goto`/`$update`/`$kit`/`$send`/`$token`/`$claim` parsing, errors, and tab-completion. |
