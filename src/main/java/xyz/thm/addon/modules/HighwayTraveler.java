@@ -21,6 +21,7 @@ import meteordevelopment.meteorclient.utils.player.SlotUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
 import net.minecraft.tags.BlockTags;
@@ -413,7 +414,16 @@ public class HighwayTraveler extends Module {
     private int handoffAirTicks;
     // Fast flight outruns chunk loading, so a suspected end is held still and re-checked before it counts.
     private static final int END_CONFIRM_TICKS = 40;
+    private static final int END_CONFIRM_MAX_TICKS = 200;
+    private boolean continuationUnknown;
+    private static final double WASP_HOLD_FALL_SPEED = 0.5;
+    private static final int WASP_HOLD_FLOOR_DEPTH = 64;
     private int endConfirmTicks = -1;
+    // A lane gap that runs into unloaded chunks is held like a suspected end until the scan resolves.
+    private int gapWaitTicks = -1;
+    private boolean waitScanBroken;
+    private boolean waitScanUnknown;
+    enum GapWait { HANDOFF, WAIT, STOP }
     private BlockPos suspectedEnd;
     private final ElytraNavigator.Config navConfig = new ElytraNavigator.Config();
     private final FlyTerrain flyTerrain = new FlyTerrain();
@@ -458,6 +468,7 @@ public class HighwayTraveler extends Module {
         repairCheckTicks   = 0;
         handoffTicks       = -1;
         endConfirmTicks    = -1;
+        gapWaitTicks       = -1;
         suspectedEnd       = null;
         bounceRubberbanded = false;
         bounceRestartTicks = bounceRestartDelay.get();
@@ -581,6 +592,7 @@ public class HighwayTraveler extends Module {
         bounceRubberbanded = false;
         handoffTicks = -1;
         endConfirmTicks = -1;
+        gapWaitTicks = -1;
         // If the module gets toggled off mid unequip-recast, don't leave the elytra sitting
         // unworn in the player's inventory - put it straight back on.
         if (stashedElytraSlot != -1) reequipElytra();
@@ -618,6 +630,12 @@ public class HighwayTraveler extends Module {
             endConfirmTicks = -1;
             suspectedEnd = null;
         }
+
+        if (gapWaitTicks >= 0 && stopAtEnd.get() == StopAtEnd.PAVE) {
+            tickGapWait(p);
+            return;
+        }
+        gapWaitTicks = -1;
 
         if (stopAtEnd.get() != StopAtEnd.OFF && travelState != TravelState.BACKUP) {
             BlockPos end = findHighwayEnd(p);
@@ -745,8 +763,30 @@ public class HighwayTraveler extends Module {
      */
     @EventHandler
     private void onPlayerMove(PlayerMoveEvent event) {
-        if (mc.player == null || methodSetting.get() != TravelMethod.WASP || !mc.player.isFallFlying()) return;
-        if (travelState == TravelState.STOPPED || travelState == TravelState.BACKUP || holding()) return;
+        if (mc.player == null) return;
+        boolean wasp = methodSetting.get() == TravelMethod.WASP;
+        // Bounce glides too, so it needs the same brake.
+        if (holding() && (wasp || mc.player.isFallFlying())) {
+            // Vanilla glide keeps its own velocity past the end, also after touchdown; stop, and sink only onto a floor.
+            Vec3 vel = mc.player.getDeltaMovement();
+            mc.player.setDeltaMovement(0, vel.y, 0);
+            if (!wasp || !mc.player.isFallFlying()) {
+                ((IVec3) event.movement).meteor$set(0, event.movement.y, 0);
+                return;
+            }
+            BlockPos feet = mc.player.blockPosition();
+            double landingY = landingSurfaceY(feet);
+            boolean floorFound = !Double.isNaN(landingY);
+            // A drop of a block or two is a stepped road; deeper terrain must not pull Wasp off the lane.
+            boolean laneReachable = floorFound
+                && (baseFeetY == Integer.MIN_VALUE || landingY >= baseFeetY - BOUNCE_Y_TOLERANCE);
+            double fall = floorFound ? Math.max(waspFallSpeed.get(), WASP_HOLD_FALL_SPEED) : waspFallSpeed.get();
+            // Collision sets onGround; capping to the exact floor distance can stop one tick short.
+            double descent = laneReachable ? fall : holdFall(fall, mc.player.getY(), baseFeetY);
+            ((IVec3) event.movement).meteor$set(0, -descent, 0);
+            return;
+        }
+        if (!wasp || !mc.player.isFallFlying() || travelState == TravelState.STOPPED || travelState == TravelState.BACKUP) return;
 
         float yaw = travelState == TravelState.PATH_FOLLOW ? mc.player.getYRot() : hwYaw;
 
@@ -836,14 +876,8 @@ public class HighwayTraveler extends Module {
     private void tickForward(LocalPlayer p) {
         // The end check tolerates short gaps and holes beside pave, so walking on would drop into them.
         if (stopAtEnd.get() == StopAtEnd.PAVE && laneFloorMissingAhead(p)) {
-            if (autoRepairSwap.get() && highwayAheadBroken()) {
-                beginHandoffWait(p);
-                return;
-            }
-            warning("No pave ahead in the lane. Stopping.");
-            handoffToBuilder = false;
-            beginHandoffWait(p);
-            handoffTicks = 0;
+            gapWaitTicks = 0;
+            tickGapWait(p);
             return;
         }
 
@@ -942,6 +976,16 @@ public class HighwayTraveler extends Module {
      * goes on behind it; otherwise it is the end of the pave or dig, which stop-at-end handles.
      */
     private boolean highwayAheadBroken() {
+        return highwayAheadBroken(Integer.MIN_VALUE);
+    }
+
+    private boolean highwayAheadBroken(int scanFeetY) {
+        return highwayAheadBroken(scanFeetY, repairScanBlocks.get());
+    }
+
+    /** Uses the live player height, or {@code scanFeetY} when Wasp has sunk below the confirmed lane. */
+    private boolean highwayAheadBroken(int scanFeetY, int scanBlocks) {
+        continuationUnknown = false;
         HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
         if (builder == null || mc.player == null) return false;
 
@@ -957,19 +1001,30 @@ public class HighwayTraveler extends Module {
             origin = lanePointAtPlayer();
             tolerance = 0;
         } else {
-            origin = new BlockPos(mc.player.getBlockX(), (int) Math.round(mc.player.getY()), mc.player.getBlockZ());
-            tolerance = repairToleratesBounce.get() ? BOUNCE_Y_TOLERANCE : 0;
+            int feetY = scanFeetY == Integer.MIN_VALUE ? (int) Math.round(mc.player.getY()) : scanFeetY;
+            origin = new BlockPos(mc.player.getBlockX(), feetY, mc.player.getBlockZ());
+            tolerance = scanFeetY == Integer.MIN_VALUE && repairToleratesBounce.get() ? BOUNCE_Y_TOLERANCE : 0;
         }
 
         // Paving only repairs the floor; blocks on the highway or at its ceiling are left to obstacle avoidance.
         boolean floorOnly = THMSystem.get().mode.get() == THMSystem.Mode.HighwayBuilding;
         // Unloaded rows read as air, so the scan stops where the loaded world does.
-        int scan = loadedStepsAhead(builder, travelDir, origin, repairScanBlocks.get());
+        int scan = loadedStepsAhead(builder, travelDir, origin, scanBlocks);
         int broken = builder.firstBrokenStepAhead(travelDir, origin, scan, tolerance, floorOnly);
-        if (broken == -1) return false;
+        if (broken == -1) {
+            // One unloaded lane cuts the scan short; that is not proof the highway ends.
+            continuationUnknown = scan < scanBlocks;
+            return false;
+        }
         if (stopAtEnd.get() == StopAtEnd.OFF) return true;
         int last = loadedStepsAhead(builder, travelDir, origin, broken + REPAIR_GAP_SCAN);
-        return builder.highwayContinuesAhead(travelDir, origin, broken + 1, last, tolerance, floorOnly);
+        if (last <= broken) {
+            continuationUnknown = true;
+            return false;
+        }
+        if (builder.highwayContinuesAhead(travelDir, origin, broken + 1, last, tolerance, floorOnly)) return true;
+        continuationUnknown = last < broken + REPAIR_GAP_SCAN;
+        return false;
     }
 
     /** Steps ahead of {@code origin}, up to {@code max}, before the first whose builder cross-section reads an unloaded chunk. */
@@ -981,29 +1036,117 @@ public class HighwayTraveler extends Module {
     }
 
     private boolean holding() {
-        return handoffTicks >= 0 || endConfirmTicks >= 0;
+        return handoffTicks >= 0 || endConfirmTicks >= 0 || gapWaitTicks >= 0;
     }
 
-    /** Holds still until a suspected end has stayed for {@link #END_CONFIRM_TICKS}; resumes as soon as it is gone. */
-    private void tickEndConfirm(LocalPlayer p) {
-        // The bounce handlers that would re-equip it are paused during the check.
+    private void holdStill(LocalPlayer p) {
+        // The bounce handlers that would re-equip it are paused while holding.
         if (stashedElytraSlot != -1) reequipElytra();
         releaseAll();
         mc.options.keyJump.setDown(false);
         mc.options.keyShift.setDown(false);
         p.setSprinting(false);
+        // Bounce pitch would dive while its handlers are paused.
+        p.setXRot(0);
+    }
 
-        if (!endStillThere()) {
+    private boolean waitScanDue(int waitedTicks, int firstTick) {
+        int interval = Math.max(1, repairCheckInterval.get());
+        return waitedTicks == firstTick || waitedTicks % interval == 0 || waitedTicks + 1 >= END_CONFIRM_MAX_TICKS;
+    }
+
+    /** Broken highway goes to the builder; a gap into unloaded chunks waits up to the end-confirm cap; anything else stops. */
+    static GapWait gapWaitDecision(boolean broken, boolean continuationUnknown, int waitedTicks) {
+        if (broken) return GapWait.HANDOFF;
+        return continuationUnknown && waitedTicks < END_CONFIRM_MAX_TICKS ? GapWait.WAIT : GapWait.STOP;
+    }
+
+    /** Holds still at a missing lane floor until the repair scan tells damage from the end. */
+    private void tickGapWait(LocalPlayer p) {
+        holdStill(p);
+        // Not laneFloorMissingAhead: a Wasp sinking off the walking height would end the wait above the same gap.
+        // Unloaded chunks stay unresolved so travel does not resume towards the same gap.
+        if (!laneFloorGapAhead(p, true)) {
+            gapWaitTicks = -1;
+            noMoveTicks = 0;
+            return;
+        }
+
+        if (waitScanDue(gapWaitTicks, 0)) {
+            waitScanBroken = autoRepairSwap.get() && highwayAheadBroken(baseFeetY);
+            waitScanUnknown = autoRepairSwap.get() && continuationUnknown;
+        }
+        switch (gapWaitDecision(waitScanBroken, waitScanUnknown, gapWaitTicks)) {
+            case WAIT -> gapWaitTicks++;
+            case HANDOFF -> {
+                gapWaitTicks = -1;
+                beginHandoffWait(p);
+            }
+            case STOP -> {
+                gapWaitTicks = -1;
+                warning("No pave ahead in the lane. Stopping.");
+                handoffToBuilder = false;
+                beginHandoffWait(p);
+                handoffTicks = 0;
+            }
+        }
+    }
+
+    /** Holds still until a suspected end has stayed for {@link #END_CONFIRM_TICKS}; resumes as soon as it is gone. */
+    private void tickEndConfirm(LocalPlayer p) {
+        holdStill(p);
+
+        if (!endStillOnApproach(p)) {
             endConfirmTicks = -1;
-            info("The highway goes on; it had not loaded yet.");
+            suspectedEnd = null;
+            return;
+        }
+        if (!endStillThere()) {
+            BlockPos end = suspectedEnd;
+            boolean loaded = end != null && mc.level.hasChunk(end.getX() >> 4, end.getZ() >> 4);
+            if (!loaded && ++endConfirmTicks < END_CONFIRM_MAX_TICKS) return;
+            endConfirmTicks = -1;
+            suspectedEnd = null;
+            if (!loaded) {
+                handoffToBuilder = false;
+                beginHandoffWait(p);
+                handoffTicks = 0;
+                warning("Highway continuation did not load; stopping.");
+            } else {
+                info("The highway goes on; it had not loaded yet.");
+            }
             return;
         }
         if (++endConfirmTicks < END_CONFIRM_TICKS) return;
-        endConfirmTicks = -1;
 
         // A hole with highway behind it is damage for the builder, not the end.
-        if (autoRepairSwap.get() && highwayAheadBroken()) beginHandoffWait(p);
+        if (waitScanDue(endConfirmTicks, END_CONFIRM_TICKS)) {
+            int laneY = suspectedEnd != null ? suspectedEnd.getY() : baseFeetY;
+            int ahead = suspectedEnd == null ? 0 : Math.max(0,
+                (suspectedEnd.getX() - mc.player.getBlockX()) * fwdX + (suspectedEnd.getZ() - mc.player.getBlockZ()) * fwdZ);
+            waitScanBroken = autoRepairSwap.get() && highwayAheadBroken(laneY, Math.max(repairScanBlocks.get(), ahead + REPAIR_GAP_SCAN));
+            waitScanUnknown = autoRepairSwap.get() && continuationUnknown;
+        }
+        // The gap runs into unloaded chunks; wait for them, but not past the render distance forever.
+        if (!waitScanBroken && waitScanUnknown && endConfirmTicks < END_CONFIRM_MAX_TICKS) return;
+        if (waitScanUnknown) {
+            endConfirmTicks = -1;
+            handoffToBuilder = false;
+            beginHandoffWait(p);
+            handoffTicks = 0;
+            warning("Highway continuation did not load; stopping.");
+            return;
+        }
+        endConfirmTicks = -1;
+        if (waitScanBroken) beginHandoffWait(p);
         else reachEnd(p, suspectedEnd);
+    }
+
+    private boolean endStillOnApproach(LocalPlayer p) {
+        if (suspectedEnd == null) return false;
+        BlockPos from = methodSetting.get() == TravelMethod.FLY && flyInitialized ? lanePointAtPlayer() : p.blockPosition();
+        int dx = suspectedEnd.getX() - from.getX(), dz = suspectedEnd.getZ() - from.getZ();
+        return fwdX * dx + fwdZ * dz > 0 && Math.abs(-fwdZ * dx + fwdX * dz) <= 1;
     }
 
     private boolean endStillThere() {
@@ -1116,20 +1259,35 @@ public class HighwayTraveler extends Module {
         return true;
     }
 
-    /** Two blocks: releasing forward still slides the player about a third of a block. */
     private boolean laneFloorMissingAhead(LocalPlayer p) {
         // Off the walking height (railing, jump) the floor below is not the lane's.
         if (baseFeetY == Integer.MIN_VALUE || p.getBlockY() != baseFeetY) return false;
+        return laneFloorGapAhead(p, false);
+    }
+
+    /** Two blocks: releasing forward still slides the player about a third of a block. */
+    private boolean laneFloorGapAhead(LocalPlayer p, boolean unloadedCounts) {
         for (int step = 1; step <= 2; step++) {
             int x = p.getBlockX() + fwdX * step, z = p.getBlockZ() + fwdZ * step;
-            if (mc.level.hasChunk(x >> 4, z >> 4) && !isPaveFloor(x, z)) return true;
+            if (!mc.level.hasChunk(x >> 4, z >> 4)) {
+                if (unloadedCounts) return true;
+                continue;
+            }
+            if (!isPaveFloor(x, z)) return true;
         }
         return false;
     }
 
     private boolean isPaveFloor(int x, int z) {
-        BlockState floor = mc.level.getBlockState(new BlockPos(x, baseFeetY - 1, z));
-        return floor.is(Blocks.OBSIDIAN) || floor.is(Blocks.CRYING_OBSIDIAN);
+        return isPaveBlock(mc.level.getBlockState(new BlockPos(x, baseFeetY - 1, z)));
+    }
+
+    private boolean isPaveBlock(BlockState state) {
+        return state.is(Blocks.OBSIDIAN) || state.is(Blocks.CRYING_OBSIDIAN);
+    }
+
+    private boolean isRoadSurface(BlockState state) {
+        return isPaveBlock(state) || stopAtEnd.get() == StopAtEnd.DUG && state.is(Blocks.NETHERRACK);
     }
 
     private boolean isDugWall(int x, int z) {
@@ -1399,6 +1557,26 @@ public class HighwayTraveler extends Module {
     private boolean canStand(int x, int y, int z) {
         BlockPos feet = new BlockPos(x, y, z);
         return solid(feet.below()) && passable(feet) && passable(feet.above());
+    }
+
+    /** Sinking while holding stops at the lane height: below it, a gap or the highway's end is a fall. */
+    static double holdFall(double fall, double feetY, int laneFeetY) {
+        if (laneFeetY == Integer.MIN_VALUE || feetY < laneFeetY) return fall;
+        return Math.min(fall, feetY - laneFeetY);
+    }
+
+    /** Collision-surface height below the feet, or NaN when a liquid or no floor intervenes. */
+    private double landingSurfaceY(BlockPos feet) {
+        for (int i = 1; i <= WASP_HOLD_FLOOR_DEPTH; i++) {
+            BlockPos pos = feet.below(i);
+            var state = mc.level.getBlockState(pos);
+            if (!state.getFluidState().isEmpty()) return Double.NaN;
+            var shape = state.getCollisionShape(mc.level, pos);
+            if (!shape.isEmpty() && solid(pos) && (baseFeetY == Integer.MIN_VALUE || isRoadSurface(state))) {
+                return pos.getY() + shape.max(Direction.Axis.Y);
+            }
+        }
+        return Double.NaN;
     }
 
     private boolean solid(BlockPos pos) {
