@@ -2,11 +2,10 @@
  * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
- */
-
-/*
- * This file is part of the Meteor Client distribution (https://github.com/MeteorDevelopment/meteor-client).
+ * This file was part of the Meteor Client distribution (https://github.com/MeteorDevelopment/meteor-client).
  * Copyright (c) Meteor Development.
+ * Many changes have been made.
+ * Also this code is 80% vibe coded. Im not even trying to hide it lol
  */
 
 package xyz.thm.addon.modules;

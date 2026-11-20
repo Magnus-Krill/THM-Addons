@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon;
 
@@ -269,7 +277,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
 
     @Override
     public String getWebsite() {
-        return "https://github.com/Leonn170709/THM-Addons";
+        return "https://github.com/Magnus-Krill/THM-Addons";
     }
 
     @Override
@@ -280,7 +288,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
             .get().getMetadata()
             .getCustomValue("github:branch")
             .getAsString().trim();
-        return branch.isEmpty() ? null : new GithubRepo("Leonn170709", "THM-Addons", branch, null);
+        return branch.isEmpty() ? null : new GithubRepo("Magnus-Krill", "THM-Addons", branch, null);
     }
 
     @Override

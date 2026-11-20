@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon;
 
@@ -18,7 +26,7 @@ import java.net.URI;
 // instead of Meteor's hand-rolled per-OS Runtime.exec.
 public class Main {
 
-    private static final String RELEASES_URL = "https://github.com/Leonn170709/THM-Addons/releases/latest";
+    private static final String RELEASES_URL = "https://github.com/Magnus-Krill/THM-Addons/releases/latest";
 
     /** Exit code 2 tells the caller nothing could be shown, so it can fall back to another popup. */
     private static void showStartupError(String title, String message, String downloadUrl) {
