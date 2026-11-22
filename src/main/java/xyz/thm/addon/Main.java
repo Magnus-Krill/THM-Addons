@@ -68,19 +68,19 @@ public class Main {
 
         UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
 
-        Object[] options = {"Download", "No thanks"};
+        Object[] options = {"Oki"};
         int choice = JOptionPane.showOptionDialog(null,
             "This is a Meteor Client addon, not a program you run directly.\nPut it in your mods folder next to Meteor Client and Fabric.",
             "THM Addon",
             JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE, null,
             options, options[0]);
 
-        if (choice == 0) {
-            try {
-                Desktop.getDesktop().browse(new URI(RELEASES_URL));
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
+//        if (choice == 0) {
+//            try {
+//                Desktop.getDesktop().browse(new URI(RELEASES_URL));
+//            } catch (Exception e) {
+//                e.printStackTrace();
+//            }
+//        }
     }
 }
