@@ -73,6 +73,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `online-friends` — Displays online friends from your friend list.
 - `Dubs Count` — Displays how many dubs are in render distance.
 - `Highway-hud` — View highway distance, block counts, Dug/Paved rates, and restock ETA.
+- `highway-length-hud` — Shows the mapped length and paved distance of the current 6b6t highway.
 - `THM-welcomer` — Advanced Welcomer.
 - `crystal-metrics` — ThunderHack style monitor.
 - `THM Member Hud` — Shows all online THM members and ranks.
@@ -102,5 +103,5 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - The THM tab shows the cracked-account password only for offline UUIDs; hiding it preserves its saved value.
 - Custom THM categories: `THM Highway` and `THM PVP`.
 - Disconnect button on the vanilla "Loading terrain" screen, which otherwise has no way out when it hangs.
-- GUI themes: `Dark`, `Snowy`, `Lambda`, `Stardust`, `Midnight`, `Monochrome`, `Nether`, `BepHax`.
+- GUI themes: `Dark`, `Snowy`, `Lambda`, `Stardust`, `Midnight`, `Monochrome`, `Nether`, `BepHax`, `Violet Glass`, `Liquid Glass`.
 - **GUI → Appearance → Click GUI Animation** changes how the Modules screen opens and closes. Choose Fade, Scatter, Drop, Unfold, Split, or Ripple. Set **Animation Speed** to 25–300% for any preset.

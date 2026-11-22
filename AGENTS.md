@@ -60,18 +60,19 @@ checks, runtime checks, and visual checks. Shut down test clients cleanly when t
 
 ### API endpoints and authentication
 
-`APIUtils.java` holds the HTTPS endpoint URLs and the updater's public verification key. The updater
-uses the player's bearer token for feed and JAR requests. The server enforces membership. Keep
-tokens, webhook URLs and private signing keys out of Git.
+`APIUtils.java` holds the HTTPS endpoint URLs and the updater's public verification key.
+Public GETs, including updater files, use `TrustedHttp.Kind.PUBLIC_API` without credentials.
+Keep tokens, webhook URLs and private signing keys out of Git.
 
-`TrustedHttp` skips API traffic before DNS or connection setup unless the current token is a full UUID.
-`APIUtils` allows member and other API requests from any server while in a world with a valid token; do not restore the 6b6t address gate. Deferred member fetching must remain eligible until a request can actually start.
+`TrustedHttp` skips authenticated API traffic before DNS or connection setup unless the current token is a full UUID.
+Public member refreshes need a world and work on any server. Deferred member fetching remains eligible until a request can start.
 Queued requests use the current configured token; the server still validates ownership and membership.
 `THMSystem` publishes credential changes through volatile snapshots for worker reads.
 
 Highway status and PoW send a compact `report` through `APIUtils`, with the token in the Bearer header.
 Status sends the current road ID. PoW sends the road ID for the built segment. Both include the loaded addon version.
 Manual pause uses the saved build endpoint. Keep exact coordinates out of API reports.
+`HighwayLengthHud` matches the current road locally and reads mapped lengths from public `GET /highway-lengths`.
 
 Every outbound request — API calls and player-configured webhooks alike — goes through
 `TrustedHttp`, not raw `HttpURLConnection`: it rejects non-http(s) schemes, resolves the hostname
@@ -124,6 +125,8 @@ startup, so `THMHwyMonitor` and `HighwayTools` are registered without a separate
   refreshes while the left mouse button is held to keep slider bounds stable.
   `ClickGuiAnimation` uses the active theme's Modules screen check and Meteor's transition progress.
   Apply offsets before each theme draws its panels. Keep Catppuccin's rounded-renderer hook optional.
+  Liquid Glass captures the backdrop at the first pane each frame and refracts it before drawing
+  each pane's controls and labels.
 - `system/` — `THMSystem` (persisted addon-wide config/state) and `THMTab` (the "THM Addon" tab
   in Meteor's GUI, separate from module categories). The updater button sits at the top of this tab;
   channel and auto-update preferences live in `UpdaterScreen` and persist in `THMSystem.updaterSettings`.
@@ -300,7 +303,8 @@ Keep descriptions to one short sentence. Use `DropdownDescriptions.configure` fo
 `DropdownTooltipMixin` gives open menus tooltip priority over covered settings.
 
 **Kitbot kits:** `KitbotKitCatalog` supplies chat parsing, suggestions, and frontend dropdowns from
-the authenticated `/kits` catalog. Cache JSON and ETags per token hash under `thm/kitbot-kits`;
+public `GET /kits` and the authenticated member catalog at `POST /kits/member`.
+Cache JSON and ETags under `thm/kitbot-kits`, using a separate file per token and for public data;
 refresh on demand after six hours, retry failures after five minutes, and clear rejected tokens.
 Keep requests in `TrustedHttp` and the endpoint in `APIUtils`. Kit menus
 update while open; existing saved kit strings remain readable. Restock keeps its fixed kit choices.

@@ -36,6 +36,7 @@ public class APIUtils {
     private static final String MEMBERS_URL = API_ORIGIN + "/users";
     private static final String HIGHWAY_REPORT_URL = API_ORIGIN + "/";
     private static final String HIGHWAY_STATUS_URL = API_ORIGIN + "/status";
+    private static final String HIGHWAY_LENGTHS_URL = API_ORIGIN + "/highway-lengths";
     private static final String CAPE_LIST_URL = API_ORIGIN + "/cape/";
     private static final String CAPE_INDEX_URL = "https://highwaymen.cc/cape/index";
     private static final String KITS_URL = API_ORIGIN + "/kits";
@@ -124,11 +125,54 @@ public class APIUtils {
     }
 
     private static String apiGet(String url) {
-        return canRequest() ? TrustedHttp.getString(url, TrustedHttp.Kind.API, TrustedHttp.MAX_JSON_BYTES) : null;
+        return TrustedHttp.getString(url, TrustedHttp.Kind.PUBLIC_API, TrustedHttp.MAX_JSON_BYTES);
     }
 
     public static TrustedHttp.Response fetchKitCatalog(String token, String etag) {
-        return TrustedHttp.getConditional(KITS_URL, token, etag, TrustedHttp.MAX_JSON_BYTES);
+        if (!token.isEmpty()) {
+            var member = TrustedHttp.postMemberRead(KITS_URL + "/member", token, TrustedHttp.MAX_JSON_BYTES);
+            if (member != null && member.status() == 200) return member;
+            if (member != null && member.status() != 401 && member.status() != 403 && member.status() != 404) return member;
+        }
+        return TrustedHttp.getPublicConditional(KITS_URL, etag, TrustedHttp.MAX_JSON_BYTES);
+    }
+
+    public record HighwayLength(int paved, int total) {}
+
+    public static Map<String, Map<String, HighwayLength>> fetchHighwayLengths() {
+        String response = apiGet(HIGHWAY_LENGTHS_URL);
+        if (response == null) return null;
+        try {
+            return parseHighwayLengths(GSON.fromJson(response, JsonObject.class));
+        } catch (RuntimeException e) {
+            THMAddon.LOG.warn("Invalid highway lengths response");
+            return null;
+        }
+    }
+
+    static Map<String, Map<String, HighwayLength>> parseHighwayLengths(JsonObject root) {
+        Map<String, Map<String, HighwayLength>> dimensions = new HashMap<>();
+        for (String dimension : List.of("nether", "overworld", "end")) {
+            Map<String, HighwayLength> roads = new HashMap<>();
+            for (var road : root.getAsJsonObject(dimension).entrySet()) {
+                if (!road.getValue().isJsonObject()) continue;
+                JsonObject length = road.getValue().getAsJsonObject();
+                int paved = highwayBlocks(length.get("paved"));
+                int total = highwayBlocks(length.get("total"));
+                if (paved >= 0 && total > 0 && paved <= total) roads.put(road.getKey(), new HighwayLength(paved, total));
+            }
+            dimensions.put(dimension, Map.copyOf(roads));
+        }
+        return Map.copyOf(dimensions);
+    }
+
+    private static int highwayBlocks(JsonElement value) {
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) return -1;
+        try {
+            return value.getAsBigDecimal().intValueExact();
+        } catch (ArithmeticException | NumberFormatException e) {
+            return -1;
+        }
     }
 
     private static void apiPost(String name, String url, String json) {

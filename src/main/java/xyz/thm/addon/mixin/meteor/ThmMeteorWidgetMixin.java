@@ -27,13 +27,12 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import xyz.thm.addon.gui.ThmChrome;
+import xyz.thm.addon.gui.themes.LiquidGlassTheme;
 import xyz.thm.addon.gui.themes.ThmTheme;
+import xyz.thm.addon.gui.themes.VioletGlassTheme;
 
 /**
- * Restyles every Meteor widget that draws itself through MeteorWidget#renderBackground (buttons,
- * checkboxes, textboxes, dropdowns, plus/minus, ...) into the THM main-menu window chrome - flat
- * translucent body + purple gradient border - but only while the active theme is ThmTheme, so
- * every other Meteor theme is left exactly as-is.
+ * Applies theme-specific fills and borders to Meteor controls.
  *
  * Interface mixin: the drawing lives in the interface's default methods, so this targets those
  * directly. The boolean overload (pressed/mouseOver) draws pressables with the window's brighter
@@ -59,6 +58,16 @@ public interface ThmMeteorWidgetMixin extends BaseWidget {
     @Inject(method = "renderBackground(Lmeteordevelopment/meteorclient/gui/renderer/GuiRenderer;Lmeteordevelopment/meteorclient/gui/widgets/WWidget;Lmeteordevelopment/meteorclient/utils/render/color/Color;Lmeteordevelopment/meteorclient/utils/render/color/Color;)V", at = @At("HEAD"), cancellable = true)
     private void thm$colorBackground(GuiRenderer renderer, WWidget widget, Color outlineColor, Color backgroundColor, CallbackInfo ci) {
         GuiTheme theme = getTheme();
+        if (theme instanceof VioletGlassTheme violet) {
+            violet.drawControl(renderer, widget, outlineColor, backgroundColor);
+            ci.cancel();
+            return;
+        }
+        if (theme instanceof LiquidGlassTheme glass) {
+            glass.drawControl(renderer, widget, outlineColor, backgroundColor);
+            ci.cancel();
+            return;
+        }
         if (!(theme instanceof MeteorGuiTheme meteor) || !(theme instanceof ThmTheme)) return;
 
         double s = meteor.scale(2);

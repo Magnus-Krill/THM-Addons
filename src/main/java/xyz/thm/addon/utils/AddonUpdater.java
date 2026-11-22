@@ -151,10 +151,6 @@ public final class AddonUpdater {
                 status = "Updater disabled in development run";
                 return;
             }
-            if (!hasApiToken()) {
-                status = "Set a valid personal API token to access member updates";
-                return;
-            }
             String branch = currentBranch();
             if (branch.isBlank()) {
                 status = "Updater disabled: this JAR has no build branch";
@@ -162,8 +158,8 @@ public final class AddonUpdater {
             }
             try {
                 status = "Checking " + branch + " updates...";
-                String response = TrustedHttp.getString(APIUtils.UPDATE_FEED_URL, TrustedHttp.Kind.API, TrustedHttp.MAX_JSON_BYTES);
-                if (response == null) throw new IllegalStateException("Member update API refused the request or is unavailable");
+                String response = TrustedHttp.getString(APIUtils.UPDATE_FEED_URL, TrustedHttp.Kind.PUBLIC_API, TrustedHttp.MAX_JSON_BYTES);
+                if (response == null) throw new IllegalStateException("Update feed is unavailable");
                 status = "Verifying signed update feed...";
                 entries = parseSignedFeed(response, URI.create(APIUtils.UPDATE_FEED_URL), APIUtils.UPDATE_PUBLIC_KEY,
                     FabricLoader.getInstance().getModContainer("minecraft").orElseThrow().getMetadata().getVersion().getFriendlyString(), branch);
@@ -191,9 +187,7 @@ public final class AddonUpdater {
 
     public static void install(Entry entry, Runnable onDone) {
         submit(() -> {
-            if (!hasApiToken()) {
-                status = "Set a valid personal API token to access member updates";
-            } else if (!entries.contains(entry)) {
+            if (!entries.contains(entry)) {
                 status = "Choose a build from the verified feed";
             } else {
                 installNow(entry);
@@ -212,9 +206,8 @@ public final class AddonUpdater {
                     : "This build is already installed";
                 return;
             }
-            if (!hasApiToken()) throw new IllegalStateException("No valid personal API token");
             status = "Downloading " + entry.title() + "...";
-            byte[] jar = TrustedHttp.getBytes(entry.url(), TrustedHttp.Kind.API, MAX_JAR_BYTES);
+            byte[] jar = TrustedHttp.getBytes(entry.url(), TrustedHttp.Kind.PUBLIC_API, MAX_JAR_BYTES);
             if (jar == null) throw new IllegalStateException("Could not download JAR");
             if (!restartRequired) {
                 // The installed JAR may no longer contain this version of the restart helper.
@@ -351,11 +344,6 @@ public final class AddonUpdater {
         String value = row.get(name).getAsString();
         if (value.isBlank() || value.length() > limit) throw new IllegalArgumentException("Invalid " + name);
         return value;
-    }
-
-    private static boolean hasApiToken() {
-        THMSystem system = THMSystem.get();
-        return system != null && system.hasApiToken();
     }
 
     private static String currentCommit() {

@@ -185,11 +185,15 @@ class KitbotKitCatalogTest {
     }
 
     @Test
-    void invalidTokensAndUnsolicited304DoNotCreateACatalog() {
+    void invalidTokensUseThePublicCatalogAndDoNotReuseMemberData() {
         token.set("invalid");
-        assertTrue(catalog.current().isEmpty());
-        assertTrue(pending.isEmpty());
+        response = response(200, "{\"success\":true,\"kits\":[{\"name\":\"pvp\",\"price\":0.5}]}", "\"public\"");
+        fetch();
+        assertEquals("", sentTokens.getLast());
+        assertArrayEquals(new String[] {"pvp"}, catalog.currentNames());
+        assertTrue(Files.exists(directory.resolve("public.json")));
         token.set(TOKEN_A);
+        assertTrue(catalog.current().isEmpty());
         response = response(304, "", "\"unknown\"");
         fetch();
         assertTrue(catalog.current().isEmpty());

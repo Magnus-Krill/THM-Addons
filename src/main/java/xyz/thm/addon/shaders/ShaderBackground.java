@@ -26,6 +26,7 @@ import com.mojang.blaze3d.systems.GpuDevice;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.GpuTextureView;
+import meteordevelopment.meteorclient.utils.render.color.Color;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.resources.Identifier;
@@ -47,6 +48,7 @@ public class ShaderBackground {
     private static final Map<String, Boolean> valid = new HashMap<>();
     private static GpuBuffer uniformBuffer;
     private static boolean blurBroken;
+    private static boolean glassBroken;
     private static boolean scaledBroken;
     private static boolean tripBroken;
     private static String renderStatus = "not called";
@@ -101,6 +103,19 @@ public class ShaderBackground {
 
     public static String renderStatus() {
         return renderStatus;
+    }
+
+    public record GlassPane(double x, double y, double width, double height, double radius, float lens, Color tint) {}
+
+    public static boolean renderGlass(GlassPane pane, float opacity, boolean captureScene) {
+        if (opacity <= 0 || glassBroken) return false;
+        try {
+            return BlurBackground.renderGlass(pane, opacity, captureScene);
+        } catch (RuntimeException e) {
+            THMAddon.LOG.warn("[THM] Refractive glass failed, using tinted panels for this session", e);
+            glassBroken = true;
+            return false;
+        }
     }
 
     /**

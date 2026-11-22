@@ -62,6 +62,7 @@ import xyz.thm.addon.gui.MainMenuFx;
 import xyz.thm.addon.gui.MainMenuSettingsScreen;
 import xyz.thm.addon.gui.ServerFolderSidebar;
 import xyz.thm.addon.gui.ThmStyledButtons;
+import xyz.thm.addon.gui.themes.LiquidGlassTheme;
 import xyz.thm.addon.gui.themes.bephax.BepGuiTheme;
 import xyz.thm.addon.accessor.ServerFolderView;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
@@ -98,6 +99,7 @@ public final class StartupClient implements ClientModInitializer {
                 verifyServerFolders(client);
                 verifyClickGuiAnimations(client);
                 verifyBepHaxTheme(client);
+                verifyGlassThemes(client);
                 if (Arrays.asList(GuiThemes.getNames()).contains("Catppuccin")) {
                     String theme = GuiThemes.get().name;
                     try {
@@ -131,6 +133,39 @@ public final class StartupClient implements ClientModInitializer {
             settings.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 4);
             client.gui.setScreen(title);
             verifyClickGuiAnimations(client);
+        } finally {
+            GuiThemes.select(original.name);
+            client.gui.setScreen(title);
+        }
+    }
+
+    private static void verifyGlassThemes(Minecraft client) {
+        var original = GuiThemes.get();
+        var title = client.gui.screen();
+        var names = Arrays.asList(GuiThemes.getNames());
+        if (names.contains("Blue Hour") || names.contains("Teal Slate")) {
+            throw new IllegalStateException("Removed themes are still registered");
+        }
+        try {
+            for (String name : new String[] {"Violet Glass", "Liquid Glass"}) {
+                GuiThemes.select(name);
+                var theme = GuiThemes.get();
+                if (!theme.name.equals(name)) throw new IllegalStateException("Missing theme " + name);
+
+                Tabs.get(GuiTab.class).openScreen(theme);
+                var settings = (WidgetScreen) client.gui.screen();
+                settings.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+                if (theme instanceof LiquidGlassTheme glass && !glass.renderedGlass()) {
+                    throw new IllegalStateException("Liquid Glass did not render on the GUI tab");
+                }
+
+                var modules = theme.modulesScreen();
+                client.gui.setScreen(modules);
+                modules.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+                if (theme instanceof LiquidGlassTheme glass && !glass.renderedGlass()) {
+                    throw new IllegalStateException("Liquid Glass did not render on the Modules screen");
+                }
+            }
         } finally {
             GuiThemes.select(original.name);
             client.gui.setScreen(title);

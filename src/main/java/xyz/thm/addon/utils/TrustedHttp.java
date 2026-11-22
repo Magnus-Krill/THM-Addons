@@ -58,6 +58,7 @@ public final class TrustedHttp {
 
     public enum Kind {
         API,           // THM API - HTTPS only, Bearer token attached
+        PUBLIC_API,    // Public API - HTTPS only, no token attached
         USER_WEBHOOK,  // player-configured webhook URL - http(s), no token ever attached
         IMAGE,         // cape/texture download - HTTPS only, no token ever attached
     }
@@ -82,10 +83,14 @@ public final class TrustedHttp {
         return send("GET", url, kind, null, null, maxBytes, null);
     }
 
-    /** Conditional API requests are bound to the token that owns their cached response. */
-    public static Response getConditional(String url, String token, String etag, int maxBytes) {
-        if (!isValidApiToken(token) || !token.equals(apiToken()) || !isSafeEtag(etag)) return null;
-        return sendResponse("GET", url, Kind.API, null, null, maxBytes, token, etag, true);
+    public static Response getPublicConditional(String url, String etag, int maxBytes) {
+        if (!isSafeEtag(etag)) return null;
+        return sendResponse("GET", url, Kind.PUBLIC_API, null, null, maxBytes, null, etag, false);
+    }
+
+    public static Response postMemberRead(String url, String token, int maxBytes) {
+        if (!isValidApiToken(token) || !token.equals(apiToken())) return null;
+        return sendResponse("POST", url, Kind.API, null, null, maxBytes, token, null, true);
     }
 
     public static boolean isSafeEtag(String etag) {
@@ -214,7 +219,7 @@ public final class TrustedHttp {
         }
 
         String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
-        if (kind == Kind.API || kind == Kind.IMAGE) {
+        if (kind != Kind.USER_WEBHOOK) {
             if (!"https".equals(scheme)) {
                 LOG.warn("Rejected non-HTTPS {} URL", kind);
                 return null;

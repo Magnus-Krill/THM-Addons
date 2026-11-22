@@ -230,6 +230,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         Hud.get().register(OnlineFriendsList.INFO);
         Hud.get().register(DubCounter.INFO);
         Hud.get().register(HighwayHud.INFO);
+        Hud.get().register(HighwayLengthHud.INFO);
         Hud.get().register(WelcomerHud.INFO);
         Hud.get().register(CrystalMetrics.INFO);
         Hud.get().register(MemberHud.INFO);
@@ -255,6 +256,8 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         GuiThemes.add(Nether.INSTANCE);
         GuiThemes.add(ThmTheme.INSTANCE);
         if (!loader.isModLoaded("bephax")) GuiThemes.add(new BepGuiTheme());
+        GuiThemes.add(new VioletGlassTheme());
+        GuiThemes.add(new LiquidGlassTheme());
 
         //System/Tab
         Tabs.add(new THMTab());
