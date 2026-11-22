@@ -166,20 +166,20 @@ class BlurBackground {
             vec2 side = q.x > q.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
             vec2 normal = sign(p) * (dot(corner, corner) > 0.001 ? normalize(corner) : side);
             float depth = -distance;
-            if (depth >= radius * 1.15) {
-                if (tint.a == 0.0) discard;
-                fragColor = vec4(tint.rgb, tint.a * frameAndStyle.w);
-                return;
-            }
             float bevel = 1.0 - smoothstep(0.0, radius * 1.15, depth);
             vec2 bend = normal * bevel * bevel * radius * pointerAndLens.z;
             vec2 uv = (gl_FragCoord.xy - bend) / frameAndStyle.xy;
             vec3 scene = texture(InSampler, uv).rgb;
-            vec2 dispersion = normal * bevel * 1.35 / frameAndStyle.xy;
-            scene.r = texture(InSampler, uv + dispersion).r;
-            scene.b = texture(InSampler, uv - dispersion).b;
+            if (bevel > 0.0) {
+                vec2 dispersion = normal * bevel * 1.35 / frameAndStyle.xy;
+                scene.r = texture(InSampler, uv + dispersion).r;
+                scene.b = texture(InSampler, uv - dispersion).b;
+            }
 
-            vec3 glass = mix(scene, tint.rgb, tint.a);
+            vec3 glass = mix(scene, tint.rgb, tint.a) * 0.61 + vec3(0.025, 0.031, 0.044);
+            // Compress bright backdrops while keeping their color behind light labels.
+            float peak = max(glass.r, max(glass.g, glass.b));
+            glass *= 1.0 / (1.0 + peak * 1.25);
 
             vec2 toPointer = pointerAndLens.xy - gl_FragCoord.xy;
             float proximity = 1.0 - smoothstep(18.0, 240.0, length(toPointer));
@@ -189,10 +189,8 @@ class BlurBackground {
             float bounce = exp(-0.57 * abs(depth - 1.2)) * max(-facing, 0.0);
             float edgeShadow = exp(-0.43 * abs(depth - 5.0)) * max(-facing, 0.0);
             glass *= 1.0 - edgeShadow * 0.23;
-            glass = mix(glass, vec3(1.0), clamp(glint * (0.84 + proximity * 0.16) + bounce * 0.38, 0.0, 1.0));
-            float rim = max(glint, max(bounce, edgeShadow));
-            float alpha = mix(tint.a, 1.0, max(smoothstep(0.0, 0.25, bevel), rim));
-            fragColor = vec4(glass, coverage * frameAndStyle.w * alpha);
+            glass = mix(glass, vec3(0.83, 0.9, 1.0), glint * (0.48 + proximity * 0.2) + bounce * 0.18);
+            fragColor = vec4(glass, coverage * frameAndStyle.w);
         }
         """;
 
@@ -358,8 +356,10 @@ class BlurBackground {
             ensureTextures(device, workW, workH);
 
             // Capture before Meteor flushes any pane fill or text.
-            writeBlurParams(encoder, 0, 0, 0);
+            writeBlurParams(encoder, 1f / workW, 0, 3);
             drawFullscreen(encoder, blurPipeline, viewA, "BlurParams", blurParamsBuffer, mainView);
+            writeBlurParams(encoder, 0, 1f / workH, 3);
+            drawFullscreen(encoder, blurPipeline, viewB, "BlurParams", blurParamsBuffer, viewA);
         }
 
         writeGlassRect(encoder, pane, x1, y1, x2 - x1, y2 - y1, framebuffer.width, framebuffer.height,
@@ -370,7 +370,7 @@ class BlurBackground {
             pass.setPipeline(glassPipeline);
             RenderSystem.bindDefaultUniforms(pass);
             pass.setUniform("BlitRect", glassRectBuffer);
-            pass.bindTexture("InSampler", viewA, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
+            pass.bindTexture("InSampler", viewB, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
             pass.draw(3, 1, 0, 0);
         }
         return true;

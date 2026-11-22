@@ -6,6 +6,23 @@
 
 # Minecraft 26.2 port progress
 
+## 2026-11-22: Liquid Glass
+
+Liquid Glass softens the backdrop behind text and refracts it around the rounded rims.
+String-select arrows rotate with the opening menu, toggle thumbs slide, and tab and module
+highlights fade between states.
+
+The full build passed all 755 tests, including shader checks and all four OpenGL and Vulkan
+startup cases. The startup checks selected an option at the far edge of a widened string
+select and toggled a switch. Isolated title-screen captures verified the Modules screen
+on Vulkan and the expanded dropdown and switch on OpenGL. An earlier Vulkan startup with
+Patchy exited in the native loader with SIGBUS. The final run passed.
+
+Modules headers use monochrome line icons. Scrollable panes stretch at their top and
+bottom edges while the control positions stay fixed. The follow-up build passed all
+760 tests. Title-screen captures confirmed the icons on OpenGL and Vulkan and showed
+the Movement pane stretching at its lower edge on OpenGL.
+
 ## 2026-11-16: Click GUI animations
 
 The isolated title-screen checks passed on OpenGL and Vulkan. Right Shift opened and closed

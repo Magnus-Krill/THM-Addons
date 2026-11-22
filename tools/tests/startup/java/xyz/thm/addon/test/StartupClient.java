@@ -162,14 +162,86 @@ public final class StartupClient implements ClientModInitializer {
                 var modules = theme.modulesScreen();
                 client.gui.setScreen(modules);
                 modules.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
-                if (theme instanceof LiquidGlassTheme glass && !glass.renderedGlass()) {
-                    throw new IllegalStateException("Liquid Glass did not render on the Modules screen");
+                if (theme instanceof LiquidGlassTheme glass) {
+                    if (!glass.renderedGlass()) throw new IllegalStateException("Liquid Glass did not render on the Modules screen");
+                    verifyLiquidGlassControls(client, glass);
+                    verifyLiquidGlassOverscroll(client, glass);
                 }
             }
         } finally {
             GuiThemes.select(original.name);
             client.gui.setScreen(title);
         }
+    }
+
+    private static void verifyLiquidGlassOverscroll(Minecraft client, LiquidGlassTheme theme) {
+        var window = theme.window("Scrollable");
+        var first = theme.label("First row");
+        var controls = new WidgetScreen(theme, "Liquid Glass scrolling") {
+            @Override
+            public void initWidgets() {
+                add(window).center();
+                window.view.maxHeight = theme.scale(70);
+                window.add(first);
+                for (int i = 0; i < 10; i++) window.add(theme.label("Another row"));
+            }
+        };
+        client.gui.setScreen(controls);
+        controls.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+
+        window.view.mouseOver = true;
+        double top = first.y;
+        if (!window.view.onMouseScrolled(1)) throw new IllegalStateException("Liquid Glass did not handle overscroll at the top");
+        window.view.onMouseScrolled(-100);
+        controls.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+        double bottom = first.y;
+        if (bottom >= top || !window.view.onMouseScrolled(-1)) {
+            throw new IllegalStateException("Liquid Glass did not scroll to and handle the bottom edge");
+        }
+        controls.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+        if (first.y != bottom) throw new IllegalStateException("Liquid Glass overscroll moved the control positions");
+
+        window.view.mouseOver = false;
+        if (window.view.onMouseScrolled(-1)) throw new IllegalStateException("Liquid Glass handled scroll outside the view");
+    }
+
+    private static void verifyLiquidGlassControls(Minecraft client, LiquidGlassTheme theme) {
+        var dropdown = theme.dropdown(new String[]{"First", "Second"}, "First");
+        var checkbox = theme.checkbox(false);
+        var controls = new WidgetScreen(theme, "Liquid Glass controls") {
+            @Override
+            public void initWidgets() {
+                var list = add(theme.horizontalList()).center().widget();
+                list.add(dropdown).minWidth(140).expandWidgetX();
+                list.add(checkbox);
+            }
+        };
+        client.gui.setScreen(controls);
+        controls.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+
+        var left = new MouseButtonInfo(GLFW.GLFW_MOUSE_BUTTON_LEFT, 0);
+        double x = dropdown.x + dropdown.width - theme.scale(8);
+        double y = dropdown.y + dropdown.height / 2;
+        dropdown.mouseMoved(x, y, x, y);
+        var open = new MouseButtonEvent(x, y, left);
+        dropdown.mouseClicked(open, false);
+        dropdown.mouseReleased(open);
+        controls.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+
+        double optionY = y + dropdown.height * 2;
+        dropdown.mouseMoved(x, optionY, x, y);
+        var select = new MouseButtonEvent(x, optionY, left);
+        dropdown.mouseClicked(select, false);
+        dropdown.mouseReleased(select);
+        if (!"Second".equals(dropdown.get())) throw new IllegalStateException("Liquid Glass string select did not select the second option");
+
+        double switchX = checkbox.x + checkbox.width / 2;
+        double switchY = checkbox.y + checkbox.height / 2;
+        checkbox.mouseMoved(switchX, switchY, x, optionY);
+        var toggle = new MouseButtonEvent(switchX, switchY, left);
+        checkbox.mouseClicked(toggle, false);
+        checkbox.mouseReleased(toggle);
+        if (!checkbox.checked) throw new IllegalStateException("Liquid Glass switch did not toggle");
     }
 
     private static void verifyClickGuiAnimations(Minecraft client) throws ReflectiveOperationException {
