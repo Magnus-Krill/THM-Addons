@@ -178,11 +178,22 @@ class AxisViewerTest {
             200, 500, 750, 1000, 1500, 2000, 2500, 3131, 3500, 5000, 6250, 7500,
             10000, 12500, 15000, 20000, 25000, 50000, 55000, 62500, 75000, 100000,
             125000, 250000, 500000, 750000, 1000000, 1250000, 1568852, 1875000,
-            2500000, 3750000, 30000000
+            2500000, 3750000, 29_999_980
         }, AxisViewer.RING_ROADS.toIntArray());
         assertArrayEquals(new int[] {
             1000, 2000, 2500, 5000, 10000, 25000, 50000, 125000, 250000, 500000, 3750000
         }, AxisViewer.DIAMONDS.toIntArray());
+    }
+
+    @Test
+    void detectsAndReportsTheNetherRingInsideTheBorder() {
+        var start = new Vec3(0.5, 120, -29_999_979.5);
+        var end = new Vec3(29_999_980.5, 120, -29_999_979.5);
+        var direction = HorizontalDirection.East;
+        assertEquals("ring-29999980", AxisViewer.highwayRoute(start, end, true, direction));
+        assertEquals("0,29999980,59999960", AxisViewer.loopProgressLeg("ring-29999980", start, end, direction));
+        assertEquals("other", AxisViewer.highwayRouteAt(123.5, -29_999_999.5, true, direction));
+        assertFalse(AxisViewer.isOnHighway(123.5, 30_000_000.5, true));
     }
 
     @Test

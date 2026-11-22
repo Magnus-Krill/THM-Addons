@@ -191,7 +191,7 @@ public class AxisViewer extends Module {
         1875000,
         2500000,
         3750000,
-        30000000
+        29_999_980
     );
 
     static final IntList DIAMONDS = IntList.of(
