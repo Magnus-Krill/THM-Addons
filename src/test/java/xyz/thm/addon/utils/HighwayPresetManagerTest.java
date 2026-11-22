@@ -44,6 +44,18 @@ class HighwayPresetManagerTest {
     }
 
     @Test
+    void namedPresetsCarryPacketBorerIntoPacketDig() throws IOException {
+        CompoundTag decoded = HighwayPresetManager.decode("""
+            {"version":1,"settings":{"groups":[{"name":"Digging","settings":[{"name":"packet-borer","value":true}]}]}}
+            """);
+        CompoundTag group = (CompoundTag) decoded.getListOrEmpty("groups").getFirst();
+        CompoundTag setting = (CompoundTag) group.getListOrEmpty("settings").getFirst();
+        assertEquals("packet-dig", setting.getStringOr("name", ""));
+        assertTrue(setting.getBooleanOr("value", false));
+        assertEquals(decoded, HighwayPresetManager.decode(HighwayPresetManager.encode(decoded)));
+    }
+
+    @Test
     void presetJsonRoundTripsSettings() throws IOException {
         CompoundTag settings = new CompoundTag();
         var groups = new ListTag();

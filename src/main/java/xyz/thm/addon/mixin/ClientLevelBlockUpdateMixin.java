@@ -14,13 +14,16 @@ By using this code you agree to the license terms and to keep your repo public.
 
 package xyz.thm.addon.mixin;
 
+import meteordevelopment.meteorclient.systems.modules.Modules;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import xyz.thm.addon.modules.HighwayBuilderTHM;
 import xyz.thm.addon.modules.Speedmine;
 import xyz.thm.addon.modules.Surround;
 
@@ -32,5 +35,14 @@ public class ClientLevelBlockUpdateMixin {
         if (surround != null) surround.onServerBlockUpdate((ClientLevel) (Object) this, pos, state);
         Speedmine speedmine = Speedmine.INSTANCE;
         if (speedmine != null) speedmine.onServerBlockUpdate((ClientLevel) (Object) this, pos, state);
+    }
+
+    @Inject(method = "setServerVerifiedBlockState", at = @At("TAIL"))
+    private void thm$afterServerBlockUpdate(BlockPos pos, BlockState state, int flags, CallbackInfo ci) {
+        if (!state.isAir() && !(state.getBlock() instanceof LiquidBlock)) return;
+        Modules modules = Modules.get();
+        if (modules == null) return;
+        HighwayBuilderTHM builder = modules.get(HighwayBuilderTHM.class);
+        if (builder != null) builder.onServerBlockUpdate((ClientLevel) (Object) this, pos, state);
     }
 }

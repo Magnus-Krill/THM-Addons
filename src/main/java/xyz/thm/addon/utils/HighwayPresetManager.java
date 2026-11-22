@@ -124,8 +124,8 @@ public final class HighwayPresetManager {
             validateSettings(settingsJson, validateModuleSettings);
             Tag settings = JsonOps.INSTANCE.convertTo(NbtOps.INSTANCE, settingsJson);
             if (!(settings instanceof CompoundTag compound)) throw new IOException("Settings must be an object.");
-            CompoundTag alignment = HighwayBuilderTHM.migrateAlignmentSettings(compound);
-            return new DecodedPreset(alignment, migrated || alignment != compound);
+            CompoundTag renamed = HighwayBuilderTHM.migrateRenamedSettings(compound);
+            return new DecodedPreset(renamed, migrated || renamed != compound);
         } catch (IOException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -289,7 +289,10 @@ public final class HighwayPresetManager {
                 JsonObject settingJson = settingElement.getAsJsonObject();
                 String settingName = requiredString(settingJson, "name", "setting");
                 if (group != null && group.get(settingName) == null
-                    && !(settingName.equals("align-first") && group.get("auto-align") != null)) throw new IOException("Unknown setting: " + settingName);
+                    && !(settingName.equals("align-first") && group.get("auto-align") != null)
+                    && !(settingName.equals("packet-borer") && group.get("packet-dig") != null)) {
+                    throw new IOException("Unknown setting: " + settingName);
+                }
                 if (!seenSettings.add(settingName)) throw new IOException("Duplicate setting: " + settingName);
             }
         }

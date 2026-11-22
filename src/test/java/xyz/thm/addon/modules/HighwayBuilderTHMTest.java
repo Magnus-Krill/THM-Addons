@@ -69,17 +69,17 @@ class HighwayBuilderTHMTest {
         groups.add(group);
         CompoundTag source = new CompoundTag();
         source.put("groups", groups);
-        CompoundTag migrated = HighwayBuilderTHM.migrateAlignmentSettings(source);
+        CompoundTag migrated = HighwayBuilderTHM.migrateRenamedSettings(source);
         var setting = ((CompoundTag) migrated.getListOrEmpty("groups").get(0)).getListOrEmpty("settings").get(0).asCompound().orElseThrow();
         assertEquals("auto-align", setting.getStringOr("name", ""));
         assertFalse(setting.getBooleanOr("value", true));
         assertEquals("align-first", legacy.getStringOr("name", ""));
-        assertSame(migrated, HighwayBuilderTHM.migrateAlignmentSettings(migrated));
+        assertSame(migrated, HighwayBuilderTHM.migrateRenamedSettings(migrated));
         CompoundTag current = legacy.copy();
         current.putString("name", "auto-align");
         current.putBoolean("value", true);
         values.add(current);
-        assertSame(source, HighwayBuilderTHM.migrateAlignmentSettings(source));
+        assertSame(source, HighwayBuilderTHM.migrateRenamedSettings(source));
     }
 
     @Test
@@ -318,6 +318,44 @@ class HighwayBuilderTHMTest {
         pending.confirm(5_000_000_000L, key -> true, key -> key == 2, counted::add);
         pending.confirm(6_000_000_000L, key -> true, key -> true, counted::add);
         assertTrue(counted.isEmpty());
+    }
+
+    @Test
+    void packetDigKeepsRejectedTargetsPendingAndCountsEachServerRemovalOnce() {
+        SharedConstants.tryDetectVersion();
+        Bootstrap.bootStrap();
+        var pending = new HighwayBuilderTHM.PendingPacketDigs();
+        BlockPos target = new BlockPos(1, 120, 2);
+
+        pending.sent(target, 0, 2, true);
+        assertNull(pending.confirm(target, Blocks.NETHERRACK.defaultBlockState()));
+        pending.expire(999_999_999L, pos -> true);
+        assertTrue(pending.contains(target));
+        assertEquals(1, pending.forSlot(2));
+
+        var confirmed = pending.confirm(target, Blocks.AIR.defaultBlockState());
+        assertNotNull(confirmed);
+        assertTrue(confirmed.countable());
+        assertFalse(pending.contains(target));
+        assertEquals(0, pending.forSlot(2));
+        assertNull(pending.confirm(target, Blocks.AIR.defaultBlockState()));
+
+        pending.sent(target, 1_000_000_000L, 2, false);
+        assertFalse(pending.confirm(target, Blocks.WATER.defaultBlockState()).countable());
+    }
+
+    @Test
+    void packetDigReleasesUnansweredAndUnloadedTargets() {
+        var pending = new HighwayBuilderTHM.PendingPacketDigs();
+        BlockPos target = new BlockPos(1, 120, 2);
+        BlockPos unloaded = target.east(16);
+        pending.sent(target, 0, 2, false);
+        pending.sent(unloaded, 0, 2, false);
+        pending.expire(500_000_000L, pos -> !pos.equals(unloaded));
+        assertFalse(pending.contains(unloaded));
+        assertTrue(pending.contains(target));
+        pending.expire(1_000_000_000L, pos -> true);
+        assertFalse(pending.contains(target));
     }
 
     @Test

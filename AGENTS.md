@@ -159,6 +159,10 @@ addon-specific settings screen — don't confuse the two when adding a new modul
 returns and initialize it before double mining. Fast Packet Build uses the allowance actually
 left after mining, independently of Experimental. Preserve pending-target duplicate protection.
 
+**Highway packet digging:** The default-off `packet-dig` replaces `packet-borer` in saved settings
+and presets. Send one START for instant-break highway targets without client prediction. Wait for
+server block updates before crediting a dig and keep pending targets in the movement checks.
+
 **Highway legacy airplace:** Paving's default-off `legacy-air-place` restores the 1.21.11
 center/UP click only for unsupported packet placements. Keep confirmation and duplicate guards.
 Smart uses the closest usable contact face. Reachable unsupported targets in the active scheduler

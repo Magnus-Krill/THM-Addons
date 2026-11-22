@@ -412,10 +412,12 @@ public final class StartupClient implements ClientModInitializer {
         allowance.setAccessible(true);
         Field costsField = field("packetCostsThisTick"), mine = field("mineActionsThisTick");
         Field place = field("placeActionsThisTick"), remaining = field("minePacketsLeft");
+        Field state = field("state");
+        Object savedState = state.get(builder);
         try {
             builder.packetBudget.set(true);
             builder.settings.get("packet-build", Boolean.class).set(true);
-            builder.settings.get("packet-borer", Boolean.class).set(false);
+            builder.settings.get("packet-dig", Boolean.class).set(false);
             builder.settings.get("enable-experimental", Boolean.class).set(false);
             builder.settings.get("packet-build-normal-rate", Boolean.class).set(false);
             mine.setInt(builder, 1000);
@@ -436,6 +438,20 @@ public final class StartupClient implements ClientModInitializer {
             if ((int) allowance.invoke(builder) != costs.placements(left) || (int) allowance.invoke(builder) <= 0) {
                 throw new IllegalStateException("Unused mining budget was not reclaimed with experimental settings off");
             }
+            builder.settings.get("packet-dig", Boolean.class).set(true);
+            builder.settings.get("legacy-mode", Boolean.class).set(false);
+            builder.settings.get("rotation", HighwayBuilderTHM.Rotation.class).set(HighwayBuilderTHM.Rotation.None);
+            Object forward = java.util.Arrays.stream(state.getType().getEnumConstants())
+                .filter(value -> ((Enum<?>) value).name().equals("Forward"))
+                .findFirst().orElseThrow();
+            state.set(builder, forward);
+            mine.setInt(builder, 1000);
+            apply.invoke(builder);
+            costs = (PacketBudget.Costs) costsField.get(builder);
+            int packetDigs = costs.dig() == 0 ? 1000 : Math.max(1, costs.available() / costs.dig());
+            if (mine.getInt(builder) != packetDigs) {
+                throw new IllegalStateException("Packet Dig did not reserve one dig packet per block");
+            }
             builder.packetBudget.set(false);
             mine.setInt(builder, 1000);
             place.setInt(builder, Integer.MAX_VALUE);
@@ -444,6 +460,7 @@ public final class StartupClient implements ClientModInitializer {
                 throw new IllegalStateException("Disabled budget still throttles mining or placing");
             }
         } finally {
+            state.set(builder, savedState);
             builder.loadSettingsSnapshot(saved);
         }
     }

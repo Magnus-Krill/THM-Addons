@@ -1141,9 +1141,9 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
-    private final Setting<Boolean> packetBorer = sgDigging.add(new BoolSetting.Builder()
-        .name("packet-borer")
-        .description("Also spams instant-break packets for the whole highway shape each tick.")
+    private final Setting<Boolean> packetDig = sgDigging.add(new BoolSetting.Builder()
+        .name("packet-dig")
+        .description("Instantly mines highway blocks without predicting their removal.")
         .defaultValue(false)
         .build()
     );
@@ -1942,8 +1942,10 @@ public class HighwayBuilderTHM extends Module {
     private boolean packetBuildSent;
     private long packetBuildWindowStartedNanos;
     private int packetBuildWindowSends;
-    private ServerboundPlayerActionPacket doubleMineActionSending;
-    private boolean doubleMineActionSent;
+    private ServerboundPlayerActionPacket miningActionSending;
+    private boolean miningActionSent;
+    private final PendingPacketDigs pendingPacketDigs = new PendingPacketDigs();
+    private ClientLevel packetDigLevel;
 
     public Vec3 start;
     public int blocksBroken, blocksPlaced;
@@ -1970,7 +1972,6 @@ public class HighwayBuilderTHM extends Module {
     private int minePacketsLeft;
     private boolean minePacketAttempted;
     private final double[] mineFractionCarry = new double[1];
-    private int borerPackets;
     private int placeActionsThisTick;
     private final double[] placeFractionCarry = new double[1];
     private final PacketChoke<ChokedPacket> packetChoke = new PacketChoke<>();
@@ -2047,6 +2048,38 @@ public class HighwayBuilderTHM extends Module {
 
         void clear() {
             sentAt.clear();
+        }
+    }
+
+    static final class PendingPacketDigs {
+        private static final long RETRY_NANOS = 1_000_000_000L;
+        private final Map<BlockPos, Attempt> attempts = new HashMap<>();
+
+        record Attempt(long sentAt, int slot, boolean countable) {}
+
+        boolean contains(BlockPos pos) {
+            return attempts.containsKey(pos);
+        }
+
+        void sent(BlockPos pos, long now, int slot, boolean countable) {
+            attempts.putIfAbsent(pos.immutable(), new Attempt(now, slot, countable));
+        }
+
+        Attempt confirm(BlockPos pos, BlockState state) {
+            return state.isAir() || state.getBlock() instanceof LiquidBlock ? attempts.remove(pos) : null;
+        }
+
+        void expire(long now, Predicate<BlockPos> loaded) {
+            attempts.entrySet().removeIf(entry -> now - entry.getValue().sentAt() >= RETRY_NANOS
+                || !loaded.test(entry.getKey()));
+        }
+
+        long forSlot(int slot) {
+            return attempts.values().stream().filter(attempt -> attempt.slot() == slot).count();
+        }
+
+        void clear() {
+            attempts.clear();
         }
     }
     private int tpsThrottleLastSampleAge = Integer.MIN_VALUE;
@@ -5521,6 +5554,11 @@ public class HighwayBuilderTHM extends Module {
         if (catchUpPacing.get() && mc.level != null) catchUpTickPacer.record(System.nanoTime());
         if (mc.player == null || mc.level == null) return;
         long rateNow = System.nanoTime();
+        if (packetDigLevel != mc.level) {
+            pendingPacketDigs.clear();
+            packetDigLevel = mc.level;
+        }
+        pendingPacketDigs.expire(rateNow, pos -> mc.level.hasChunk(pos.getX() >> 4, pos.getZ() >> 4));
         pendingBlockPlacements.confirm(rateNow,
             key -> mc.level.hasChunk(BlockPos.getX(key) >> 4, BlockPos.getZ(key) >> 4),
             key -> !mc.level.getBlockState(BlockPos.of(key)).canBeReplaced(),
@@ -5687,7 +5725,6 @@ public class HighwayBuilderTHM extends Module {
             return;
         }
         applyPacketBudget();
-        tickPacketBorer();
         tickDoubleMine();
         accrueEnclosurePlaceCredit();
         enforceKitbotFoodRestockFoodType();
@@ -6849,7 +6886,7 @@ public class HighwayBuilderTHM extends Module {
     public HighwayBuilderTHM fromTag(CompoundTag tag) {
         CompoundTag migrated = tag;
         if (tag.get("settings") instanceof CompoundTag saved) {
-            CompoundTag updated = migratePacingSettings(migrateAlignmentSettings(saved));
+            CompoundTag updated = migratePacingSettings(migrateRenamedSettings(saved));
             if (updated != saved) {
                 migrated = tag.copy();
                 migrated.put("settings", updated);
@@ -6860,7 +6897,7 @@ public class HighwayBuilderTHM extends Module {
     }
 
     public void loadSettingsSnapshot(CompoundTag tag) {
-        settings.fromTag(migratePacingSettings(migrateAlignmentSettings(tag)));
+        settings.fromTag(migratePacingSettings(migrateRenamedSettings(tag)));
     }
 
     static CompoundTag migratePacingSettings(CompoundTag source) {
@@ -6901,15 +6938,19 @@ public class HighwayBuilderTHM extends Module {
         return source;
     }
 
-    public static CompoundTag migrateAlignmentSettings(CompoundTag source) {
+    public static CompoundTag migrateRenamedSettings(CompoundTag source) {
+        return renameSavedSetting(renameSavedSetting(source, "align-first", "auto-align"), "packet-borer", "packet-dig");
+    }
+
+    private static CompoundTag renameSavedSetting(CompoundTag source, String previous, String current) {
         boolean hasLegacy = false;
         for (var entry : source.getListOrEmpty("groups")) {
             if (!(entry instanceof CompoundTag group)) continue;
             for (var entrySetting : group.getListOrEmpty("settings")) {
                 if (!(entrySetting instanceof CompoundTag setting)) continue;
                 String name = setting.getStringOr("name", "");
-                if (name.equals("auto-align")) return source;
-                if (name.equals("align-first")) hasLegacy = true;
+                if (name.equals(current)) return source;
+                if (name.equals(previous)) hasLegacy = true;
             }
         }
         if (!hasLegacy) return source;
@@ -6917,8 +6958,8 @@ public class HighwayBuilderTHM extends Module {
         for (var entry : migrated.getListOrEmpty("groups")) {
             if (!(entry instanceof CompoundTag group)) continue;
             for (var entrySetting : group.getListOrEmpty("settings")) {
-                if (entrySetting instanceof CompoundTag setting && setting.getStringOr("name", "").equals("align-first")) {
-                    setting.putString("name", "auto-align");
+                if (entrySetting instanceof CompoundTag setting && setting.getStringOr("name", "").equals(previous)) {
+                    setting.putString("name", current);
                 }
             }
         }
@@ -8131,8 +8172,11 @@ public class HighwayBuilderTHM extends Module {
         minePacketAttempted = false;
 
         // Reserve the minimum per block up front. Slower blocks spend the extra packet at the mine call.
-        boolean inlineMining = !packetBorer.get() && normalMining == null && packetMining == null;
-        PacketBudget.Plan plan = packetCostsThisTick.plan(inlineMining, mineActionsThisTick, placeActionsThisTick);
+        boolean inlineMining = normalMining == null && packetMining == null;
+        PacketBudget.Plan plan = inlineMining && usesPacketDig()
+            ? PacketBudget.split(minePacketsLeft, 0, packetCostsThisTick.dig(), packetCostsThisTick.use() + packetCostsThisTick.swing(),
+                mineActionsThisTick, placeActionsThisTick)
+            : packetCostsThisTick.plan(inlineMining, mineActionsThisTick, placeActionsThisTick);
         if (plan.mine() < mineActionsThisTick || plan.place() < placeActionsThisTick) sessionBudgetClipped++;
         mineActionsThisTick = plan.mine();
         // Fast packet placement uses what mining actually leaves, rather than its initial reservation.
@@ -8457,6 +8501,55 @@ public class HighwayBuilderTHM extends Module {
         return mc.level != null && mc.level.getWorldBorder().isWithinBounds(pos);
     }
 
+    private boolean usesPacketDig() {
+        if (!packetDig.get() || rotation.get().mine) return false;
+        if (useForwardRowSchedulerMode()) return state == State.Forward;
+        return isLegacyCountableBrokenState(state) || state == State.MineBehind || state == State.MineBehindFloor
+            || state == State.MineBehindRailings || state == State.MineBehindAboveRailings;
+    }
+
+    private boolean canPacketDig(BlockPos pos, BlockState state) {
+        return usesPacketDig() && !mc.gameMode.isDestroying()
+            && (Speedmine.INSTANCE == null || !Speedmine.INSTANCE.liftsAirMiningPenalty())
+            && (mc.player.isCreative() || state.getDestroyProgress(mc.player, mc.level, pos) >= 1.0f)
+            && !mc.player.blockActionRestricted(mc.level, pos, mc.gameMode.getPlayerMode())
+            && mc.player.getMainHandItem().canDestroyBlock(state, mc.level, pos, mc.player);
+    }
+
+    private boolean tryPacketDig(BlockPos pos, boolean countable) {
+        if (pendingPacketDigs.contains(pos)) return false;
+        if (mc.getConnection() == null || isChokeHoldingOrFlushing(mc.getConnection().getConnection())
+            || !mc.level.hasChunk(pos.getX() >> 4, pos.getZ() >> 4)) return false;
+        if (packetCostsThisTick != null && packetCostsThisTick.dig() > minePacketsLeft) {
+            sessionBudgetClipped++;
+            return false;
+        }
+
+        int slot = mc.player.getInventory().getSelectedSlot();
+        if (InventoryManager.getInstance().getServerSlot() != slot) return false;
+        ItemStack tool = mc.player.getMainHandItem();
+        // The inventory update may lag behind the durability already spent by pending digs.
+        if (dontBreakTools.get() && tool.isDamageableItem()
+            && tool.getMaxDamage() - tool.getDamageValue() - pendingPacketDigs.forSlot(slot)
+                <= tool.getMaxDamage() * (breakDurability.get() / 100.0)) return false;
+
+        if (!sendMiningAction(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos.immutable(), BlockUtils.getDirection(pos), true)) {
+            return false;
+        }
+        packetDigLevel = mc.level;
+        pendingPacketDigs.sent(pos, System.nanoTime(), slot, countable);
+        noteMiningAction(pos);
+        return true;
+    }
+
+    public void onServerBlockUpdate(ClientLevel level, BlockPos pos, BlockState state) {
+        if (level != packetDigLevel || level != mc.level || !isActive()) return;
+        PendingPacketDigs.Attempt confirmed = pendingPacketDigs.confirm(pos, state);
+        if (confirmed == null) return;
+        if (confirmed.countable()) recordBrokenForwardPosition(pos);
+        if (isForwardSchedulerTick()) markForwardSchedulerProgress();
+    }
+
     private boolean tryMineBlock(BlockPos pos, BlockState state, boolean rotate) {
         return tryMineBlock(pos, state, rotate, null);
     }
@@ -8488,6 +8581,11 @@ public class HighwayBuilderTHM extends Module {
         if (rotate) Rotations.rotate(Rotations.getYaw(pos), Rotations.getPitch(pos), breakAction);
         else breakAction.run();
 
+        noteMiningAction(pos);
+        return true;
+    }
+
+    private void noteMiningAction(BlockPos pos) {
         breakTimer = breakDelay.get();
 
         if (!lastBreakingPos.equals(pos)) {
@@ -8495,7 +8593,6 @@ public class HighwayBuilderTHM extends Module {
         }
 
         count++;
-        return true;
     }
 
     private boolean tryPlaceBlock(BlockPos pos, int slot, boolean rotate) {
@@ -9278,7 +9375,28 @@ public class HighwayBuilderTHM extends Module {
     @EventHandler
     private void onPlacementOrMiningPacketSent(PacketEvent.Sent event) {
         if (event.packet == packetBuildSending) packetBuildSent = true;
-        if (event.packet == doubleMineActionSending) doubleMineActionSent = true;
+        if (event.packet == miningActionSending) miningActionSent = true;
+    }
+
+    private boolean sendMiningAction(ServerboundPlayerActionPacket.Action action, BlockPos pos, Direction face, boolean sequenced) {
+        if (mc.getConnection() == null) return false;
+        miningActionSent = false;
+        try {
+            if (sequenced) {
+                ((ClientPlayerInteractionManagerTHMAccessor) mc.gameMode).thm$sendSequencedPacket(mc.level, sequence -> {
+                    miningActionSending = new ServerboundPlayerActionPacket(action, pos, face, sequence);
+                    return miningActionSending;
+                });
+            } else {
+                miningActionSending = new ServerboundPlayerActionPacket(action, pos, face);
+                mc.getConnection().send(miningActionSending);
+            }
+            if (!miningActionSent) return false;
+        } finally {
+            miningActionSending = null;
+        }
+        chargeDigPackets(1);
+        return true;
     }
 
     static BlockHitResult packetAirPlaceHit(BlockPos target, Vec3 eye, boolean legacy) {
@@ -11245,6 +11363,8 @@ public class HighwayBuilderTHM extends Module {
 
     private void clearPendingForwardBreakCredits() {
         pendingForwardBreakCredits.clear();
+        pendingPacketDigs.clear();
+        packetDigLevel = null;
     }
 
     private void clearActiveInMemoryStatsSession() {
@@ -14134,52 +14254,6 @@ public class HighwayBuilderTHM extends Module {
         Notify(heading, description);
     }
 
-    private void activatePacketMode() {
-        packetBuild.set(true);
-        packetBorer.set(true);
-    }
-
-    private void tickPacketBorer() {
-        if (!packetBorer.get() || dir == null || mc.player == null || mc.level == null) return;
-        borerPackets = 0;
-        int dx = dir.offsetX, dz = dir.offsetZ;
-        // perpendicular: left = CW rotation (dz, -dx), right = CCW (-dz, dx)
-        int lx = dz, lz = -dx, rx = -dz, rz = dx;
-        BlockPos base = mc.player.blockPosition();
-        int xOff = dir.diagonal ? dx * 2 : 0;
-        int zOff = dir.diagonal ? dz * 2 : 0;
-        doPacketBorerShape(base.offset(xOff, 0, zOff), dx, dz, lx, lz, rx, rz);
-        // for diagonals, a second shifted pass covers the other arm of the diagonal tunnel
-        if (dir.diagonal) doPacketBorerShape(base.offset(xOff * -3, 0, zOff * -3), dx, dz, lx, lz, rx, rz);
-    }
-
-    private void doPacketBorerShape(BlockPos center, int dx, int dz, int lx, int lz, int rx, int rz) {
-        int ext = dir.diagonal ? 1 : 4;
-        int back = dir.diagonal ? 2 : 4;
-        for (int i = -back; i <= ext; i++) {
-            int bx = center.getX() + dx * i;
-            int bz = center.getZ() + dz * i;
-            int by = center.getY();
-            // center col (y+0..3), right-1 (y+0..3), right-2 (y+1..3), left-1 (y+0..3), left-2 (y+0..3), left-3 (y+1..3)
-            for (int y = 0; y <= 3; y++) borerBreakBlock(new BlockPos(bx, by + y, bz));
-            for (int y = 0; y <= 3; y++) borerBreakBlock(new BlockPos(bx + rx, by + y, bz + rz));
-            for (int y = 1; y <= 3; y++) borerBreakBlock(new BlockPos(bx + rx * 2, by + y, bz + rz * 2));
-            for (int y = 0; y <= 3; y++) borerBreakBlock(new BlockPos(bx + lx, by + y, bz + lz));
-            for (int y = 0; y <= 3; y++) borerBreakBlock(new BlockPos(bx + lx * 2, by + y, bz + lz * 2));
-            for (int y = 1; y <= 3; y++) borerBreakBlock(new BlockPos(bx + lx * 3, by + y, bz + lz * 3));
-        }
-    }
-
-    private void borerBreakBlock(BlockPos pos) {
-        if (borerPackets >= 130 || !isWithinMineRange(pos)) return;
-        BlockState state = mc.level.getBlockState(pos);
-        if (!safeCanBreak(pos, state) || !BlockUtils.canInstaBreak(pos)) return;
-        mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos, Direction.UP));
-        mc.getConnection().send(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, pos, Direction.UP));
-        chargeDigPackets(2);
-        borerPackets += 2;
-    }
-
     private void tickDoubleMine() {
         // could add clientside block breaking to speed the system up, but it would probably make it too vulnerable to desyncs
         if (normalMining != null) {
@@ -15079,7 +15153,8 @@ public class HighwayBuilderTHM extends Module {
 
         // Leftover mine actions go into the rows ahead; out-of-reach blocks are skipped there anyway.
         if (mineLookahead.get()
-            && (activeRow == null || activeRow.mineQueue.isEmpty())
+            && (activeRow == null || activeRow.mineQueue.isEmpty() || usesPacketDig()
+                && activeRow.mineQueue.keySet().stream().allMatch(pendingPacketDigs::contains))
             && forwardMineCount < currentMineActionsThisTick()) {
             boolean skippedActive = false;
             for (ForwardRowSchedule lookaheadRow : forwardSchedulerRuntime.rows) {
@@ -15160,7 +15235,7 @@ public class HighwayBuilderTHM extends Module {
             for (ForwardTask task : row.mineQueue.values()) {
                 if (toDoubleMine.size() >= 2) break;
                 if (forwardMineCount >= currentMineActionsThisTick()) break;
-                if (!isWithinMineRange(task.pos) || !shouldKeepForwardMineTask(task)) continue;
+                if (pendingPacketDigs.contains(task.pos) || !isWithinMineRange(task.pos) || !shouldKeepForwardMineTask(task)) continue;
 
                 BlockState state = mc.level.getBlockState(task.pos);
                 if (
@@ -15198,7 +15273,7 @@ public class HighwayBuilderTHM extends Module {
                 row.mineQueue.remove(task.pos);
                 continue;
             }
-            if (!isWithinMineRange(task.pos)) continue;
+            if (pendingPacketDigs.contains(task.pos) || !isWithinMineRange(task.pos)) continue;
 
             BlockState state = mc.level.getBlockState(task.pos);
             int mineCost = mineBudgetCost(state);
@@ -15222,6 +15297,10 @@ public class HighwayBuilderTHM extends Module {
                 }
 
                 try {
+                    if (canPacketDig(task.pos, state)) {
+                        if (tryPacketDig(task.pos, isSchedulerCountableFrontMineTask(task.type))) forwardMineCount += mineCost;
+                        continue;
+                    }
                     if (!tryMineBlock(task.pos, state, false, () -> createOrRefreshForwardBreakCredit(task.type, task.pos, state))) continue;
                 } finally {
                     if (swapped) InvUtils.swapBack();
@@ -19743,7 +19822,7 @@ public class HighwayBuilderTHM extends Module {
                 // doubleMine() pops at most two (one normal, one packet), so stop scanning at two
                 for (MBlockPos pos : it) {
                     if (toDoubleMine.size() >= 2) break;
-                    if (!b.canMine(pos, mineBlocksToPlace)) continue;
+                    if (b.pendingPacketDigs.contains(pos.getBlockPos()) || !b.canMine(pos, mineBlocksToPlace)) continue;
                     // only want to double mine blocks that we can mine, that are not instamined, and we are not already mining
                     if (
                         !b.safeCanInstaBreakForBreaking(pos.getBlockPos())
@@ -19782,6 +19861,10 @@ public class HighwayBuilderTHM extends Module {
                 if (b.count >= b.currentMineActionsThisTick()) return;
                 if (b.breakTimer > 0) return;
                 if (!b.isWithinMineRange(pos.getBlockPos())) continue;
+                if (b.pendingPacketDigs.contains(pos.getBlockPos())) {
+                    breaking = true;
+                    continue;
+                }
 
                 BlockState state = pos.getState();
                 if (state.isAir() || (!mineBlocksToPlace && b.blocksToPlace.get().contains(state.getBlock()))) continue;
@@ -19797,6 +19880,11 @@ public class HighwayBuilderTHM extends Module {
                 BlockPos mcPos = pos.getBlockPos();
                 boolean multiBreak = b.currentMineActionsThisTick() > 1 && b.safeCanInstaBreakForBreaking(mcPos) && !b.rotation.get().mine;
                 if (b.safeCanBreak(mcPos, state)) {
+                    if (b.canPacketDig(mcPos, state)) {
+                        if (b.tryPacketDig(mcPos, b.isLegacyCountableBrokenState(this))) b.count += mineCost - 1;
+                        breaking = true;
+                        continue;
+                    }
                     Block blockBefore = state.getBlock();
                     if (!b.tryMineBlock(mcPos, state, b.rotation.get().mine)) continue;
                     if (b.mc.level.getBlockState(mcPos).getBlock() != blockBefore) {
@@ -21639,16 +21727,7 @@ public class HighwayBuilderTHM extends Module {
         }
 
         private boolean sendAction(ServerboundPlayerActionPacket.Action action) {
-            b.doubleMineActionSending = new ServerboundPlayerActionPacket(action, blockPos, direction);
-            b.doubleMineActionSent = false;
-            try {
-                b.mc.getConnection().send(b.doubleMineActionSending);
-                if (!b.doubleMineActionSent) return false;
-            } finally {
-                b.doubleMineActionSending = null;
-            }
-            b.chargeDigPackets(1);
-            return true;
+            return b.sendMiningAction(action, blockPos, direction, false);
         }
 
         private void stopDestroying() {

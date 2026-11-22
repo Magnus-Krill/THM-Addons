@@ -165,7 +165,7 @@ migrate in module configs, Highway Profiles and custom presets.
 | `save-pickaxes` | `1`, range `0-36`; shown when `dont-break-tools` is off | Pickaxe reserve that triggers restock or shutdown. |
 | `ignore-signs` | `false` | Preserves signs instead of mining them. |
 | `break-advertisement-signs` | `true`; shown when `ignore-signs` is off | Only breaks signs that look like ads/invites. |
-| `packet-borer` | `false` | Sends extra instant-break packets across the highway shape. |
+| `packet-dig` | `false` | Mines instant-break blocks in the highway queue and waits for server confirmation. Replaces Packet Borer and preserves its saved toggle. |
 
 ### Paving
 
@@ -291,7 +291,6 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `fall-save-air-place` | `false` | `manage-thm-highway-monitor` is on | Places one safety block per tick while the player remains below the managed operating level, is still descending by position and velocity, and has no direct support. Turning monitor management off also turns fall-save off. |
 | `fall-save-distance` | `3`, range `3-5` | Monitor management and `fall-save-air-place` are on | Vertical distance below the hitbox used by fall-save placement. |
 | `autosetup-modules` | `true` | Always | Configures and enables Meteor Speed Mine, Reach, Velocity, and KillAura, enables Criticals, and sets HighwayBuilder place range. |
-| `packet-mode` | `false` | Always | Enables Packet Build and Packet Borer, leaving already-enabled pieces alone. |
 | `packet-budget` | `true` | Always | Caps mining and placing independently of Experimental. Disabling it removes this internal cap. Fast Packet Build uses the capacity left after mining in the same tick, including double mining. Active Paket Limiter Always Block rules exclude canceled packet types. |
 | `packets-per-tick` | `23`, range `4-200` | `packet-budget` is on | The tick's packet allowance, including movement and optional silent swaps. |
 | `check-behind` | `true` | Always | Repairs reachable gaps or obstructions behind the player. Legacy Mode rechecks floor and railings up to four rows back with normal placement and one row with Packet Build. |
@@ -317,7 +316,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `adaptive-mining` | `false` | Always | Auto-tunes blocks-per-tick between `1` and `29` from broken blocks the server puts back. |
 | `ignore-signs` | `false` | Always | Preserves signs by not mining them. |
 | `break-advertisement-signs` | `true` | `ignore-signs` is off | Only breaks signs that look like advertisements or invites. |
-| `packet-borer` | `false` | Always | Sends instant-break packets around the full highway shape every tick, similar to Packet Build for placing. |
+| `packet-dig` | `false` | Always | Sends one start packet per instant-break attempt. The server confirms removal before the builder counts it. Slower blocks and rotated mining use the regular mining path. |
 | `mine-lookahead` | `true` | Always | Spends unused mine actions on reachable blocks in upcoming rows. |
 
 ### THM-HighwayBuilder: Paving
@@ -399,7 +398,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 
 ### THM-HighwayBuilder: Debugging
 
-`Toggle block rate debug` starts or stops a local chat update every second in both control screens. `block-rate-mode` selects BPS or average blocks per client tick; both show the actual BPS against the 30 BPS benchmark. Rates cover one real second, exclude restock and enclosure work, and read zero while the builder is off. Packet placement attempts count only after the block appears, once per position. The Highway HUD shows `Dug` and `Paved` in BPS; use `show-dig-rate` and `show-place-rate` to hide either line.
+`Toggle block rate debug` starts or stops a local chat update every second in both control screens. `block-rate-mode` selects BPS or average blocks per client tick; both show the actual BPS against the 30 BPS benchmark. Rates cover one real second, exclude restock and enclosure work, and read zero while the builder is off. Packet Dig counts server-confirmed removals. Packet placement attempts count only after the block appears, once per position. The Highway HUD shows `Dug` and `Paved` in BPS; use `show-dig-rate` and `show-place-rate` to hide either line.
 
 | Setting | Default / Range / Options | Visible when | Behavior |
 | --- | --- | --- | --- |
