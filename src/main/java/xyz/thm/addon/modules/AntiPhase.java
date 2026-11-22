@@ -25,16 +25,18 @@ import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.PlayerUtils;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
-import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Items;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.settings.PacketPlacementSettings;
+import xyz.thm.addon.utils.PlacementUtils;
 import xyz.thm.addon.utils.RenderUtilsTHM;
 
 public class AntiPhase extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+    private final PacketPlacementSettings packetPlacement = new PacketPlacementSettings(sgGeneral);
     private final SettingGroup sgRender = settings.createGroup("Render");
 
     private final Setting<Double> targetRange = sgGeneral.add(new DoubleSetting.Builder()
@@ -141,7 +143,7 @@ public class AntiPhase extends Module {
 
         // checkEntities off: scaffolding reports a solid shape to an absent context, so the client
         // check would reject placing inside the target — the server accepts it.
-        if (BlockUtils.place(feet, scaffolding, rotate.get(), 50, true, false, true)) {
+        if (PlacementUtils.place(feet, scaffolding, rotate.get(), 50, true, false, true, packetPlacement.mode())) {
             renderPos.set(feet);
             rendering = true;
         }

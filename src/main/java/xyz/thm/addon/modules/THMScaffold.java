@@ -48,6 +48,8 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.settings.PacketPlacementSettings;
+import xyz.thm.addon.utils.PlacementUtils;
 
 import java.util.*;
 
@@ -184,7 +186,7 @@ public class THMScaffold extends Module {
 
     private final BlockPos.MutableBlockPos bp = new BlockPos.MutableBlockPos();
     private int placementsThisTick;
-    private Setting<Boolean> thm$packetPlace;
+    private final PacketPlacementSettings thm$packet;
     private Setting<Boolean> thm$packetPlaceOnce;
     private Setting<Boolean> thm$packetLimiter;
     private Setting<Integer> thm$packetLimit;
@@ -201,19 +203,15 @@ public class THMScaffold extends Module {
     private int thm$lockedY = Integer.MIN_VALUE;
     private long thm$epoch;
     private long thm$tick;
-    private BlockHitResult thm$placingHit;
-    private boolean thm$sent;
     private int thm$syncSlot = -1;
     private boolean thm$slotSent;
 
     public THMScaffold() {
         super(THMAddon.MAIN, "THMScaffold", "Scaffolds with silent swaps and a built-in packet budget.");
-        thm$packetPlace = sgGeneral.add(new BoolSetting.Builder()
-            .name("packet-place").description("Places blocks without client prediction.")
-            .defaultValue(true).build());
+        thm$packet = new PacketPlacementSettings(sgGeneral);
         thm$packetPlaceOnce = sgGeneral.add(new BoolSetting.Builder()
             .name("packet-place-once").description("Waits for server updates instead of retrying each tick.")
-            .defaultValue(false).visible(thm$packetPlace::get).build());
+            .defaultValue(false).visible(thm$packet::enabled).build());
         thm$packetLimiter = sgGeneral.add(new BoolSetting.Builder()
             .name("packet-limiter").description("Limits Scaffold packets per tick.")
             .defaultValue(true).build());
@@ -264,8 +262,15 @@ public class THMScaffold extends Module {
     }
 
     static CompoundTag thm$migrateSettings(CompoundTag source) {
-        if (source.getBooleanOr("scaffold-compact-settings", false)) return source;
+        CompoundTag migrated = PacketPlacementSettings.migrateToggle(source.getCompoundOrEmpty("settings"), "packet-place");
+        if (source.getBooleanOr("scaffold-compact-settings", false)) {
+            if (migrated == source.get("settings") || migrated.isEmpty()) return source;
+            CompoundTag tag = source.copy();
+            tag.put("settings", migrated);
+            return tag;
+        }
         CompoundTag tag = source.copy();
+        if (!migrated.isEmpty()) tag.put("settings", migrated.copy());
         Map<String, CompoundTag> values = new HashMap<>();
         for (var entry : tag.getCompoundOrEmpty("settings").getListOrEmpty("groups")) {
             if (!(entry instanceof CompoundTag group)) continue;
@@ -273,8 +278,8 @@ public class THMScaffold extends Module {
                 if (value instanceof CompoundTag setting) values.put(setting.getStringOr("name", ""), setting);
             }
         }
-        if (values.containsKey("air-place") && values.containsKey("packet-place")
-            && values.get("packet-place").getBooleanOr("value", false)) {
+        if (values.containsKey("air-place") && values.containsKey("packet")
+            && values.get("packet").getBooleanOr("value", false)) {
             CompoundTag legacy = values.get("packet-air-place");
             values.get("air-place").putBoolean("value", legacy == null || legacy.getBooleanOr("value", true));
         }
@@ -331,7 +336,7 @@ public class THMScaffold extends Module {
         thm$epoch++;
         thm$tick++;
         thm$queued.clear();
-        thm$packets.beginTick(!thm$packetPlace.get() || thm$packetPlaceOnce.get());
+        thm$packets.beginTick(!thm$packet.enabled() || thm$packetPlaceOnce.get());
         if (mc.player == null || mc.level == null) return;
         if (thm$keepY.get() && thm$lockedY == Integer.MIN_VALUE) thm$lockedY = mc.player.getBlockY() - 1;
         if (!thm$keepY.get()) thm$lockedY = Integer.MIN_VALUE;
@@ -364,7 +369,6 @@ public class THMScaffold extends Module {
 
     @EventHandler
     private void thm$onSent(PacketEvent.Sent event) {
-        if (event.packet instanceof ServerboundUseItemOnPacket use && use.getHitResult() == thm$placingHit) thm$sent = true;
         if (event.packet instanceof ServerboundSetCarriedItemPacket slot && slot.getSlot() == thm$syncSlot) thm$slotSent = true;
     }
 
@@ -396,7 +400,7 @@ public class THMScaffold extends Module {
 
     private boolean thm$place(BlockPos pos, FindItemResult item, boolean rotate, int priority, boolean swing, boolean checkEntities) {
         if (mc.player == null || mc.level == null || mc.gameMode == null || !item.found()
-            || placementsThisTick >= blocksPerTick.get()) return false;
+            || placementsThisTick >= blocksPerTick.get() || PlacementUtils.remainingPlacementPackets(thm$packet.mode()) == 0) return false;
         BlockPos target = thm$applyKeepY(pos).immutable();
         if (!thm$canPlace(target, item, checkEntities) || !thm$queued.add(target.asLong())) return false;
         Direction side = thm$placeSide(target);
@@ -404,7 +408,8 @@ public class THMScaffold extends Module {
             thm$queued.remove(target.asLong());
             return false;
         }
-        boolean packet = thm$packetPlace.get();
+        var mode = thm$packet.mode();
+        boolean packet = mode.isPacket();
         if (!thm$packets.canSend(target.asLong(), !packet || thm$packetPlaceOnce.get())) {
             thm$queued.remove(target.asLong());
             return false;
@@ -424,8 +429,9 @@ public class THMScaffold extends Module {
             boolean placed = false;
             try {
                 if (!isActive() || epoch != thm$epoch || mc.player != player || mc.level != level
+                    || PlacementUtils.remainingPlacementPackets(thm$packet.mode()) == 0
                     || !thm$packets.canSend(target.asLong(), !packet || thm$packetPlaceOnce.get())
-                    || packet != thm$packetPlace.get() || (onlyOnClick.get() && !mc.options.keyUse.isDown()) || !thm$canPlace(target, item, checkEntities)) return;
+                    || mode != thm$packet.mode() || (onlyOnClick.get() && !mc.options.keyUse.isDown()) || !thm$canPlace(target, item, checkEntities)) return;
                 Direction currentSide = thm$placeSide(target);
                 if (currentSide == null && !airPlace.get()) return;
                 // A changed support needs a fresh rotation, not the queued air click.
@@ -434,24 +440,20 @@ public class THMScaffold extends Module {
                 int previousSlot = player.getInventory().getSelectedSlot();
                 InteractionHand hand = item.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
                 boolean trackPending = packet ? thm$packetPlaceOnce.get() : currentSide == null;
-                thm$sent = false;
                 try {
                     if (!item.isOffhand()) thm$selectSlot(item.slot());
-                    thm$placingHit = currentHit;
                     if (trackPending) thm$packets.markSent(target.asLong(), thm$tick);
                     if (packet) {
-                        player.connection.send(new ServerboundUseItemOnPacket(hand, currentHit, 0));
-                        if (thm$sent) {
+                        placed = PlacementUtils.sendPlacementPacket(new ServerboundUseItemOnPacket(hand, currentHit, 0), mode);
+                        if (placed) {
                             if (swing) player.swing(hand);
                             else player.connection.send(new ServerboundSwingPacket(hand));
                         }
                     } else {
-                        BlockUtils.interact(currentHit, hand, swing);
+                        placed = PlacementUtils.interactPlacement(target, currentHit, hand, swing);
                     }
                 } finally {
-                    placed = thm$sent;
                     if (trackPending && !placed) thm$packets.forget(target.asLong());
-                    thm$placingHit = null;
                     if (!item.isOffhand() && mc.player == player && mc.level == level) thm$selectSlot(previousSlot);
                 }
             } finally {
@@ -485,7 +487,7 @@ public class THMScaffold extends Module {
     private Direction thm$placeSide(BlockPos pos) {
         for (Direction side : SUPPORT_SIDES) {
             var state = mc.level.getBlockState(pos.relative(side));
-            if (xyz.thm.addon.utils.PlacementUtils.isSupportBlock(state)) return side;
+            if (PlacementUtils.isSupportBlock(state)) return side;
         }
         return null;
     }

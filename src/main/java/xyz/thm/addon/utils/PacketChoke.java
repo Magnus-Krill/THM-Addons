@@ -73,6 +73,21 @@ public final class PacketChoke<T> {
         }
     }
 
+    public void release(Consumer<T> send) {
+        synchronized (this) {
+            holding = false;
+            phaseTicks = 0;
+        }
+        try {
+            flush(send);
+        } catch (RuntimeException e) {
+            synchronized (this) {
+                holding = true;
+            }
+            throw e;
+        }
+    }
+
     public synchronized void clear() {
         queued.clear();
         holding = true;

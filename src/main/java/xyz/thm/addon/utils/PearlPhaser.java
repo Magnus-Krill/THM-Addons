@@ -16,6 +16,8 @@ package xyz.thm.addon.utils;
 
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
+import meteordevelopment.meteorclient.utils.player.InvUtils;
+import meteordevelopment.meteorclient.utils.player.SlotUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.protocol.game.ServerboundAttackPacket;
@@ -32,8 +34,10 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import xyz.thm.addon.settings.DescribedOption;
+import xyz.thm.addon.settings.PacketPlacementSettings;
 
 import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
 
 import static meteordevelopment.meteorclient.MeteorClient.mc;
 
@@ -55,6 +59,7 @@ public class PearlPhaser {
     public final Setting<Boolean> antiAntiPhase;
     /** Null when built without extras. */
     public final Setting<Boolean> selfFill;
+    private final PacketPlacementSettings packetPlacement;
     public final Setting<Boolean> selfPlace;
     public final Setting<SelfPlaceType> selfPlaceType;
     public final Setting<Boolean> optimize;
@@ -128,6 +133,7 @@ public class PearlPhaser {
             .visible(visible::getAsBoolean)
             .build()
         );
+        packetPlacement = new PacketPlacementSettings(sgPearl, visible::getAsBoolean);
 
         SettingGroup sgSelfPlace = settings.createGroup("Self Place");
 
@@ -230,6 +236,10 @@ public class PearlPhaser {
         });
     }
 
+    public PacketPlacementSettings.Mode placementMode() {
+        return packetPlacement.mode();
+    }
+
     private static boolean on(Setting<Boolean> setting) {
         return setting != null && setting.get();
     }
@@ -281,32 +291,28 @@ public class PearlPhaser {
         }
         FindItemResult resistantBlock = PlacementUtils.findResistantBlock();
         if (resistantBlock.found() && blockPos != null && !mc.level.getBlockState(blockPos.below()).canBeReplaced()) {
-            PlacementUtils.placeBlock(blockPos, true, true, true);
+            PlacementUtils.placeBlock(blockPos, resistantBlock, true, true, true, placementMode());
         }
     }
 
     private int findSelfPlaceItem() {
-        if (selfPlaceType.get() == SelfPlaceType.Fire) {
-            for (int i = 0; i < 45; i++) {
-                ItemStack stack = mc.player.getInventory().getItem(i);
-                if (stack.getItem() == Items.FLINT_AND_STEEL || stack.getItem() == Items.FIRE_CHARGE) return i;
-            }
-        } else {
-            for (int i = 0; i < 45; i++) {
-                ItemStack stack = mc.player.getInventory().getItem(i);
-                if (stack.getItem() == Items.COBWEB) return i;
-            }
-        }
-        return -1;
+        Predicate<ItemStack> matches = selfPlaceType.get() == SelfPlaceType.Fire
+            ? stack -> stack.is(Items.FLINT_AND_STEEL) || stack.is(Items.FIRE_CHARGE)
+            : stack -> stack.is(Items.COBWEB);
+        FindItemResult held = InvUtils.findInHotbar(matches);
+        return held.found() ? held.slot() : InvUtils.find(matches, 9, 35).slot();
     }
 
     private void performSelfPlace(boolean optimized) {
+        if (PlacementUtils.remainingPlacementPackets(placementMode()) == 0) return;
         int itemSlot = findSelfPlaceItem();
         if (itemSlot == -1) return;
 
-        if (itemSlot >= 9 && !swapAlternative.get()) return;
+        boolean offhand = itemSlot == SlotUtils.OFFHAND;
+        if (!offhand && itemSlot >= 9 && !swapAlternative.get()) return;
+        InteractionHand hand = offhand ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
         RotationUtils rotationManager = RotationUtils.getInstance();
-        InventoryManager.withItem(selfPlaceOwner, itemSlot, false, SwapManager.PEARL + 1, () -> {
+        Runnable place = () -> {
             try {
                 if (selfPlaceType.get() == SelfPlaceType.Fire) {
                     BlockPos belowPos = mc.player.blockPosition().below();
@@ -314,7 +320,8 @@ public class PearlPhaser {
                     if (!optimized && selfPlaceRotate.get()) {
                         rotationManager.setRotationSilent(mc.player.getYRot(), 90.0f);
                     }
-                    interact(new BlockHitResult(hitVec, Direction.UP, belowPos, false));
+                    PlacementUtils.sendPlacement(belowPos.above(), new BlockHitResult(hitVec, Direction.UP, belowPos, false),
+                        hand, placementMode());
                 } else {
                     BlockPos feetPos = mc.player.blockPosition();
                     Direction side = PlacementUtils.getPlaceSide(feetPos);
@@ -326,22 +333,15 @@ public class PearlPhaser {
                         float[] rot = RotationUtils.getRotationsTo(mc.player.getEyePosition(), hitVec);
                         rotationManager.setRotationSilent(rot[0], rot[1]);
                     }
-                    interact(new BlockHitResult(hitVec, opposite, neighbor, false));
+                    PlacementUtils.sendPlacement(feetPos, new BlockHitResult(hitVec, opposite, neighbor, false),
+                        hand, placementMode());
                 }
             } finally {
                 if (!optimized && selfPlaceRotate.get()) rotationManager.setRotationSilentSync();
             }
-        });
-    }
-
-    /**
-     * Vanilla's own use-block path. The hand-rolled {@code PlayerInteractBlockC2SPacket} this replaces
-     * always sent sequence 0, so the server acked a stale block-change sequence and simply dropped the
-     * interaction — which is why self-place never lit the fire.
-     */
-    private void interact(BlockHitResult hitResult) {
-        mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND, hitResult);
-        mc.getConnection().send(new ServerboundSwingPacket(InteractionHand.MAIN_HAND));
+        };
+        if (offhand) place.run();
+        else InventoryManager.withItem(selfPlaceOwner, itemSlot, false, SwapManager.PEARL + 1, place);
     }
 
     public enum SelfPlaceType implements DescribedOption {

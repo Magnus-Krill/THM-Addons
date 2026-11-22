@@ -27,6 +27,8 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.ParameterizedTest;
 import xyz.thm.addon.modules.HighwayBuilderTHM.State;
 import xyz.thm.addon.system.THMSystem;
 
@@ -82,11 +84,12 @@ class HighwayBuilderTHMTest {
         assertSame(source, HighwayBuilderTHM.migrateRenamedSettings(source));
     }
 
-    @Test
-    void pacingMovesToPavingAndKeepsTheSavedValue() {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void pacingMovesToPavingAndKeepsTheSavedValue(boolean paced) {
         CompoundTag pacing = new CompoundTag();
         pacing.putString("name", "packet-build-pacing");
-        pacing.putBoolean("value", true);
+        pacing.putBoolean("value", paced);
         ListTag values = new ListTag();
         values.add(pacing);
         CompoundTag experimental = new CompoundTag();
@@ -102,7 +105,9 @@ class HighwayBuilderTHMTest {
         assertTrue(((CompoundTag) result.getFirst()).getListOrEmpty("settings").isEmpty());
         CompoundTag paving = (CompoundTag) result.getLast();
         assertEquals("Paving", paving.getStringOr("name", ""));
-        assertEquals(pacing, paving.getListOrEmpty("settings").getFirst());
+        var choice = paving.getListOrEmpty("settings").getCompoundOrEmpty(0);
+        assertEquals("packet-mode", choice.getStringOr("name", ""));
+        assertEquals(paced ? "Pace" : "Direct", choice.getStringOr("value", ""));
         assertEquals(1, groups.size());
         assertEquals(1, values.size());
         assertSame(migrated, HighwayBuilderTHM.migratePacingSettings(migrated));

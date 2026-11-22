@@ -51,7 +51,7 @@ After that first seed, each profile loads its own saved values rather than reapp
 
 The tabbed HighwayBuilder screen can also save the current settings as a named custom preset. Each preset is stored as `<Name>.json` under `meteor-client/thm/highway-builder-presets`, loaded when HighwayBuilder is registered during Minecraft startup, and applied from the **Custom preset** selector with its **Apply** button. Imported files are size- and depth-limited and may contain only known HighwayBuilder groups and settings.
 
-Restock and KitBot enclosures use Netherrack first, then any suitable full block, including protected Obsidian. Shulkers and falling blocks are excluded. With `offhand-build`, the builder uses the offhand and restores any item it swapped out. Enclosure blocks are placed normally, one at a time, even when Packet Build is enabled.
+Restock and KitBot enclosures use Netherrack first, then any suitable full block, including protected Obsidian. Shulkers and falling blocks are excluded. With `offhand-build`, the builder uses the offhand and restores any item it swapped out. Enclosure blocks are placed one at a time and wait for a server update.
 
 TPS safety enclosures also use Netherrack. After TPS recovers, the builder removes its enclosure blocks on all four sides before moving forward. Existing nearby blocks are left alone.
 
@@ -173,15 +173,14 @@ migrate in module configs, Highway Profiles and custom presets.
 | --- | --- | --- |
 | `blocks-to-place` | `Obsidian`; full-cube blocks only | Blocks the builder may place. |
 | `placements-per-tick` | `1.5`, range `0.1-100`, slider `0.1-10`, one decimal place | Maximum averaged place throughput; `1.5` bursts 1-2-1-2 blocks per tick for 30 blocks/s, `0.1` performs about one placement every 10 ticks. |
-| `adaptive-placements` | `false` | Drops the place rate by 0.5 on a rubberband or a server-reverted placement (min `0.5`), raises it 0.1 per 10 stable seconds up to `3`, staying one step below the last rate that failed (retried after 5 calm minutes). Starts from `placements-per-tick`; ignored with unlimited `packet-build`. The rate slider shows the current value live, and moving it by hand restarts adaptive from there. |
+| `adaptive-placements` | `false` | Drops the place rate by 0.5 on a rubberband or a server-reverted placement (min `0.5`), raises it 0.1 per 10 stable seconds up to `3`, staying one step below the last rate that failed (retried after 5 calm minutes). Starts from `placements-per-tick`; ignored with unlimited `packet`. The rate slider shows the current value live, and moving it by hand restarts adaptive from there. |
 | `place-range` | `4.5`, slider max `5.5` | Maximum block placement reach. |
 | `place-delay` | `0`, minimum `0` | Delay between place actions. |
-| `packet-build` | `false` | Places with raw packets only: the client never sets a block itself, so what you see is always the server's state (no ghost blocks). |
-| `air-place-mode` | `Smart`; options `Never`, `Smart`, `Always`; shown when `packet-build` is on | Smart uses the nearest usable face and falls back to air placement. |
-| `legacy-air-place` | `false`; shown when Packet Build permits air placement | Uses the 1.21.11 target-center click with face `UP` for unsupported blocks. |
-| `packet-build-pacing` | `true`; Packet Build | Caps placements per 310 ms window. |
-| `packet-build-pacing-blocks` | `9`, slider `1-20`; Pacing on | Maximum placement packets per window. |
-| `packet-build-lookahead` | `true`; shown with unlimited `packet-build` | Also places upcoming rows in the same tick. Pauses while the active row has reachable air-placement targets. |
+| `packet` | `false` | Places with raw packets only: the client never sets a block itself, so what you see is always the server's state (no ghost blocks). |
+| `air-place-mode` | `Smart`; options `Never`, `Smart`, `Always`; shown when `packet` is on | Smart uses the nearest usable face and falls back to air placement. |
+| `legacy-air-place` | `false`; shown when Packet permits air placement | Uses the 1.21.11 target-center click with face `UP` for unsupported blocks. |
+| `packet-mode` | `Pace`; Packet on | Pace shares nine placements per 310 ms with other modules in Pace mode. Direct sends without the shared cap. |
+| `packet-build-lookahead` | `true`; shown with unlimited `packet` | Also places upcoming rows in the same tick. Pauses while the active row has reachable air-placement targets. |
 | `silent-forward-place-swap` | `false`; hidden in legacy mode or with `offhand-build` | Restores your selected slot after scheduler placement. |
 | `silent-forward-tool-swap` | `false`; hidden in legacy mode or with `offhand-build` | Restores your selected slot after scheduler mining. |
 
@@ -190,13 +189,13 @@ migrate in module configs, Highway Profiles and custom presets.
 | Setting | Default / Range | What to change it for |
 | --- | --- | --- |
 | `enable-experimental` | `false` | Master switch: nothing else in this group does anything while it is off. |
-| `packet-build-normal-rate` | `false`; shown when `packet-build` is on | Uses normal placement rate and delay while placing with packets and waiting for server updates. |
+| `packet-build-normal-rate` | `false`; shown when `packet` is on | Uses normal placement rate and delay while placing with packets and waiting for server updates. |
 | `packet-build-resend` | `20`, range `2-200`; shown when `packet-build-normal-rate` is on | Ticks before asking the server about an unanswered block. |
-| `packet-build-sequenced` | `false`; Packet Build | Uses Minecraft interaction sequence numbers. |
-| `packet-build-timed-air-retry` | `false`; Packet Build | Retries Air Place after a cooldown without probing or waiting for a server update. An unconfirmed success can produce an extra block. Choke Build uses the normal confirmation path. |
+| `packet-build-sequenced` | `false`; Packet | Uses Minecraft interaction sequence numbers. |
+| `packet-build-timed-air-retry` | `false`; Packet | Retries Air Place after a cooldown without probing or waiting for a server update. An unconfirmed success can produce an extra block. Choke Build uses the normal confirmation path. |
 | `packet-build-air-retry-ticks` | `5`, range `1-20`; Timed Air Retry | Cooldown before retrying a target that still looks empty. |
-| `packet-build-direct-air` | `false`; Packet Build | Clicks the target center with face `UP` even when supported. Respects `air-place-mode: Never`. |
-| `choke-build` | `false`; shown when `enable-experimental` is on | Holds all outgoing C2S packets, then releases them in order. |
+| `packet-build-direct-air` | `false`; Packet | Clicks the target center with face `UP` even when supported. Respects `air-place-mode: Never`. |
+| `choke-build` | `false`; shown when `enable-experimental` is on | Holds outgoing packets and releases them in order. A paced placement releases the queue early. |
 | `choke-hold-ticks` | `5`, range `1-200` | Ticks to hold C2S packets. |
 | `choke-release-ticks` | `5`, range `1-200` | Ticks to send normally after releasing queued packets. |
 | `choke-max-hold-ticks` | `20`, range `1-200` | Forces a release when the hold reaches this many ticks. |
@@ -224,7 +223,7 @@ migrate in module configs, Highway Profiles and custom presets.
 | `break-mode-no-offhand` | `Speedmine rebreak`; shown when `mine-ender-chests` is on and `offhand-build` is off | Same choice without the on-place mode, which needs the chest in the offhand. |
 | `rebreak-delay` | `0`, slider max `20`; shown for `Instant rebreak` | Ticks between rebreak packets. |
 | `silent-rebreak-swap` | `true`; shown with `offhand-build` off and a rebreak mode selected | Restores your selected slot after a rebreak or chest placement. |
-| `predictive-echest-replace` | `true`; shown for offhand OnPlace rebreak | Places the next offhand EChest immediately after the rebreak packet. |
+| `predictive-echest-replace` | `false`; shown for offhand OnPlace rebreak | Places the next offhand EChest immediately after the rebreak packet. |
 | `use-break-speed-multiplier` | `true`; shown when `mine-ender-chests` is on | Temporarily boosts Timer while mining ender chests. |
 | `break-speed-multiplier` | `1.5`, range `1-3`; shown when the boost is on | How much Timer is boosted. |
 
@@ -291,9 +290,9 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `fall-save-air-place` | `false` | `manage-thm-highway-monitor` is on | Places one safety block per tick while the player remains below the managed operating level, is still descending by position and velocity, and has no direct support. Turning monitor management off also turns fall-save off. |
 | `fall-save-distance` | `3`, range `3-5` | Monitor management and `fall-save-air-place` are on | Vertical distance below the hitbox used by fall-save placement. |
 | `autosetup-modules` | `true` | Always | Configures and enables Meteor Speed Mine, Reach, Velocity, and KillAura, enables Criticals, and sets HighwayBuilder place range. |
-| `packet-budget` | `true` | Always | Caps mining and placing independently of Experimental. Disabling it removes this internal cap. Fast Packet Build uses the capacity left after mining in the same tick, including double mining. Active Paket Limiter Always Block rules exclude canceled packet types. |
+| `packet-budget` | `true` | Always | Caps mining and placing independently of Experimental. Disabling it removes this internal cap. Fast Packet uses the capacity left after mining in the same tick, including double mining. Active Paket Limiter Always Block rules exclude canceled packet types. |
 | `packets-per-tick` | `23`, range `4-200` | `packet-budget` is on | The tick's packet allowance, including movement and optional silent swaps. |
-| `check-behind` | `true` | Always | Repairs reachable gaps or obstructions behind the player. Legacy Mode rechecks floor and railings up to four rows back with normal placement and one row with Packet Build. |
+| `check-behind` | `true` | Always | Repairs reachable gaps or obstructions behind the player. Legacy Mode rechecks floor and railings up to four rows back with normal placement and one row with Packet. |
 | `ghost-block-check` | `false` | `enable-experimental` and `check-behind` are on | Before moving into the next row, has the server confirm the floor/railings of the row behind (one use-on-block packet per two blocks, needs an empty hand, pickaxe or totem). A ghost block turns into a hole client-side and is re-placed first. Forward scheduler only. |
 | `advertise` | `false` | Always | Sends THM advertisement messages in chat. |
 | `advertise-interval` | `5`, range `1-60` minutes | `advertise` is on | Delay between advertisement messages. |
@@ -327,15 +326,14 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `place-range` | `4.5`, slider max `5.5` | Always | Maximum distance for block placement. |
 | `place-delay` | `0`, minimum `0` | Always | Delay in ticks between place actions. |
 | `tps-safety-enclosure` | `true` | Always | Builds a small enclosure during confirmed low or unknown TPS pauses after TPS settling. |
-| `packet-build` | `false` | Always | Ordinary highway placements use raw place packets and appear only after the server's block update. Restock/KitBot enclosures and block-entity containers use normal placement. Unless `packet-build-normal-rate` is on, it removes the per-tick placement cap and automatically enables Packet Limiter on activation. |
-| `air-place-mode` | `Smart`; options `Never`, `Smart`, `Always` | `packet-build` is on | `Never` skips no-face placements, `Smart` uses the nearest usable face or falls back to air placement, and `Always` allows air placement. |
-| `legacy-air-place` | `false` | `packet-build` is on and air placement is allowed | Uses the 1.21.11 target-center click with face `UP` when no neighbor is available. Confirmation and duplicate protection stay active. |
-| `packet-build-pacing` | `true` | Packet Build is on | Caps placement packets in a 310 ms window starting with the first send. |
-| `packet-build-pacing-blocks` | `9`, slider `1-20` | Packet Build and Pacing are on | Maximum placement packets per window. |
-| `packet-build-lookahead` | `true` | Unlimited `packet-build` is on | Places upcoming rows after the active row. Pauses while the active row has reachable air-placement targets. |
-| `packet-build-normal-rate` | `false` | `enable-experimental` and `packet-build` are on | Replaces Packet Build Once. Uses normal placement rate and delay without client-side block prediction; each target waits for a server answer before another place packet. |
+| `packet` | `false` | Always | Ordinary highway placements use raw place packets and appear only after the server's block update. Restock and KitBot enclosures use server confirmations. Unless `packet-build-normal-rate` is on, it removes the per-tick placement cap and automatically enables Packet Limiter on activation. |
+| `air-place-mode` | `Smart`; options `Never`, `Smart`, `Always` | `packet` is on | `Never` skips no-face placements, `Smart` uses the nearest usable face or falls back to air placement, and `Always` allows air placement. |
+| `legacy-air-place` | `false` | `packet` is on and air placement is allowed | Uses the 1.21.11 target-center click with face `UP` when no neighbor is available. Confirmation and duplicate protection stay active. |
+| `packet-mode` | `Pace` | Packet is on | Pace shares nine placements per 310 ms with other modules in Pace mode. Direct sends without the shared cap. |
+| `packet-build-lookahead` | `true` | Unlimited `packet` is on | Places upcoming rows after the active row. Pauses while the active row has reachable air-placement targets. |
+| `packet-build-normal-rate` | `false` | `enable-experimental` and `packet` are on | Replaces the former Packet Build Once option. Uses normal placement rate and delay without client-side block prediction; each target waits for a server answer before another place packet. |
 | `packet-build-resend` | `20`, range `2-200` | `packet-build-normal-rate` is on | Ticks before probing an unanswered placement. |
-| `choke-build` | `false` | `enable-experimental` is on | Holds all outgoing C2S packets. The queued packets are sent together, in order, when the hold period ends. |
+| `choke-build` | `false` | `enable-experimental` is on | Holds outgoing packets and releases them in order. A paced placement releases the queue early. |
 | `choke-hold-ticks` | `5`, range `1-200` | `choke-build` is on | Desired hold duration. |
 | `choke-release-ticks` | `5`, range `1-200` | `choke-build` is on | Duration of normal sending after a release. |
 | `choke-max-hold-ticks` | `20`, range `1-200` | `choke-build` is on | Maximum hold duration; releases early when below `choke-hold-ticks`. |
@@ -377,7 +375,7 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `break-mode-no-offhand` | `Speedmine rebreak` | `mine-ender-chests` is on, `offhand-build` is off | Same modes as `break-mode` minus **Instant rebreak on place**, which needs the chest in the offhand. It's a separate setting because a select can't hide a single option. |
 | `rebreak-delay` | `0`, slider max `20` | Mode is `Instant rebreak` | Delay in ticks between rebreak packets. |
 | `silent-rebreak-swap` | `true` | `mine-ender-chests` is on, `offhand-build` is off and a rebreak mode is selected | Restores your previously selected slot after a rebreak packet or a chest placement. |
-| `predictive-echest-replace` | `true` | Offhand OnPlace mode | Places the next offhand EChest immediately after the rebreak packet. |
+| `predictive-echest-replace` | `false` | Offhand OnPlace mode | Places the next offhand EChest immediately after the rebreak packet. |
 | `use-break-speed-multiplier` | `true` | `mine-ender-chests` is on | Temporarily boosts Timer while mining ender chests, then restores the previous Timer state. |
 | `break-speed-multiplier` | `1.5`, range `1-3` | `mine-ender-chests` and `use-break-speed-multiplier` are on | Timer multiplier used during ender chest mining. |
 

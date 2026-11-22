@@ -27,6 +27,7 @@ import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket;
 import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
+import net.minecraft.network.protocol.game.ServerboundUseItemPacket;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
@@ -71,6 +72,10 @@ public final class PacketPlaceTracker {
         return INSTANCE.trackUseOn(connection, hand, hit, action);
     }
 
+    static boolean trackItemUseSend(Connection connection, InteractionHand hand, Runnable action) {
+        return INSTANCE.trackUseOn(connection, hand, null, action);
+    }
+
     boolean trackUseOn(Connection connection, InteractionHand hand, BlockHitResult hit, Runnable action) {
         UseOnSend previous = useOnSend.get();
         UseOnSend attempt = new UseOnSend(connection, hand, hit);
@@ -86,10 +91,13 @@ public final class PacketPlaceTracker {
 
     @EventHandler
     void onSent(PacketEvent.Sent event) {
-        if (!(event.packet instanceof ServerboundUseItemOnPacket use)) return;
         UseOnSend attempt = useOnSend.get();
-        if (attempt != null && attempt.connection == event.connection && attempt.hand == use.getHand()
+        if (attempt == null || attempt.connection != event.connection) return;
+        if (event.packet instanceof ServerboundUseItemOnPacket use && attempt.hand == use.getHand()
             && attempt.hit == use.getHitResult()) attempt.sent = true;
+        if (event.packet instanceof ServerboundUseItemPacket use && attempt.hit == null && attempt.hand == use.getHand()) {
+            attempt.sent = true;
+        }
     }
 
     private static final class UseOnSend {

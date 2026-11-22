@@ -66,6 +66,11 @@ public final class DropdownDescriptions {
 
     public static String providedString(String setting, Object value) {
         return switch (setting) {
+            case "packet-mode" -> switch (value.toString()) {
+                case "Pace" -> "Share the nine-packet limit across modules in Pace mode.";
+                case "Direct" -> "Send placement packets without the shared limit.";
+                default -> null;
+            };
             case "show-branch" -> switch (value.toString()) {
                 case "All" -> "Show members from every branch.";
                 case "Main" -> "Show main-branch members only.";

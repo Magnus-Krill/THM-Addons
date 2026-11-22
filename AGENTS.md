@@ -169,7 +169,9 @@ Smart uses the closest usable contact face. Reachable unsupported targets in the
 row pause supported placements and placement lookahead until they are resolved.
 Experimental Packet Build toggles independently test sequenced sends, timed Air Place retries,
 and direct center/UP clicks. The default confirmation path still uses probes.
-Pacing defaults on in Paving with a cap of nine sends per 310 ms. Migrate saved Experimental values.
+Each placement module has a default-off Packet toggle. Its Packet Mode dropdown defaults to Pace.
+Only Pace shares the nine-placement budget per 310 ms. Direct sends, normal placements, and confirmation probes bypass the shared budget.
+Use `PlacementUtils` to apply the mode at the send. Use the hand holding the placement item and keep offhand placements free of hotbar changes.
 With Check Behind, hold movement for reachable repairs even
 when the active row has no forward boundary. Double Mine promotes N to P after a sent STOP.
 
@@ -299,6 +301,10 @@ and showing as Surround. Both triggers repair client-world air; `onPacket` also 
 and server updates, skipping batch delay and queued rotation while keeping the tick limit. Predictions expire;
 inventory swaps restore items and client/server slots. Compact dropdowns migrate previous toggle values.
 Only Advanced starts collapsed; later layout changes remain saved.
+
+**AutoTrap and Self Trap:** AutoTrap plans around the target's current footprint and can build vertical supports for the roof.
+Air Place prioritizes head-height walls, then the roof.
+Logout traps use Meteor's recorded logout spots and share the live-trap placement budget. Surround's Self Trap adds head-height walls and an optional roof.
 
 **PvP placement tracking:** Crystal Aura and Surround advance placement state only after `PacketEvent.Sent` matches the current use-on-block action. Roll back normal client prediction when sending fails.
 

@@ -15,16 +15,21 @@ By using this code you agree to the license terms and to keep your repo public.
 package xyz.thm.addon.utils;
 
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
+import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
+import meteordevelopment.meteorclient.utils.player.SlotUtils;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
-import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.game.ServerboundSwingPacket;
 import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
+import net.minecraft.network.protocol.game.ServerboundUseItemPacket;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Block;
@@ -35,71 +40,172 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import xyz.thm.addon.mixin.accessor.ClientPlayerInteractionManagerTHMAccessor;
-import java.util.Arrays;
+import xyz.thm.addon.modules.HighwayBuilderTHM;
+import xyz.thm.addon.settings.PacketPlacementSettings.Mode;
+
+import java.lang.ref.WeakReference;
+import java.util.ArrayDeque;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
 import static meteordevelopment.meteorclient.MeteorClient.mc;
 public class PlacementUtils {
-    private static final List<Block> RESISTANT_BLOCKS = Arrays.asList(
-        Blocks.OBSIDIAN,
-        Blocks.CRYING_OBSIDIAN,
-        Blocks.ENDER_CHEST,
-        Blocks.RESPAWN_ANCHOR,
-        Blocks.ENCHANTING_TABLE,
-        Blocks.ANVIL
-    );
+    private static final PlacementPacer PACER = new PlacementPacer();
+    private static WeakReference<Connection> pacedConnection = new WeakReference<>(null);
+
     public static FindItemResult findResistantBlock() {
-        for (Block block : RESISTANT_BLOCKS) {
+        for (Block block : List.of(Blocks.OBSIDIAN, Blocks.CRYING_OBSIDIAN, Blocks.ENDER_CHEST,
+            Blocks.RESPAWN_ANCHOR, Blocks.ENCHANTING_TABLE, Blocks.ANVIL)) {
             FindItemResult result = InvUtils.findInHotbar(block.asItem());
             if (result.found()) return result;
         }
         return InvUtils.findInHotbar(itemStack -> false);
     }
 
-    public static boolean sendPlacement(BlockPos target, BlockHitResult hit, InteractionHand hand, boolean packet) {
+    private static PlacementPacer pacer(Connection connection) {
+        if (connection != pacedConnection.get()) {
+            pacedConnection = new WeakReference<>(connection);
+            PACER.reset();
+        }
+        return PACER;
+    }
+
+    public static int remainingPlacementPackets(Mode mode) {
+        if (mode != Mode.Pace) return Integer.MAX_VALUE;
+        var listener = mc.getConnection();
+        return listener == null ? 0 : pacer(listener.getConnection()).remaining(System.nanoTime());
+    }
+
+    private static boolean sendWithMode(Connection connection, Mode mode, BooleanSupplier send) {
+        if (mode != Mode.Pace) return send.getAsBoolean();
+        return pacer(connection).send(mode, System::nanoTime, () -> {
+            var modules = Modules.get();
+            var highway = modules == null ? null : modules.get(HighwayBuilderTHM.class);
+            return (highway == null || highway.releaseBeforePacedPlacement(connection)) && send.getAsBoolean();
+        });
+    }
+
+    public static boolean sendPlacementPacket(ServerboundUseItemOnPacket packet, Mode mode) {
+        var listener = mc.getConnection();
+        if (listener == null) return false;
+        var connection = listener.getConnection();
+        return sendWithMode(connection, mode, () -> PacketPlaceTracker.trackUseOnSend(connection,
+            packet.getHand(), packet.getHitResult(), () -> listener.send(packet)));
+    }
+
+    public static boolean sendPlacement(BlockPos target, BlockHitResult hit, InteractionHand hand, Mode mode) {
         var player = mc.player;
-        var level = mc.level;
         var gameMode = mc.gameMode;
-        var connection = mc.getConnection();
-        if (player == null || level == null || gameMode == null || connection == null) return false;
-        if (packet) {
-            if (!sendSequencedPlacement(hand, hit)) return false;
+        if (player == null || gameMode == null) return false;
+        if (mode.isPacket()) {
+            if (!sendSequencedPlacement(hand, hit, mode)) return false;
             player.swing(hand);
             return true;
         }
-
-        BlockState before = level.getBlockState(target);
-        ItemStack stack = player.getItemInHand(hand);
-        int count = stack.getCount();
         boolean sneaking = player.isShiftKeyDown();
         InteractionResult[] result = {InteractionResult.PASS};
-        boolean sent;
         player.setShiftKeyDown(false);
+        boolean sent;
         try {
-            sent = PacketPlaceTracker.trackUseOnSend(connection.getConnection(), hand, hit,
+            sent = predictPlacement(target, hit, hand,
                 () -> result[0] = gameMode.useItemOn(player, hand, hit));
         } finally {
             player.setShiftKeyDown(sneaking);
         }
-        if (sent) {
-            if (result[0].consumesAction()) player.swing(hand);
-        } else if (mc.level == level && mc.player == player && level.getBlockState(target) != before) {
+        if (sent && result[0].consumesAction()) player.swing(hand);
+        return sent;
+    }
+
+    public static boolean interactPlacement(BlockPos target, BlockHitResult hit, InteractionHand hand, boolean swing) {
+        return predictPlacement(target, hit, hand, () -> BlockUtils.interact(hit, hand, swing));
+    }
+
+    private static boolean predictPlacement(BlockPos target, BlockHitResult hit, InteractionHand hand, Runnable use) {
+        var player = mc.player;
+        var level = mc.level;
+        var connection = mc.getConnection();
+        if (player == null || level == null || mc.gameMode == null || connection == null) return false;
+        BlockState before = level.getBlockState(target);
+        ItemStack stack = player.getItemInHand(hand);
+        int count = stack.getCount();
+        boolean sent = PacketPlaceTracker.trackUseOnSend(connection.getConnection(), hand, hit, use);
+        if (!sent && mc.level == level && mc.player == player) {
             // Vanilla predicts before the packet limiter sees the use-on packet.
-            level.setBlock(target, before, 19);
+            if (level.getBlockState(target) != before) level.setBlock(target, before, 19);
             if (player.getItemInHand(hand) == stack && stack.getCount() == count - 1) stack.setCount(count);
         }
         return sent;
     }
-    public static boolean placeBlock(BlockPos pos, boolean rotate, boolean swing, boolean strictDirection) {
-        FindItemResult block = findResistantBlock();
-        if (!block.found()) return false;
-        return placeBlock(pos, block, rotate, swing, strictDirection);
+
+    public static boolean place(BlockPos pos, FindItemResult item, boolean rotate, int priority, Mode mode) {
+        return place(pos, item, rotate, priority, true, true, true, mode);
     }
-    public static boolean placeBlock(BlockPos pos, FindItemResult block, boolean rotate, boolean swing, boolean strictDirection) {
-        if (!block.found() || !canPlace(pos, strictDirection)) return false;
+
+    public static boolean place(BlockPos pos, FindItemResult item, boolean rotate, int priority, boolean checkEntities, Mode mode) {
+        return place(pos, item, rotate, priority, true, checkEntities, true, mode);
+    }
+
+    public static boolean place(BlockPos pos, FindItemResult item, boolean rotate, int priority,
+                                boolean swing, boolean checkEntities, boolean swapBack, Mode mode) {
+        return place(pos, item.slot(), rotate, priority, swing, checkEntities, swapBack, mode);
+    }
+
+    public static boolean place(BlockPos pos, int slot, boolean rotate, int priority,
+                                boolean swing, boolean checkEntities, boolean swapBack, Mode mode) {
+        InteractionHand hand = placementHand(slot);
+        if (hand == null || mc.getConnection() == null || remainingPlacementPackets(mode) == 0) return false;
+        if (mode.isPacket() && !PacketPlaceTracker.canSend(pos)) return false;
+        boolean offhand = hand == InteractionHand.OFF_HAND;
+        var player = mc.player;
+        var level = mc.level;
+        ItemStack stack = offhand ? player.getOffhandItem() : player.getInventory().getItem(slot);
+        Block block = stack.getItem() instanceof BlockItem item ? item.getBlock() : Blocks.OBSIDIAN;
+        if (!BlockUtils.canPlaceBlock(pos, checkEntities, block)) return false;
+
+        BlockPos target = pos.immutable();
+        Direction side = BlockUtils.getPlaceSide(target);
+        BlockHitResult hit = side == null ? new BlockHitResult(Vec3.atCenterOf(target), Direction.DOWN, target, false)
+            : packetPlacementHit(target, side);
+        BooleanSupplier place = () -> {
+            if (mc.player != player || mc.level != level || remainingPlacementPackets(mode) == 0
+                || mode.isPacket() && !PacketPlaceTracker.canSend(target) || !BlockUtils.canPlaceBlock(target, checkEntities, block) || BlockUtils.getPlaceSide(target) != side) return false;
+            ItemStack current = offhand ? player.getOffhandItem() : player.getInventory().getItem(slot);
+            if (current.isEmpty() || !current.is(stack.getItem())) return false;
+            if (offhand) return placeAtHit(target, hit, hand, swing, mode);
+            if (!InvUtils.swap(slot, swapBack)) return false;
+            try {
+                return placeAtHit(target, hit, hand, swing, mode);
+            } finally {
+                if (swapBack) InvUtils.swapBack();
+            }
+        };
+        if (!rotate) return place.getAsBoolean();
+        Rotations.rotate(Rotations.getYaw(hit.getLocation()), Rotations.getPitch(hit.getLocation()), priority, place::getAsBoolean);
+        return true;
+    }
+
+    public static boolean placeAtHit(BlockPos target, BlockHitResult hit, InteractionHand hand, boolean swing, Mode mode) {
+        if (!mode.isPacket()) return interactPlacement(target, hit, hand, swing);
+        if (!PacketPlaceTracker.canSend(target) || !sendSequencedPlacement(hand, hit, mode)) return false;
+        PacketPlaceTracker.markSent(target, PacketPlaceTracker.DEFAULT_RESEND_TICKS);
+        if (swing) mc.player.swing(hand);
+        else mc.getConnection().send(new ServerboundSwingPacket(hand));
+        return true;
+    }
+
+    static InteractionHand placementHand(int slot) {
+        if (slot == SlotUtils.OFFHAND) return InteractionHand.OFF_HAND;
+        return SlotUtils.isHotbar(slot) ? InteractionHand.MAIN_HAND : null;
+    }
+
+    public static boolean placeBlock(BlockPos pos, FindItemResult block, boolean rotate, boolean swing,
+                                     boolean strictDirection, Mode mode) {
+        if (!block.found() || remainingPlacementPackets(mode) == 0 || !canPlace(pos, strictDirection)) return false;
         Direction side = getPlaceSide(pos);
         if (side == null) return false;
         BlockPos neighbor = pos.relative(side);
@@ -111,7 +217,8 @@ public class PlacementUtils {
         if (block.getHand() == null && !InvUtils.swap(block.slot(), false)) return false;
         BlockHitResult hitResult = new BlockHitResult(hitPos, opposite, neighbor, false);
         InteractionHand hand = block.getHand() != null ? block.getHand() : InteractionHand.MAIN_HAND;
-        mc.getConnection().send(new ServerboundUseItemOnPacket(hand, hitResult, 0));
+        if (!mode.isPacket()) return interactPlacement(pos, hitResult, hand, swing);
+        if (!sendPlacementPacket(new ServerboundUseItemOnPacket(hand, hitResult, 0), mode)) return false;
         if (swing) {
             if (hand == InteractionHand.MAIN_HAND) {
                 mc.player.swing(InteractionHand.MAIN_HAND);
@@ -201,50 +308,34 @@ public class PlacementUtils {
 
     public static BlockPos findSupportStep(BlockPos target, Direction[] sides, int maxDistance,
                                            Predicate<BlockPos> canFill, Predicate<BlockPos> hasSupport) {
-        BlockPos best = null;
-        int distanceLimit = maxDistance;
-        for (Direction side : sides) {
-            for (int distance = 1; distance <= distanceLimit; distance++) {
-                BlockPos step = target.relative(side, distance);
-                if (!canFill.test(step)) break;
-                if (!hasSupport.test(step)) continue;
-                best = step;
-                distanceLimit = distance - 1;
-                break;
+        ArrayDeque<BlockPos> queue = new ArrayDeque<>();
+        Set<BlockPos> visited = new HashSet<>();
+        queue.add(target);
+        visited.add(target);
+        for (int distance = 1; distance <= maxDistance && !queue.isEmpty(); distance++) {
+            for (int remaining = queue.size(); remaining > 0; remaining--) {
+                BlockPos previous = queue.removeFirst();
+                for (Direction side : sides) {
+                    BlockPos step = previous.relative(side);
+                    if (!visited.add(step) || !canFill.test(step)) continue;
+                    if (hasSupport.test(step)) return step;
+                    queue.addLast(step);
+                }
             }
         }
-        return best;
+        return null;
     }
 
-    public static boolean placeOnSolidSide(Object owner, BlockPos pos, FindItemResult item, boolean rotate, int rotationPriority) {
-        if (!item.found() || !BlockUtils.canPlace(pos)) return false;
-
-        Direction side = getPlaceSide(pos);
-        if (side == null) return false;
-
-        InteractionHand hand = item.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
-        if (hand == InteractionHand.MAIN_HAND && !item.isHotbar()) return false;
-
-        BlockHitResult hit = packetPlacementHit(pos, side);
-        var player = mc.player;
-        var world = mc.level;
-        var intended = (item.isOffhand() ? player.getOffhandItem() : player.getInventory().getItem(item.slot())).getItem();
-        if (!(intended instanceof net.minecraft.world.item.BlockItem)) return false;
-        BooleanSupplier place = () -> {
-            if (mc.player != player || mc.level != world || !BlockUtils.canPlace(pos) || !isSolidFace(hit.getBlockPos())) return false;
-            var current = item.isOffhand() ? player.getOffhandItem() : player.getInventory().getItem(item.slot());
-            if (!current.is(intended)) return false;
-            if (hand == InteractionHand.MAIN_HAND) {
-                return InventoryManager.withItem(owner, item.slot(), false, SwapManager.SURROUND, () -> BlockUtils.interact(hit, hand, true));
+    public static Set<BlockPos> horizontalFootprint(AABB bounds, int y) {
+        Set<BlockPos> feet = new LinkedHashSet<>();
+        for (int x = Mth.floor(bounds.minX + 1e-7); x <= Mth.floor(bounds.maxX - 1e-7); x++) {
+            for (int z = Mth.floor(bounds.minZ + 1e-7); z <= Mth.floor(bounds.maxZ - 1e-7); z++) {
+                feet.add(new BlockPos(x, y, z));
             }
-            BlockUtils.interact(hit, hand, true);
-            return true;
-        };
-
-        if (!rotate) return place.getAsBoolean();
-        Rotations.rotate(Rotations.getYaw(hit.getLocation()), Rotations.getPitch(hit.getLocation()), rotationPriority, place::getAsBoolean);
-        return true;
+        }
+        return feet;
     }
+
     public static BlockPos getDirectionalPlacement(float yaw, BlockPos basePos) {
         float normalizedYaw = yaw % 360.0f;
         if (normalizedYaw < 0.0f) normalizedYaw += 360.0f;
@@ -322,67 +413,15 @@ public class PlacementUtils {
         return false;
     }
 
-    public static boolean placeBlockPacket(BlockPos pos, int hotbarSlot, boolean offhand, boolean rotate, int rotateTicks) {
-        if (!BlockUtils.canPlace(pos) || !mc.level.getWorldBorder().isWithinBounds(pos)) return false;
-        if (!offhand && (hotbarSlot < 0 || hotbarSlot > 8)) return false;
-
-        Direction side = getPlaceSide(pos);
-        BlockPos neighbour = side == null ? pos : pos.relative(side);
-        Direction hitSide = side == null ? Direction.UP : side.getOpposite();
-        Vec3 hitPos = Vec3.atCenterOf(pos);
-        if (side != null) {
-            hitPos = hitPos.add(side.getStepX() * 0.5, side.getStepY() * 0.5, side.getStepZ() * 0.5);
-        }
-
-        InteractionHand hand = offhand ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
-        Vec3 finalHitPos = hitPos;
-        Direction finalHitSide = hitSide;
-        BlockPos finalNeighbour = neighbour;
-
-        Runnable place = () -> {
-            boolean swapped = false;
-            if (!offhand) {
-                InvUtils.swap(hotbarSlot, true);
-                swapped = true;
-            }
-
-            Minecraft.getInstance().player.connection.send(
-                new ServerboundUseItemOnPacket(hand, new BlockHitResult(finalHitPos, finalHitSide, finalNeighbour, false), 0)
-            );
-            Minecraft.getInstance().player.connection.send(new ServerboundSwingPacket(hand));
-
-            if (swapped) InvUtils.swapBack();
-        };
-
-        if (rotate) {
-            Rotations.rotate(Rotations.getYaw(hitPos), Rotations.getPitch(hitPos), rotateTicks, place);
-        } else {
-            place.run();
-        }
-
-        return true;
-    }
-
-    public static boolean placeBlockPacket(BlockPos pos, FindItemResult item, boolean rotate, int rotateTicks) {
-        return placeBlockPacket(pos, item, rotate, rotateTicks, true, true);
-    }
-
-    public static boolean placeBlockPacket(BlockPos pos, FindItemResult item, boolean rotate, int rotateTicks, boolean airPlace) {
-        return placeBlockPacket(pos, item, rotate, rotateTicks, airPlace, true);
-    }
-
     /**
      * @param swapBack When false, the hotbar selection is kept after placing (only swaps if the slot needs to change).
      *                 Use false for packet-build highway placing to minimise UpdateSelectedSlot packets.
      *                 Use true (default) for PvP modules that need the hand restored after each place.
      */
-    public static boolean placeBlockPacket(BlockPos pos, FindItemResult item, boolean rotate, int rotateTicks, boolean airPlace, boolean swapBack) {
+    public static boolean placeBlockPacket(BlockPos pos, FindItemResult item, boolean rotate, int rotateTicks, boolean swapBack, Mode mode) {
+        if (remainingPlacementPackets(mode) == 0) return false;
         Direction side = getPlaceSide(pos);
-        if (side == null && !airPlace) return false;
-        return placeBlockPacket(pos, item, rotate, rotateTicks, swapBack, packetPlacementHit(pos, side), packet -> {
-            mc.player.connection.send(packet);
-            return true;
-        });
+        return placeBlockPacket(pos, item, rotate, rotateTicks, swapBack, packetPlacementHit(pos, side), packet -> sendPlacementPacket(packet, mode));
     }
 
     public static BlockHitResult packetPlacementHit(BlockPos pos, Direction side) {
@@ -397,19 +436,23 @@ public class PlacementUtils {
 
     public static boolean placeBlockPacket(BlockPos pos, FindItemResult item, boolean rotate, int rotateTicks, boolean swapBack,
                                            BlockHitResult hit, Predicate<ServerboundUseItemOnPacket> send) {
-        if (!BlockUtils.canPlace(pos) || !mc.level.getWorldBorder().isWithinBounds(pos)) return false;
-        InteractionHand hand = item.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        InteractionHand hand = placementHand(item.slot());
+        if (hand == null || !BlockUtils.canPlace(pos) || !mc.level.getWorldBorder().isWithinBounds(pos)) return false;
         var player = mc.player;
         var level = mc.level;
+        boolean offhand = hand == InteractionHand.OFF_HAND;
+        var expected = (offhand ? player.getOffhandItem() : player.getInventory().getItem(item.slot())).getItem();
         BooleanSupplier place = () -> {
             if (mc.player != player || mc.level != level) return false;
+            ItemStack stack = offhand ? player.getOffhandItem() : player.getInventory().getItem(item.slot());
+            if (stack.isEmpty() || !stack.is(expected)) return false;
             boolean swapped = false;
-            if (item.isHotbar()) {
+            if (!offhand) {
                 if (swapBack) {
-                    InvUtils.swap(item.slot(), true);
+                    if (!InvUtils.swap(item.slot(), true)) return false;
                     swapped = true;
                 } else if (player.getInventory().getSelectedSlot() != item.slot()) {
-                    InvUtils.swap(item.slot(), false);
+                    if (!InvUtils.swap(item.slot(), false)) return false;
                 }
             }
 
@@ -429,13 +472,43 @@ public class PlacementUtils {
         return place.getAsBoolean();
     }
 
-    public static boolean sendSequencedPlacement(InteractionHand hand, BlockHitResult hit) {
+    public static boolean sendSequencedPlacement(InteractionHand hand, BlockHitResult hit, Mode mode) {
         var level = mc.level;
         var gameMode = mc.gameMode;
         var connection = mc.getConnection();
         if (level == null || gameMode == null || connection == null) return false;
-        return PacketPlaceTracker.trackUseOnSend(connection.getConnection(), hand, hit, () ->
+        return sendWithMode(connection.getConnection(), mode, () ->
+            PacketPlaceTracker.trackUseOnSend(connection.getConnection(), hand, hit, () ->
             ((ClientPlayerInteractionManagerTHMAccessor) gameMode).thm$sendSequencedPacket(level,
-                sequence -> new ServerboundUseItemOnPacket(hand, hit, sequence)));
+                sequence -> new ServerboundUseItemOnPacket(hand, hit, sequence))));
+    }
+
+    public static boolean placeWithItem(InteractionHand hand, Vec3 aim, Mode mode) {
+        var player = mc.player;
+        var level = mc.level;
+        var gameMode = mc.gameMode;
+        var listener = mc.getConnection();
+        if (player == null || level == null || gameMode == null || listener == null) return false;
+
+        float yaw = (float) Rotations.getYaw(aim), pitch = (float) Rotations.getPitch(aim);
+        if (!mode.isPacket()) {
+            float previousYaw = player.getYRot(), previousPitch = player.getXRot();
+            player.setYRot(yaw);
+            player.setXRot(pitch);
+            try {
+                if (!gameMode.useItem(player, hand).consumesAction()) return false;
+            } finally {
+                player.setYRot(previousYaw);
+                player.setXRot(previousPitch);
+            }
+        } else {
+            var connection = listener.getConnection();
+            if (!sendWithMode(connection, mode, () ->
+                PacketPlaceTracker.trackItemUseSend(connection, hand, () ->
+                    ((ClientPlayerInteractionManagerTHMAccessor) gameMode).thm$sendSequencedPacket(level,
+                        sequence -> new ServerboundUseItemPacket(hand, sequence, yaw, pitch))))) return false;
+        }
+        player.swing(hand);
+        return true;
     }
 }

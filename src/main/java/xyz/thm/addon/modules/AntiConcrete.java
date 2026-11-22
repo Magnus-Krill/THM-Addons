@@ -32,6 +32,8 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.AABB;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.settings.PacketPlacementSettings;
+import xyz.thm.addon.utils.PlacementUtils;
 import xyz.thm.addon.settings.DescribedOption;
 
 public class AntiConcrete extends Module {
@@ -41,6 +43,7 @@ public class AntiConcrete extends Module {
     }
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+    private final PacketPlacementSettings packetPlacement = new PacketPlacementSettings(sgGeneral);
 
     // -------------------- General Settings -------------------- //
     private final Setting<Mode> mode = sgGeneral.add(new EnumSetting.Builder<Mode>()
@@ -162,7 +165,6 @@ public class AntiConcrete extends Module {
         Block blockAt = mc.level.getBlockState(currentPos).getBlock();
         if (isButtonBlock(blockAt)) return;
 
-        // check if we can place at this position (BlockUtils.place will still try, but pre-check avoids waste)
         if (!BlockUtils.canPlace(currentPos)) return;
 
         FindItemResult button = InvUtils.findInHotbar(stack -> isButton(stack.getItem()));
@@ -199,8 +201,7 @@ public class AntiConcrete extends Module {
         }
 
         // place and set cooldown to avoid placing every tick
-        BlockUtils.place(currentPos, button, rotate.get(), 0);
-        placeCooldown = 6; // ~6 ticks = 0.3s, adjust as desired
+        if (PlacementUtils.place(currentPos, button, rotate.get(), 0, packetPlacement.mode())) placeCooldown = 6;
 
         // schedule return of swapped item
         if (swapped && originalSlot != -1) {

@@ -114,9 +114,8 @@ class SurroundTest {
         ListTag groups = new ListTag(); groups.add(group); settings.put("groups", groups); module.put("settings", settings);
         CompoundTag original = module.copy(), migrated = Surround.migrateSettings(module);
         assertEquals(original, module, "Loading must leave the original profile untouched.");
-        var placement = Surround.PlacementMode.valueOf(choice(migrated, "place-mode"));
-        assertEquals(first, placement.packet);
-        if (first) assertEquals(second, placement.waitForAnswer);
+        assertEquals(first, setting(migrated, "packet").getBooleanOr("value", false));
+        assertEquals(second, setting(migrated, "packet-place-once").getBooleanOr("value", true));
         var coverage = Surround.Coverage.valueOf(choice(migrated, "coverage"));
         assertEquals(first, coverage.eyes); assertEquals(second, coverage.roof);
         var expansion = Surround.Expansion.valueOf(choice(migrated, "expansion"));
@@ -147,6 +146,12 @@ class SurroundTest {
         values.add(booleanSetting("head-level", true)); values.add(booleanSetting("cover-head", false));
         CompoundTag limit = new CompoundTag(); limit.putString("name", "blocks-per-tick"); limit.putInt("value", 7); values.add(limit);
         values.add(booleanSetting("tag-switch", true));
+        values.add(booleanSetting("self-trap", true));
+        values.add(booleanSetting("head", false));
+        CompoundTag placement = new CompoundTag();
+        placement.putString("name", "place-mode");
+        placement.putString("value", "PacketRepeat");
+        values.add(placement);
         general.put("settings", values);
         render.putString("name", "Render"); render.putBoolean("sectionExpanded", true);
         ListTag groups = new ListTag(); groups.add(general); groups.add(render); settings.put("groups", groups); module.put("settings", settings);
@@ -154,6 +159,10 @@ class SurroundTest {
         assertEquals("Roof", choice(migrated, "coverage"));
         assertEquals(7, setting(migrated, "blocks-per-tick").getIntOr("value", 0));
         assertTrue(setting(migrated, "auto-disable").getBooleanOr("value", false));
+        assertTrue(setting(migrated, "self-trap").getBooleanOr("value", false));
+        assertFalse(setting(migrated, "head").getBooleanOr("value", true));
+        assertTrue(setting(migrated, "packet").getBooleanOr("value", false));
+        assertFalse(setting(migrated, "packet-place-once").getBooleanOr("value", true));
         assertEquals("surround-plus", migrated.getStringOr("name", ""));
         for (Tag entry : migrated.getCompoundOrEmpty("settings").getListOrEmpty("groups")) {
             CompoundTag group = (CompoundTag) entry;

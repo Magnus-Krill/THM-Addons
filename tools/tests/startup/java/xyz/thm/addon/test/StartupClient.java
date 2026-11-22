@@ -52,6 +52,7 @@ import meteordevelopment.meteorclient.gui.themes.meteor.MeteorGuiTheme;
 import meteordevelopment.meteorclient.gui.widgets.containers.WContainer;
 import meteordevelopment.meteorclient.gui.widgets.input.WDropdown;
 import meteordevelopment.meteorclient.settings.ItemSetting;
+import meteordevelopment.meteorclient.settings.ProvidedStringSetting;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.misc.input.KeyAction;
 import meteordevelopment.meteorclient.utils.render.color.Color;
@@ -93,6 +94,7 @@ public final class StartupClient implements ClientModInitializer {
             closing = true;
             try {
                 verifyPacketBudget();
+                verifyPacketPlacementModes();
                 verifyHighwayUtilityMigration();
                 verifyHotbarManager();
                 verifyKitbotUpdateIsolation();
@@ -475,6 +477,35 @@ public final class StartupClient implements ClientModInitializer {
             .filter(button -> button.getMessage().getString().equals(label)).findFirst().orElseThrow();
     }
 
+    private static void verifyPacketPlacementModes() {
+        var modules = Modules.get();
+        var surround = modules.get("surround-plus").settings;
+        var autoTrap = modules.get("auto-trap+").settings;
+        var surroundPacket = surround.get("packet", Boolean.class);
+        var trapPacket = autoTrap.get("packet", Boolean.class);
+        var surroundMode = (ProvidedStringSetting) surround.get("packet-mode");
+        var trapMode = (ProvidedStringSetting) autoTrap.get("packet-mode");
+        if (surroundPacket.get() || trapPacket.get() || surroundMode.isVisible() || trapMode.isVisible()) {
+            throw new IllegalStateException("Packet mode must be off by default");
+        }
+        try {
+            surroundPacket.set(true);
+            if (!surroundMode.isVisible() || !surroundMode.get().equals("Pace")
+                || trapMode.isVisible() || !Arrays.equals(surroundMode.supplier.get(), new String[]{"Pace", "Direct"})) {
+                throw new IllegalStateException("Packet modes must default to Pace and be selected independently");
+            }
+            surroundMode.set("Direct");
+            trapPacket.set(true);
+            if (!surroundMode.get().equals("Direct") || !trapMode.get().equals("Pace")) {
+                throw new IllegalStateException("Packet modes shared a setting value");
+            }
+        } finally {
+            surroundMode.reset();
+            surroundPacket.reset();
+            trapPacket.reset();
+        }
+    }
+
     private static void verifyPacketBudget() throws ReflectiveOperationException {
         HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
         var saved = builder.settings.toTag();
@@ -488,7 +519,7 @@ public final class StartupClient implements ClientModInitializer {
         Object savedState = state.get(builder);
         try {
             builder.packetBudget.set(true);
-            builder.settings.get("packet-build", Boolean.class).set(true);
+            builder.settings.get("packet", Boolean.class).set(true);
             builder.settings.get("packet-dig", Boolean.class).set(false);
             builder.settings.get("enable-experimental", Boolean.class).set(false);
             builder.settings.get("packet-build-normal-rate", Boolean.class).set(false);

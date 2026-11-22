@@ -37,6 +37,9 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.settings.PacketPlacementSettings;
+import xyz.thm.addon.utils.PlacementUtils;
+import xyz.thm.addon.utils.PacketPlaceTracker;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -48,6 +51,7 @@ public class AntiFeetPlace extends Module {
     }
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+    private final PacketPlacementSettings packetPlacement = new PacketPlacementSettings(sgGeneral);
     private final SettingGroup sgFilters = settings.createGroup("Filters");
 
     // -------------------- General Settings -------------------- //
@@ -323,6 +327,9 @@ public class AntiFeetPlace extends Module {
         BlockPos placeAt = belowPos;
         BlockState bs = mc.level.getBlockState(placeAt);
         if (isBlocker(bs)) { stage = placeBridge.get() ? Stage.PLACE_BRIDGE : waitOrYieldAfterChest(); return; }
+        var mode = packetPlacement.mode();
+        if (PlacementUtils.remainingPlacementPackets(mode) == 0
+            || mode.isPacket() && !PacketPlaceTracker.canSend(placeAt)) return;
 
         FindItemResult chest = InvUtils.findInHotbar(this::isBlockerItem);
         if (!chest.found()) chest = InvUtils.find(this::isBlockerItem);
@@ -338,9 +345,9 @@ public class AntiFeetPlace extends Module {
             Rotations.rotate(yp[0], yp[1], 25, () -> {});
         }
 
-        boolean placed = BlockUtils.place(placeAt, chest, false, 50, renderPlace.get());
+        boolean placed = PlacementUtils.place(placeAt, chest, false, 50, renderPlace.get(), mode);
         if (placed) {
-            stage = placeBridge.get() ? Stage.PLACE_BRIDGE : waitOrYieldAfterChest();
+            if (!mode.isPacket()) stage = placeBridge.get() ? Stage.PLACE_BRIDGE : waitOrYieldAfterChest();
         } else if (++tapCounter > 10) {
             tapCounter = 0; stage = Stage.SELECT;
         }
@@ -350,6 +357,8 @@ public class AntiFeetPlace extends Module {
         if (!validTarget() || !placeBridge.get()) {
             stage = waitOrYieldAfterChest(); return;
         }
+        var mode = packetPlacement.mode();
+        if (PlacementUtils.remainingPlacementPackets(mode) == 0) return;
 
         if (!isBlocker(mc.level.getBlockState(belowPos))) {
             if (++ticksCounter < 5) return;
@@ -365,6 +374,7 @@ public class AntiFeetPlace extends Module {
             if (mc.level.getBlockState(bridgeBase).is(Blocks.OBSIDIAN)) {
                 stage = waitOrYieldAfterChest(); return;
             }
+            if (mode.isPacket() && !PacketPlaceTracker.canSend(bridgeBase)) return;
 
             if (ensureCrystalClearance.get()) {
                 if (!clearOrWait(bridgeBase.above(), bridgePrepMaxTicks.get())) return;
@@ -384,8 +394,8 @@ public class AntiFeetPlace extends Module {
                 float[] yp = lookAt(Vec3.atCenterOf(bridgeBase));
                 Rotations.rotate(yp[0], yp[1], 25, () -> {});
             }
-            if (BlockUtils.place(bridgeBase, obs, false, 50, renderPlace.get())) {
-                stage = waitOrYieldAfterChest();
+            if (PlacementUtils.place(bridgeBase, obs, false, 50, renderPlace.get(), mode)) {
+                if (!mode.isPacket()) stage = waitOrYieldAfterChest();
                 return;
             }
         }

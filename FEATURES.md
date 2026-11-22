@@ -54,8 +54,8 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `afk-logout` — Logs out when you reach certain conditions. Useful for AFK travelling.
 
 ## PvP
-- `auto-trap+` — Traps a target player. Adds an optional anti-cheat friendly support placement mode.
-- `surround-plus` — Surround: compact settings, client-air repair with optional break-packet preplace, confirmed predictions, silent inventory swaps, extended feet, eye-level blocks, and a supported roof.
+- `auto-trap+` — Traps players and logout spots with pose-aware roofs, support blocks, and optional Anti Step.
+- `surround-plus` — Surround: client-air repair with optional break-packet preplace, confirmed predictions, silent inventory swaps, extended feet, and Self Trap with an optional roof.
 - `phase`: Pearl phasing with optional head-level self-web placement.
 - `anti-phase` — Places scaffolding inside players so their pearls land instead of phasing them.
 - `AutoConcrete` — Drops falling blocks above enemies' heads.

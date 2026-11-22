@@ -90,13 +90,12 @@ public class Phase extends Module {
                     Runnable placeWeb = () -> {
                         rotation.setRotationSilent(angles[0], angles[1]);
                         try {
-                            var result = mc.gameMode.useItemOn(mc.player, hand,
-                                new BlockHitResult(hitPos, side.getOpposite(), neighbor, false));
-                            if (!result.consumesAction() || !mc.level.getBlockState(head).is(Blocks.COBWEB)) {
+                            if (!PlacementUtils.sendPlacement(head, new BlockHitResult(hitPos, side.getOpposite(), neighbor, false),
+                                hand, pearl.placementMode())
+                                || !pearl.placementMode().isPacket() && !mc.level.getBlockState(head).is(Blocks.COBWEB)) {
                                 warning("Could not place the head cobweb.");
                                 return;
                             }
-                            mc.player.swing(hand);
                             placedWeb[0] = true;
                         } finally {
                             rotation.setRotationSilentSync();

@@ -70,6 +70,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.lwjgl.glfw.GLFW;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.settings.PacketPlacementSettings;
 import xyz.thm.addon.utils.*;
 import xyz.thm.addon.utils.server.ServerReconnectService;
 import xyz.thm.addon.utils.server.ServerStatusHandler;
@@ -103,6 +104,7 @@ public class ElytraRoute extends Module {
     private final SettingGroup sgRoute = settings.getDefaultGroup();
     private final SettingGroup sgPath = settings.createGroup("Pathing");
     private final SettingGroup sgRestock = settings.createGroup("Restock");
+    private final PacketPlacementSettings packetPlacement = new PacketPlacementSettings(sgRestock);
     private final SettingGroup sgFood = settings.createGroup("Food");
     private final SettingGroup sgHome = settings.createGroup("Home");
     private final SettingGroup sgReconnect = settings.createGroup("Reconnect");
@@ -617,7 +619,8 @@ public class ElytraRoute extends Module {
     private BlockPos placedShulkerPos;
     private RestockSourcePhase restockSourcePhase;
     private int restockSourceInventorySlot;
-    private int restockSourceHotbarSlot;
+    private int restockSourcePlacementSlot;
+    private int restockPlacementWaitTicks;
     private RestockKind selectedRestockSourceKind;
     private Predicate<ItemStack> selectedRestockSourcePredicate;
     private String selectedRestockSourceLabel;
@@ -1298,7 +1301,7 @@ public class ElytraRoute extends Module {
     private void clearSelectedRestockSource() {
         restockSourcePhase = RestockSourcePhase.SELECT_SOURCE;
         restockSourceInventorySlot = -1;
-        restockSourceHotbarSlot = -1;
+        restockSourcePlacementSlot = -1;
         selectedRestockSourceKind = RestockKind.NONE;
         selectedRestockSourcePredicate = null;
         selectedRestockSourceLabel = "unknown";
@@ -1953,14 +1956,14 @@ public class ElytraRoute extends Module {
 
         RestockKind selectedKind = primary;
         restockSourceInventorySlot = candidate.slot();
-        restockSourceHotbarSlot = SlotUtils.isHotbar(candidate.slot()) ? candidate.slot() : -1;
+        restockSourcePlacementSlot = SlotUtils.isHotbar(candidate.slot()) || candidate.slot() == SlotUtils.OFFHAND ? candidate.slot() : -1;
         selectedRestockSourceKind = selectedKind;
         selectedRestockSourcePredicate = stack -> isValidRestockSourceForKind(-1, stack, selectedKind);
         selectedRestockSourceLabel = selectedKind == RestockKind.ELYTRA ? "elytra shulker" : "food shulker";
         selectedRestockSourceFingerprint = null;
         sourceReadyRetries = 0;
 
-        restockSourcePhase = SlotUtils.isHotbar(restockSourceInventorySlot)
+        restockSourcePhase = restockSourcePlacementSlot != -1
             ? RestockSourcePhase.VERIFY_SOURCE
             : RestockSourcePhase.MOVE_SOURCE;
     }
@@ -1972,8 +1975,8 @@ public class ElytraRoute extends Module {
             return;
         }
 
-        if (SlotUtils.isHotbar(restockSourceInventorySlot)) {
-            restockSourceHotbarSlot = restockSourceInventorySlot;
+        if (SlotUtils.isHotbar(restockSourceInventorySlot) || restockSourceInventorySlot == SlotUtils.OFFHAND) {
+            restockSourcePlacementSlot = restockSourceInventorySlot;
             restockSourcePhase = RestockSourcePhase.VERIFY_SOURCE;
             return;
         }
@@ -1983,7 +1986,7 @@ public class ElytraRoute extends Module {
             int hotbarSourceSlot = findValidHotbarRestockSourceSlot(selectedRestockSourceKind);
             if (hotbarSourceSlot != -1) {
                 restockSourceInventorySlot = hotbarSourceSlot;
-                restockSourceHotbarSlot = hotbarSourceSlot;
+                restockSourcePlacementSlot = hotbarSourceSlot;
                 restockSourcePhase = RestockSourcePhase.VERIFY_SOURCE;
                 return;
             }
@@ -1999,7 +2002,7 @@ public class ElytraRoute extends Module {
             return;
         }
 
-        restockSourceHotbarSlot = hotbarSlot;
+        restockSourcePlacementSlot = hotbarSlot;
         restockSourcePhase = RestockSourcePhase.VERIFY_SOURCE;
         actionDelayTicks = Math.max(1, inventoryDelay.get());
     }
@@ -2040,13 +2043,14 @@ public class ElytraRoute extends Module {
             return;
         }
 
-        selectedRestockSourceFingerprint = fingerprintShulkerStack(mc.player.getInventory().getItem(restockSourceHotbarSlot));
+        selectedRestockSourceFingerprint = fingerprintShulkerStack(restockSourceStack(restockSourcePlacementSlot));
         sourceReadyRetries = 0;
         restockSourcePhase = RestockSourcePhase.PLACE;
         placeVerifiedRestockSource();
     }
 
     private void placeVerifiedRestockSource() {
+        if (PlacementUtils.remainingPlacementPackets(packetPlacement.mode()) == 0) return;
         if (!isSelectedRestockSourceReady()) {
             restockSourcePhase = RestockSourcePhase.VERIFY_SOURCE;
             verifySelectedRestockSource();
@@ -2054,15 +2058,15 @@ public class ElytraRoute extends Module {
         }
 
         if (selectedRestockSourceFingerprint == null) {
-            selectedRestockSourceFingerprint = fingerprintShulkerStack(mc.player.getInventory().getItem(restockSourceHotbarSlot));
+            selectedRestockSourceFingerprint = fingerprintShulkerStack(restockSourceStack(restockSourcePlacementSlot));
         }
 
         BlockPos placePos = restockPad.containerBase.above();
         expectedShulkerCountAfterPickup = countInventoryShulkerBoxes();
         clearInvalidSourceTracking();
-        invalidSourceOriginalHotbarSlot = restockSourceHotbarSlot;
+        invalidSourceOriginalHotbarSlot = restockSourcePlacementSlot;
 
-        boolean placed = BlockUtils.place(placePos, InteractionHand.MAIN_HAND, restockSourceHotbarSlot, false, 0, true, true, true);
+        boolean placed = PlacementUtils.place(placePos, restockSourcePlacementSlot, false, 0, true, true, true, packetPlacement.mode());
         if (!placed) {
             expectedShulkerCountAfterPickup = -1;
             handleRestockFailure(RestockFailureReason.PLACE_FAILED, "Failed to place the restock shulker.");
@@ -2070,6 +2074,7 @@ public class ElytraRoute extends Module {
         }
 
         placedShulkerPos = placePos.immutable();
+        restockPlacementWaitTicks = 0;
         actionDelayTicks = inventoryDelay.get();
         currentSourceFailureTicks = 0;
         restockOpenedSourceValidated = false;
@@ -2079,6 +2084,14 @@ public class ElytraRoute extends Module {
     private void tickRestockOpen() {
         if (placedShulkerPos == null) {
             handleRestockFailure(RestockFailureReason.OPEN_FAILED, "Placed shulker position was lost before opening.");
+            return;
+        }
+
+        if (currentSourceFailureTicks == 0
+            && !(mc.level.getBlockState(placedShulkerPos).getBlock() instanceof ShulkerBoxBlock)) {
+            if (++restockPlacementWaitTicks > 40) {
+                handleRestockFailure(RestockFailureReason.PLACE_FAILED, "The restock shulker did not appear.");
+            }
             return;
         }
 
@@ -3160,8 +3173,9 @@ public class ElytraRoute extends Module {
         ShulkerCandidate best = null;
         int bestScore = Integer.MIN_VALUE;
 
-        for (int i = 0; i < PLAYER_INVENTORY_SLOTS; i++) {
-            ItemStack stack = mc.player.getInventory().getItem(i);
+        for (int index = 0; index <= PLAYER_INVENTORY_SLOTS; index++) {
+            int i = index == PLAYER_INVENTORY_SLOTS ? SlotUtils.OFFHAND : index;
+            ItemStack stack = restockSourceStack(i);
             if (!isShulkerBox(stack)) continue;
             if (isRestockSourceBlockedForKind(i, stack, primary)) continue;
 
@@ -3187,9 +3201,14 @@ public class ElytraRoute extends Module {
     }
 
     private boolean isSelectedInventorySourceStillValid() {
-        if (restockSourceInventorySlot < 0 || restockSourceInventorySlot >= PLAYER_INVENTORY_SLOTS) return false;
-        ItemStack stack = mc.player.getInventory().getItem(restockSourceInventorySlot);
+        if (restockSourceInventorySlot != SlotUtils.OFFHAND
+            && (restockSourceInventorySlot < 0 || restockSourceInventorySlot >= PLAYER_INVENTORY_SLOTS)) return false;
+        ItemStack stack = restockSourceStack(restockSourceInventorySlot);
         return isValidRestockSourceForKind(restockSourceInventorySlot, stack, selectedRestockSourceKind);
+    }
+
+    private ItemStack restockSourceStack(int slot) {
+        return slot == SlotUtils.OFFHAND ? mc.player.getOffhandItem() : mc.player.getInventory().getItem(slot);
     }
 
     private boolean needsElytraSourceThisPass() {
@@ -3206,10 +3225,10 @@ public class ElytraRoute extends Module {
     }
 
     private boolean isSelectedRestockSourceReady() {
-        if (!SlotUtils.isHotbar(restockSourceHotbarSlot)) return false;
+        if (!SlotUtils.isHotbar(restockSourcePlacementSlot) && restockSourcePlacementSlot != SlotUtils.OFFHAND) return false;
         if (selectedRestockSourcePredicate == null) return false;
-        ItemStack stack = mc.player.getInventory().getItem(restockSourceHotbarSlot);
-        if (isRestockSourceBlockedForKind(restockSourceHotbarSlot, stack, selectedRestockSourceKind)) return false;
+        ItemStack stack = restockSourceStack(restockSourcePlacementSlot);
+        if (isRestockSourceBlockedForKind(restockSourcePlacementSlot, stack, selectedRestockSourceKind)) return false;
         return selectedRestockSourcePredicate.test(stack);
     }
 
@@ -3223,6 +3242,7 @@ public class ElytraRoute extends Module {
     }
 
     private boolean hasFlightReadyElytraShulkerInInventory() {
+        if (isValidRestockSourceForKind(SlotUtils.OFFHAND, mc.player.getOffhandItem(), RestockKind.ELYTRA)) return true;
         for (int i = 0; i < PLAYER_INVENTORY_SLOTS; i++) {
             ItemStack stack = mc.player.getInventory().getItem(i);
             if (isValidRestockSourceForKind(i, stack, RestockKind.ELYTRA)) return true;
@@ -3236,7 +3256,8 @@ public class ElytraRoute extends Module {
     }
 
     private int countInventoryShulkerBoxes() {
-        int count = 0;
+        ItemStack offhand = mc.player.getOffhandItem();
+        int count = isShulkerBox(offhand) ? offhand.getCount() : 0;
         for (int i = 0; i < PLAYER_INVENTORY_SLOTS; i++) {
             ItemStack stack = mc.player.getInventory().getItem(i);
             if (isShulkerBox(stack)) count += Math.max(1, stack.getCount());

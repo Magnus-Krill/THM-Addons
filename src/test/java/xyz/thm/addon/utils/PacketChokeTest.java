@@ -23,6 +23,20 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class PacketChokeTest {
     @Test
+    void releaseDrainsQueuedPacketsBeforeTheNextPlacement() {
+        PacketChoke<Integer> choke = new PacketChoke<>();
+        List<Integer> sent = new ArrayList<>();
+        assertTrue(choke.hold(1));
+        assertTrue(choke.hold(2));
+        choke.release(sent::add);
+
+        assertEquals(List.of(1, 2), sent);
+        assertFalse(choke.hold(3));
+        choke.tick(5, 1, 5, sent::add);
+        assertTrue(choke.hold(4));
+    }
+
+    @Test
     void flushesInOrderAtTheHoldLimitThenReleasesForConfiguredTicks() {
         PacketChoke<Integer> choke = new PacketChoke<>();
         List<Integer> sent = new ArrayList<>();
