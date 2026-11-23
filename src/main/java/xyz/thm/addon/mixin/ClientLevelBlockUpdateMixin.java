@@ -17,7 +17,6 @@ package xyz.thm.addon.mixin;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -39,7 +38,6 @@ public class ClientLevelBlockUpdateMixin {
 
     @Inject(method = "setServerVerifiedBlockState", at = @At("TAIL"))
     private void thm$afterServerBlockUpdate(BlockPos pos, BlockState state, int flags, CallbackInfo ci) {
-        if (!state.isAir() && !(state.getBlock() instanceof LiquidBlock)) return;
         Modules modules = Modules.get();
         if (modules == null) return;
         HighwayBuilderTHM builder = modules.get(HighwayBuilderTHM.class);

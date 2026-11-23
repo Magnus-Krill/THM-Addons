@@ -326,6 +326,15 @@ class HighwayBuilderTHMTest {
     }
 
     @Test
+    void enderChestPredictionExpiresWithoutFreshServerAir() {
+        long serverAir = 2_000_000_000L;
+        assertFalse(HighwayBuilderTHM.canPredictEChestRebreak(0, serverAir));
+        assertTrue(HighwayBuilderTHM.canPredictEChestRebreak(serverAir, serverAir + 999_999_999L));
+        assertFalse(HighwayBuilderTHM.canPredictEChestRebreak(serverAir, serverAir + 1_000_000_000L));
+        assertTrue(HighwayBuilderTHM.canPredictEChestRebreak(serverAir + 1_000_000_000L, serverAir + 1_000_000_001L));
+    }
+
+    @Test
     void packetDigKeepsRejectedTargetsPendingAndCountsEachServerRemovalOnce() {
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();

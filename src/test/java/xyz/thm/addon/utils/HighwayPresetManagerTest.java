@@ -101,7 +101,11 @@ class HighwayPresetManagerTest {
                 {"name":"packet-budget","value":0}
               ]},
               {"name":"Digging","settings":[]},
-              {"name":"Ender Chests","settings":[]}
+              {"name":"Ender Chests","settings":[
+                {"name":"predictive-echest-replace","value":1},
+                {"name":"save-ender-chests","value":12},
+                {"name":"predict-rebreak","value":0}
+              ]}
             ]}}
             """;
 
@@ -118,8 +122,12 @@ class HighwayPresetManagerTest {
             .get(0).getAsJsonObject().get("name").getAsString());
         assertEquals(0, groups.get(1).getAsJsonObject().getAsJsonArray("settings")
             .get(0).getAsJsonObject().get("value").getAsInt());
-        assertEquals("predictive-echest-replace", groups.get(2).getAsJsonObject().getAsJsonArray("settings")
-            .get(0).getAsJsonObject().get("name").getAsString());
+        var chests = groups.get(2).getAsJsonObject().getAsJsonArray("settings");
+        assertEquals(2, chests.size());
+        assertEquals("save-ender-chests", chests.get(0).getAsJsonObject().get("name").getAsString());
+        assertEquals(12, chests.get(0).getAsJsonObject().get("value").getAsInt());
+        assertEquals("predict-rebreak", chests.get(1).getAsJsonObject().get("name").getAsString());
+        assertEquals(0, chests.get(1).getAsJsonObject().get("value").getAsInt());
         var general = groups.get(3).getAsJsonObject();
         assertEquals("General", general.get("name").getAsString());
         var budget = general.getAsJsonArray("settings").get(0).getAsJsonObject();

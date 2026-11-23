@@ -118,7 +118,7 @@ public final class HighwayPresetManager {
             JsonObject root = parseRoot(json);
             JsonObject settingsJson = root.getAsJsonObject("settings");
             boolean migrated = moveLegacySetting(settingsJson, "mine-lookahead", "Digging");
-            migrated |= moveLegacySetting(settingsJson, "predictive-echest-replace", "Ender Chests");
+            migrated |= removeLegacyEChestReplacement(settingsJson);
             migrated |= moveLegacySetting(settingsJson, "packet-budget", "General");
             validateSettings(settingsJson, validateModuleSettings);
             Tag settings = JsonOps.INSTANCE.convertTo(NbtOps.INSTANCE, settingsJson);
@@ -130,6 +130,20 @@ public final class HighwayPresetManager {
         } catch (RuntimeException e) {
             throw new IOException("Invalid preset JSON.", e);
         }
+    }
+
+    private static boolean removeLegacyEChestReplacement(JsonObject settings) {
+        if (!(settings.get("groups") instanceof JsonArray groups)) return false;
+
+        boolean removed = false;
+        for (JsonElement entry : groups) {
+            if (!(entry instanceof JsonObject group) || !(group.get("name") instanceof JsonPrimitive name)
+                || !name.isString() || !(group.get("settings") instanceof JsonArray values)) continue;
+            if (!name.getAsString().equals("Ender Chests") && !name.getAsString().equals("Experimental")) continue;
+            removed |= values.asList().removeIf(value -> value instanceof JsonObject setting
+                && new JsonPrimitive("predictive-echest-replace").equals(setting.get("name")));
+        }
+        return removed;
     }
 
     private static boolean moveLegacySetting(JsonObject settings, String settingName, String targetName) {

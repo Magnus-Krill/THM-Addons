@@ -157,6 +157,11 @@ public class PlacementUtils {
 
     public static boolean place(BlockPos pos, int slot, boolean rotate, int priority,
                                 boolean swing, boolean checkEntities, boolean swapBack, Mode mode) {
+        return place(pos, slot, rotate, priority, swing, checkEntities, swapBack, mode, null);
+    }
+
+    public static boolean place(BlockPos pos, int slot, boolean rotate, int priority,
+                                boolean swing, boolean checkEntities, boolean swapBack, Mode mode, Runnable afterPlace) {
         InteractionHand hand = placementHand(slot);
         if (hand == null || mc.getConnection() == null || remainingPlacementPackets(mode) == 0) return false;
         if (mode.isPacket() && !PacketPlaceTracker.canSend(pos)) return false;
@@ -184,8 +189,13 @@ public class PlacementUtils {
                 if (swapBack) InvUtils.swapBack();
             }
         };
-        if (!rotate) return place.getAsBoolean();
-        Rotations.rotate(Rotations.getYaw(hit.getLocation()), Rotations.getPitch(hit.getLocation()), priority, place::getAsBoolean);
+        BooleanSupplier placeAndContinue = afterPlace == null ? place : () -> {
+            if (!place.getAsBoolean()) return false;
+            afterPlace.run();
+            return true;
+        };
+        if (!rotate) return placeAndContinue.getAsBoolean();
+        Rotations.rotate(Rotations.getYaw(hit.getLocation()), Rotations.getPitch(hit.getLocation()), priority, placeAndContinue::getAsBoolean);
         return true;
     }
 

@@ -51,7 +51,7 @@ After that first seed, each profile loads its own saved values rather than reapp
 
 The tabbed HighwayBuilder screen can also save the current settings as a named custom preset. Each preset is stored as `<Name>.json` under `meteor-client/thm/highway-builder-presets`, loaded when HighwayBuilder is registered during Minecraft startup, and applied from the **Custom preset** selector with its **Apply** button. Imported files are size- and depth-limited and may contain only known HighwayBuilder groups and settings.
 
-Restock and KitBot enclosures use Netherrack first, then any suitable full block, including protected Obsidian. Shulkers and falling blocks are excluded. With `offhand-build`, the builder uses the offhand and restores any item it swapped out. Enclosure blocks are placed one at a time and wait for a server update.
+Restock and KitBot enclosures use Netherrack first, then any suitable full block, including protected Obsidian. Shulkers and falling blocks are excluded. With `offhand-build`, the builder uses the offhand and restores any item it swapped out. The builder uses normal placement and waits for a server update before placing the next block.
 
 TPS safety enclosures also use Netherrack. After TPS recovers, the builder removes its enclosure blocks on all four sides before moving forward. Existing nearby blocks are left alone.
 
@@ -68,7 +68,9 @@ After KitBot confirms delivery, HighwayBuilder waits up to two minutes to collec
 Restock cleanup keeps the held tool when another tool has the same mining score. Offhand and packet-build loadouts let the restock state control the main hand while containers are being removed.
 
 Offhand restocks keep their supplies through recovery instead of refilling with obsidian. Chest,
-totem and tool swaps work with a full inventory, including `minimum-empty-slots` set to `0`. EChest mining tops up the offhand at sixteen chests or fewer and prefers direct stack swaps while keeping the configured reserve in inventory. It clears leftover cursor stacks and prepares replacement supplies before breaking the current chest. Matching reserve stacks are merged when only the reserve remains. If there is no room to separate an existing offhand stack, normal placement respects the reserve and predictive replacement waits.
+totem and tool swaps work with a full inventory, including `minimum-empty-slots` set to `0`. EChest mining tops up the offhand at sixteen chests or fewer and prefers direct stack swaps while keeping the configured reserve in inventory. It clears leftover cursor stacks and prepares replacement supplies before breaking the current chest. Matching reserve stacks are merged when only the reserve remains. The builder uses normal placement on the first tick the chest slot is available, independent of Paving's Packet Mode.
+
+With `predict-rebreak` enabled, Instant Rebreak on Place predicts the chest breaking locally after sending the rebreak. Once primed, the builder can place the next chest on the next client tick. It waits for the server again after one second without a server air update at the chest position.
 
 Single EChest restocks use the same standing height as the enclosure and clear solid blocks above the lid before opening.
 
@@ -221,9 +223,9 @@ migrate in module configs, Highway Profiles and custom presets.
 | `save-ender-chests` | `4`, range `4-64` | Loose ender chest reserve to keep in inventory. |
 | `break-mode` | `Instant rebreak on place`; shown when `mine-ender-chests` and `offhand-build` are on | How a placed chest is broken again: `Speedmine rebreak`, `Instant rebreak`, `Instant rebreak on place` or `Normal breaking`. |
 | `break-mode-no-offhand` | `Speedmine rebreak`; shown when `mine-ender-chests` is on and `offhand-build` is off | Same choice without the on-place mode, which needs the chest in the offhand. |
+| `predict-rebreak` | `true`; shown for `Instant rebreak on place` | Predicts ender chest breaks locally. |
 | `rebreak-delay` | `0`, slider max `20`; shown for `Instant rebreak` | Ticks between rebreak packets. |
 | `silent-rebreak-swap` | `true`; shown with `offhand-build` off and a rebreak mode selected | Restores your selected slot after a rebreak or chest placement. |
-| `predictive-echest-replace` | `false`; shown for offhand OnPlace rebreak | Places the next offhand EChest immediately after the rebreak packet. |
 | `use-break-speed-multiplier` | `true`; shown when `mine-ender-chests` is on | Temporarily boosts Timer while mining ender chests. |
 | `break-speed-multiplier` | `1.5`, range `1-3`; shown when the boost is on | How much Timer is boosted. |
 
@@ -373,9 +375,9 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `save-ender-chests` | `4`, range `4-64` | Always | Loose ender chests to reserve; falling one below this queues restock, and failure to replenish can hard-fail the module. |
 | `break-mode` | `Instant rebreak on place`; options below | `mine-ender-chests` and `offhand-build` are on | Picks one breaking method for the mining cycle. **Speedmine rebreak**: breaks with THM Speedmine, turning its `auto-rebreak` on for the cycle and putting your own setting back afterwards. **Instant rebreak**: after placing a chest, sends a sequenced `STOP_DESTROY_BLOCK` plus a swing (the same shape Meteor's InstantRebreak uses); the server breaks it at once when its stored mining progress for that spot is far enough along, otherwise it records the attempt and finishes the block itself a few ticks later. **Instant rebreak on place**: sends the same packet immediately after a successful normal placement, then retries it while the chest remains visible instead of falling back to a normal break on the next tick. With `offhand-build`, the pickaxe stays in the main hand. **Normal breaking**: plain mining, no packet tricks. |
 | `break-mode-no-offhand` | `Speedmine rebreak` | `mine-ender-chests` is on, `offhand-build` is off | Same modes as `break-mode` minus **Instant rebreak on place**, which needs the chest in the offhand. It's a separate setting because a select can't hide a single option. |
+| `predict-rebreak` | `true` | Mode is `Instant rebreak on place` | Predicts ender chest breaks locally. |
 | `rebreak-delay` | `0`, slider max `20` | Mode is `Instant rebreak` | Delay in ticks between rebreak packets. |
 | `silent-rebreak-swap` | `true` | `mine-ender-chests` is on, `offhand-build` is off and a rebreak mode is selected | Restores your previously selected slot after a rebreak packet or a chest placement. |
-| `predictive-echest-replace` | `false` | Offhand OnPlace mode | Places the next offhand EChest immediately after the rebreak packet. |
 | `use-break-speed-multiplier` | `true` | `mine-ender-chests` is on | Temporarily boosts Timer while mining ender chests, then restores the previous Timer state. |
 | `break-speed-multiplier` | `1.5`, range `1-3` | `mine-ender-chests` and `use-break-speed-multiplier` are on | Timer multiplier used during ender chest mining. |
 
