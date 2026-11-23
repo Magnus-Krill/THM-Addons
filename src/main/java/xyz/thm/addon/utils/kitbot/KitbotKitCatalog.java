@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.utils.kitbot;
 
@@ -44,7 +52,7 @@ public final class KitbotKitCatalog {
     private final BiFunction<String, String, TrustedHttp.Response> fetcher;
     private final Consumer<Runnable> executor;
     private final LongSupplier clock;
-    private String token = "";
+    private String token;
     private List<Kit> kits = List.of();
     private List<Kit> namedKits;
     private String[] names = new String[0];
@@ -105,18 +113,17 @@ public final class KitbotKitCatalog {
     }
 
     synchronized List<Kit> current() {
-        String configured = tokenSupplier.get();
-        if (!TrustedHttp.isValidApiToken(configured)) configured = "";
+        String configured = configuredToken();
         long now = clock.getAsLong();
-        if (!token.equals(configured)) {
+        if (!configured.equals(token)) {
             token = configured;
             kits = List.of();
             etag = null;
             hasCatalog = false;
             nextRefresh = 0;
-            if (!token.isEmpty()) load(now);
+            load(now);
         }
-        if (!token.isEmpty() && !fetching && now >= nextRefresh) {
+        if (!fetching && now >= nextRefresh) {
             fetching = true;
             String requestedToken = token;
             String requestedEtag = etag;
@@ -125,12 +132,17 @@ public final class KitbotKitCatalog {
         return kits;
     }
 
+    private String configuredToken() {
+        String configured = tokenSupplier.get();
+        return TrustedHttp.isValidApiToken(configured) ? configured : "";
+    }
+
     private void refresh(String requestedToken, String requestedEtag) {
         try {
-            if (!requestedToken.equals(tokenSupplier.get())) return;
+            if (!requestedToken.equals(configuredToken())) return;
             TrustedHttp.Response response = fetcher.apply(requestedToken, requestedEtag);
             synchronized (this) {
-                if (!requestedToken.equals(token) || !requestedToken.equals(tokenSupplier.get())) return;
+                if (!requestedToken.equals(token) || !requestedToken.equals(configuredToken())) return;
                 long now = clock.getAsLong();
                 nextRefresh = now + RETRY_MS;
                 if (response == null) return;
@@ -193,6 +205,7 @@ public final class KitbotKitCatalog {
     }
 
     private Path cacheFile() throws Exception {
+        if (token.isEmpty()) return directory.resolve("public.json");
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8));
         return directory.resolve(HexFormat.of().formatHex(digest) + ".json");
     }

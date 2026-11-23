@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.utils;
 
@@ -83,7 +91,7 @@ public final class ThmMembers {
         @EventHandler
         private void onGameJoined(GameJoinedEvent event) {
             long now = System.currentTimeMillis();
-            if (now - lastJoinRefresh < JOIN_REFRESH_COOLDOWN_MS || !APIUtils.canRequest()) return;
+            if (now - lastJoinRefresh < JOIN_REFRESH_COOLDOWN_MS || MeteorClient.mc.level == null) return;
             lastJoinRefresh = now;
             refreshNow();
         }
@@ -102,7 +110,7 @@ public final class ThmMembers {
         synchronized (ThmMembers.class) {
             if (fetchInProgress) return;
             if (!force && startupFetchStarted) return;
-            if (!APIUtils.canRequest()) return;
+            if (MeteorClient.mc.level == null) return;
 
             fetchInProgress = true;
             startupFetchStarted = true;
@@ -114,7 +122,7 @@ public final class ThmMembers {
     private static void runFetchLoop() {
         long delayMs = 2000;
         try {
-            for (int attempt = 1; attempt <= MAX_FETCH_ATTEMPTS && APIUtils.canRequest(); attempt++) {
+            for (int attempt = 1; attempt <= MAX_FETCH_ATTEMPTS && MeteorClient.mc.level != null; attempt++) {
                 List<Member> members = APIUtils.fetchMembersFromApi();
                 if (members != null) {
                     synchronized (ThmMembers.class) {

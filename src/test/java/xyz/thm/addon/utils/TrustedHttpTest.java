@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.utils;
 
@@ -61,7 +69,8 @@ class TrustedHttpTest {
             assertFalse(TrustedHttp.postJson(url, "{}", TrustedHttp.Kind.API, "invalid"));
             assertFalse(TrustedHttp.postBytes(url, new byte[]{1}, "application/octet-stream", TrustedHttp.Kind.API, 100));
             assertNull(TrustedHttp.exchangeDirect(null, "GET", null, TrustedHttp.Kind.API, null, null, 100, capturedToken, null, false));
-            assertNull(TrustedHttp.getConditional(url, capturedToken, "\"catalog\"", 100));
+            assertNull(TrustedHttp.postMemberRead(url, capturedToken, 100));
+            assertNull(TrustedHttp.getPublicConditional("http://1.1.1.1/test", "\"catalog\"", 100));
         } finally {
             ProxySelector.setDefault(previous);
         }

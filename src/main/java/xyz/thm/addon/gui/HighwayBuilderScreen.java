@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.gui;
 
@@ -44,7 +52,7 @@ public class HighwayBuilderScreen extends WindowScreen {
     private static final String BASICS = "Basics", ALL = "All";
     private static final String[] BASIC_SETTINGS = {
         "auto-align", "width", "height", "floor", "railings", "blocks-to-place",
-        "blocks-per-tick", "adaptive-mining", "placements-per-tick", "adaptive-placements", "packet-build",
+        "blocks-per-tick", "adaptive-mining", "placements-per-tick", "adaptive-placements", "packet", "packet-mode",
         "check-behind", "pause-on-lag", "use-thm-speed",
         "food-restock", "mine-ender-chests", "save-ender-chests"
     };

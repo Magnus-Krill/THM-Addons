@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.utils;
 
@@ -112,12 +120,11 @@ public final class HighwayPresetManager {
             boolean migrated = moveLegacySetting(settingsJson, "mine-lookahead", "Digging");
             migrated |= moveLegacySetting(settingsJson, "predictive-echest-replace", "Ender Chests");
             migrated |= moveLegacySetting(settingsJson, "packet-budget", "General");
-            migrated |= moveLegacySetting(settingsJson, "packet-build-pacing", "Paving");
             validateSettings(settingsJson, validateModuleSettings);
             Tag settings = JsonOps.INSTANCE.convertTo(NbtOps.INSTANCE, settingsJson);
             if (!(settings instanceof CompoundTag compound)) throw new IOException("Settings must be an object.");
-            CompoundTag alignment = HighwayBuilderTHM.migrateAlignmentSettings(compound);
-            return new DecodedPreset(alignment, migrated || alignment != compound);
+            CompoundTag renamed = HighwayBuilderTHM.migratePacingSettings(HighwayBuilderTHM.migrateRenamedSettings(compound));
+            return new DecodedPreset(renamed, migrated || renamed != compound);
         } catch (IOException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -281,10 +288,22 @@ public final class HighwayPresetManager {
                 JsonObject settingJson = settingElement.getAsJsonObject();
                 String settingName = requiredString(settingJson, "name", "setting");
                 if (group != null && group.get(settingName) == null
-                    && !(settingName.equals("align-first") && group.get("auto-align") != null)) throw new IOException("Unknown setting: " + settingName);
+                    && !(settingName.equals("align-first") && group.get("auto-align") != null)
+                    && !(settingName.equals("packet-borer") && group.get("packet-dig") != null)
+                    && !isLegacyPacketPlacementSetting(groupName, settingName)) {
+                    throw new IOException("Unknown setting: " + settingName);
+                }
                 if (!seenSettings.add(settingName)) throw new IOException("Duplicate setting: " + settingName);
             }
         }
+    }
+
+    private static boolean isLegacyPacketPlacementSetting(String group, String setting) {
+        return switch (setting) {
+            case "packet-build" -> group.equals("Paving");
+            case "packet-build-pacing", "packet-build-pacing-blocks" -> group.equals("Paving") || group.equals("Experimental");
+            default -> false;
+        };
     }
 
     private static void rejectUnknownKeys(JsonObject object, Set<String> allowed, String label) throws IOException {

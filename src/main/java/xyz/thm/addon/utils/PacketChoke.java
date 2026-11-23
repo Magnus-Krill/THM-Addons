@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.utils;
 
@@ -62,6 +70,21 @@ public final class PacketChoke<T> {
         } finally {
             flushing = false;
             flushingThread = null;
+        }
+    }
+
+    public void release(Consumer<T> send) {
+        synchronized (this) {
+            holding = false;
+            phaseTicks = 0;
+        }
+        try {
+            flush(send);
+        } catch (RuntimeException e) {
+            synchronized (this) {
+                holding = true;
+            }
+            throw e;
         }
     }
 

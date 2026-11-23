@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.modules;
 
@@ -183,7 +191,7 @@ public class AxisViewer extends Module {
         1875000,
         2500000,
         3750000,
-        30000000
+        29_999_980
     );
 
     static final IntList DIAMONDS = IntList.of(

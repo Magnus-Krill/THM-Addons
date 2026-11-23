@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.modules;
 
@@ -22,6 +30,7 @@ import meteordevelopment.meteorclient.systems.modules.player.Reach;
 import meteordevelopment.meteorclient.systems.modules.render.FreeLook;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
+import meteordevelopment.meteorclient.utils.player.SlotUtils;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
@@ -53,7 +62,10 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.settings.PacketPlacementSettings;
 import xyz.thm.addon.settings.DescribedOption;
+import xyz.thm.addon.utils.PlacementUtils;
+import xyz.thm.addon.utils.PacketPlaceTracker;
 import xyz.thm.addon.utils.RangeUtils;
 import xyz.thm.addon.utils.RenderUtilsTHM;
 
@@ -575,6 +587,7 @@ public class TunnelMinerModule extends Module {
     // ── Settings ──────────────────────────────────────────────────────────────
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+    private final PacketPlacementSettings packetPlacement = new PacketPlacementSettings(sgGeneral);
     private final SettingGroup sgStealth = settings.createGroup("Mining Options");
     private final SettingGroup sgRestock = settings.createGroup("Restock");
     private final SettingGroup sgTiming  = settings.createGroup("Timing");
@@ -3844,13 +3857,12 @@ public class TunnelMinerModule extends Module {
                 }
             }
 
-            int hb = toHotbar(slot);
+            int hb = preparePlacementSlot(slot);
             if (hb == -1) {
                 skippedNoHotbar++;
                 continue;
             }
 
-            InvUtils.swap(hb, true);
             if (tryAirPlaceAt(pos, hb, false)) {
                 actions++;
                 placed = true;
@@ -4074,12 +4086,11 @@ public class TunnelMinerModule extends Module {
             return false;
         }
 
-        int hb = toHotbar(slot);
+        int hb = preparePlacementSlot(slot);
         if (hb == -1) {
             watchdogCalc("support-floor", String.format(Locale.ROOT, "result=false,reason=no-hotbar,slot=%d,pos=%s", slot, formatPos(floorPos)));
             return false;
         }
-        InvUtils.swap(hb, true);
 
         if (tryAirPlaceAt(floorPos, hb, allowEntityIntersection)) {
             placeTimer = optPlaceDelay();
@@ -4094,24 +4105,24 @@ public class TunnelMinerModule extends Module {
     private boolean tryAirPlaceAt(BlockPos pos, int hotbarSlot, boolean allowEntityIntersection) {
         markRenderPlace(pos);
         // Primary attempt.
-        if (BlockUtils.place(pos, InteractionHand.MAIN_HAND, hotbarSlot, false, 0, true, !allowEntityIntersection, true)) {
+        if (PlacementUtils.place(pos, hotbarSlot, false, 0, true, !allowEntityIntersection, true, packetPlacement.mode())) {
             watchdogCalc("air-place", String.format(Locale.ROOT, "result=true,attempt=1,pos=%s,hotbar=%d,allowEntityIntersection=%s", formatPos(pos), hotbarSlot, allowEntityIntersection));
             return true;
         }
 
         // Fallback attempts to improve reliability when the first place packet is rejected.
-        if (BlockUtils.place(pos, InteractionHand.MAIN_HAND, hotbarSlot, false, 0, true, !allowEntityIntersection, true)) {
+        if (PlacementUtils.place(pos, hotbarSlot, false, 0, true, !allowEntityIntersection, true, packetPlacement.mode())) {
             watchdogCalc("air-place", String.format(Locale.ROOT, "result=true,attempt=2,pos=%s,hotbar=%d,allowEntityIntersection=%s", formatPos(pos), hotbarSlot, allowEntityIntersection));
             return true;
         }
-        boolean third = BlockUtils.place(pos, InteractionHand.MAIN_HAND, hotbarSlot, false, 0, true, false, true);
+        boolean third = PlacementUtils.place(pos, hotbarSlot, false, 0, true, false, true, packetPlacement.mode());
         watchdogCalc("air-place", String.format(Locale.ROOT, "result=%s,attempt=3,pos=%s,hotbar=%d,allowEntityIntersection=%s", third, formatPos(pos), hotbarSlot, allowEntityIntersection));
         return third;
     }
 
     private boolean tryDirectPlaceAt(BlockPos pos, int hotbarSlot, boolean allowEntityIntersection) {
         markRenderPlace(pos);
-        boolean result = BlockUtils.place(pos, InteractionHand.MAIN_HAND, hotbarSlot, false, 0, true, !allowEntityIntersection, true);
+        boolean result = PlacementUtils.place(pos, hotbarSlot, false, 0, true, !allowEntityIntersection, true, packetPlacement.mode());
         watchdogCalc(
             "direct-place",
             String.format(
@@ -4296,14 +4307,13 @@ public class TunnelMinerModule extends Module {
     }
 
     private boolean fillLavaAtColumn(int py, int x, int z, int slot) {
-        int hb = toHotbar(slot);
+        int hb = preparePlacementSlot(slot);
         if (hb == -1) {
             watchdogCalc("fill-lava-column", String.format(Locale.ROOT, "result=false,pos=(%d,%d),reason=no-hotbar,slot=%d", x, z, slot));
             return false;
         }
 
         for (BlockPos bp : collectLavaSealTargetsAtColumn(py, x, z)) {
-            InvUtils.swap(hb, true);
             if (tryAirPlaceAt(bp, hb, false)) {
                 blocksMined++;
                 watchdogCalc("fill-lava-column", String.format(Locale.ROOT, "result=true,column=(%d,%d),lava=%s,slot=%d,hb=%d", x, z, formatPos(bp), slot, hb));
@@ -4374,9 +4384,8 @@ public class TunnelMinerModule extends Module {
         if (mc.level.getBlockState(pos).isAir() || !mc.level.getBlockState(pos).getFluidState().isEmpty()) {
             int slot = findTraversalPlacementSlot(pos);
             if (slot != -1) {
-                int hb = toHotbar(slot);
+                int hb = preparePlacementSlot(slot);
                 if (hb != -1) {
-                    InvUtils.swap(hb, true);
                     if (tryAirPlaceAt(pos, hb, true)) {
                         watchdogCalc("place-floor", String.format(Locale.ROOT, "result=true,pos=%s,slot=%d,hb=%d", formatPos(pos), slot, hb));
                         return true;
@@ -4410,13 +4419,12 @@ public class TunnelMinerModule extends Module {
                     watchdogCalc("place-ahead", String.format(Locale.ROOT, "result=false,reason=no-slot,pos=%s,d=%d", formatPos(placePos), d));
                     return false;
                 }
-                int hb = toHotbar(slot);
+                int hb = preparePlacementSlot(slot);
                 if (hb == -1) {
                     watchdogCalc("place-ahead", String.format(Locale.ROOT, "result=false,reason=no-hotbar,pos=%s,slot=%d", formatPos(placePos), slot));
                     return false;
                 }
 
-                InvUtils.swap(hb, true);
                 if (tryAirPlaceAt(placePos, hb, false)) {
                     watchdogCalc("place-ahead", String.format(Locale.ROOT, "result=true,pos=%s,d=%d,slot=%d,hb=%d", formatPos(placePos), d, slot, hb));
                     return true;
@@ -4558,13 +4566,12 @@ public class TunnelMinerModule extends Module {
                 }
             }
 
-            int hb = toHotbar(slot);
+            int hb = preparePlacementSlot(slot);
             if (hb == -1) {
                 skippedNoHotbar++;
                 continue; // Hotbar full, try next block
             }
 
-            InvUtils.swap(hb, true);
             if (tryAirPlaceAt(pos, hb, false)) {
                 BlockState after = mc.level.getBlockState(pos);
                 if (isRestoreSatisfied(original, after, strictExactRestore)) {
@@ -4733,13 +4740,12 @@ public class TunnelMinerModule extends Module {
                 }
             }
 
-            int hb = toHotbar(slot);
+            int hb = preparePlacementSlot(slot);
             if (hb == -1) {
                 skippedNoHotbar++;
                 continue;
             }
 
-            InvUtils.swap(hb, true);
             if (tryAirPlaceAt(pos, hb, false)) {
                 actions++;
                 placed = true;
@@ -4878,7 +4884,7 @@ public class TunnelMinerModule extends Module {
     }
 
     private void restockPlace() {
-        if (!centerForRestockPlacement()) return;
+        if (!centerForRestockPlacement() || PlacementUtils.remainingPlacementPackets(packetPlacement.mode()) == 0) return;
 
         int px = Mth.floor(mc.player.getX());
         int py = tunnelY;
@@ -4890,6 +4896,7 @@ public class TunnelMinerModule extends Module {
         BlockPos floor = containerPos.below();
         BlockState floorState = mc.level.getBlockState(floor);
         if (floorState.isAir()) {
+            if (packetPlacement.enabled() && !PacketPlaceTracker.canSend(floor)) return;
             if (shouldMaintainBehindParity()) stealthCache.putIfAbsent(floor.immutable(), floorState);
             int supportSlot = findTraversalPlacementSlot(floor);
             if (supportSlot == -1) {
@@ -4897,20 +4904,21 @@ public class TunnelMinerModule extends Module {
                 hardFailRestock("no-support-block-for-container");
                 return;
             }
-            int supportHb = toHotbar(supportSlot);
+            int supportHb = preparePlacementSlot(supportSlot);
             if (supportHb == -1) {
                 if (optDebugMessages()) warning("No hotbar slot for restock support block.");
                 hardFailRestock("no-hotbar-slot-for-support");
                 return;
             }
-            InvUtils.swap(supportHb, true);
             if (!tryDirectPlaceAt(floor, supportHb, false)) {
                 if (optDebugMessages()) warning("Failed to place floor support for restock container.");
                 hardFailRestock("failed-place-support");
                 return;
             }
+            if (packetPlacement.enabled()) return;
         }
 
+        if (PlacementUtils.remainingPlacementPackets(packetPlacement.mode()) == 0) return;
         int slot = restockEC ? findInInv(TunnelMinerModule::isEnderChest)
             : findPreferredRestockShulkerSlot();
         if (slot == -1) {
@@ -4918,13 +4926,12 @@ public class TunnelMinerModule extends Module {
             hardFailRestock("lost-container-item");
             return;
         }
-        int hb = toHotbar(slot);
+        int hb = preparePlacementSlot(slot);
         if (hb == -1) {
             if (optDebugMessages()) warning("Hotbar full!");
             hardFailRestock("no-hotbar-slot-for-container");
             return;
         }
-        InvUtils.swap(hb, true);
 
         if (optDebugMessages()) info("Placing restock container at " + containerPos.toShortString());
         if (!tryDirectPlaceAt(containerPos, hb, false)) {
@@ -4935,7 +4942,7 @@ public class TunnelMinerModule extends Module {
         boolean placedNow = restockEC
             ? mc.level.getBlockState(containerPos).getBlock() == Blocks.ENDER_CHEST
             : mc.level.getBlockState(containerPos).getBlock() instanceof ShulkerBoxBlock;
-        if (!placedNow) {
+        if (!placedNow && !packetPlacement.enabled()) {
             restockPlaceRetries++;
             watchdogCalc(
                 "restock-place-verify",
@@ -7375,6 +7382,10 @@ public class TunnelMinerModule extends Module {
             pickSlot = equipBestPickaxe();
             watchdogCalc("ensure-pickaxe", String.format(Locale.ROOT, "action=equip-best,newPickSlot=%d", pickSlot));
         }
+    }
+
+    private int preparePlacementSlot(int slot) {
+        return slot == SlotUtils.OFFHAND ? slot : toHotbar(slot);
     }
 
     // Returns hotbar slot for the given inventory slot, moving to hotbar if needed.

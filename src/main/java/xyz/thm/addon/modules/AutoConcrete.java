@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.modules;
 
@@ -15,7 +23,6 @@ import meteordevelopment.meteorclient.utils.entity.SortPriority;
 import meteordevelopment.meteorclient.utils.entity.TargetUtils;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
-import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.gui.screens.inventory.AnvilScreen;
 import net.minecraft.core.BlockPos;
@@ -27,6 +34,8 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.settings.PacketPlacementSettings;
+import xyz.thm.addon.utils.PlacementUtils;
 
 public class AutoConcrete extends Module {
     public AutoConcrete() {
@@ -35,6 +44,7 @@ public class AutoConcrete extends Module {
     }
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+    private final PacketPlacementSettings packetPlacement = new PacketPlacementSettings(sgGeneral);
 
     // -------------------- General Settings -------------------- //
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
@@ -199,8 +209,7 @@ public class AutoConcrete extends Module {
             for (int i = 0; i < currentPillarHeight; i++) {
                 BlockPos pos = basePos.above(i);
                 if (!mc.level.getBlockState(pos).is(Blocks.OBSIDIAN)) {
-                    BlockUtils.place(pos, obsidian, rotate.get(), 0);
-                    cooldown = pillarDelay.get();
+                    if (PlacementUtils.place(pos, obsidian, rotate.get(), 0, packetPlacement.mode())) cooldown = pillarDelay.get();
                     allPlaced = false;
                     break;
                 }
@@ -213,12 +222,15 @@ public class AutoConcrete extends Module {
             }
         }
 
+        if (PlacementUtils.remainingPlacementPackets(packetPlacement.mode()) < concreteCount.get()) return;
+        boolean placed = false;
         for (BlockPos pos : concretePositions) {
             if (pos != null && mc.level.getBlockState(pos).canBeReplaced()) {
-                BlockUtils.place(pos, fallingBlock, rotate.get(), 0);
+                placed |= PlacementUtils.place(pos, fallingBlock, rotate.get(), 0, packetPlacement.mode());
             }
         }
 
+        if (!placed) return;
         cooldown = concreteDelay.get();
 
         if (disableOnUse.get()) toggle();

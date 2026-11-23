@@ -5,11 +5,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-REPO="https://github.com/Leonn170709/THM-Addons"
+REPO="https://github.com/Magnus-Krill/THM-Addons"
 MARK="This file is part of THM Addons"
 L1="$MARK — $REPO"
 L2="Copyright (c) THM Addons contributors. Credit the devs, keep the link."
 L3="By using this code you agree to the license terms and to keep your repo public."
+L4="You also agree to properly credit the original devs in your Readme.md"
 
 add() {
   local f="$1" open mid close pre=""
@@ -28,7 +29,7 @@ add() {
   else
     cp "$f" "$f.body"
   fi
-  { printf '%s' "$pre"; printf '%s\n%s%s\n%s%s\n%s%s\n%s\n\n' "$open" "$mid" "$L1" "$mid" "$L2" "$mid" "$L3" "$close"; cat "$f.body"; } > "$f.tmp"
+  { printf '%s' "$pre"; printf '%s\n%s%s\n%s%s\n%s%s\n%s\n\n' "$open" "$mid" "$L1" "$mid" "$L2" "$mid" "$L3" "$L3" "$close"; cat "$f.body"; } > "$f.tmp"
   mv "$f.tmp" "$f"; rm -f "$f.body"
   echo "credited: $f"
 }

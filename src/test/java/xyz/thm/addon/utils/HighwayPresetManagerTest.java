@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.utils;
 
@@ -32,6 +40,18 @@ class HighwayPresetManagerTest {
         CompoundTag setting = (CompoundTag) group.getListOrEmpty("settings").getFirst();
         assertEquals("auto-align", setting.getStringOr("name", ""));
         assertFalse(setting.getBooleanOr("value", true));
+        assertEquals(decoded, HighwayPresetManager.decode(HighwayPresetManager.encode(decoded)));
+    }
+
+    @Test
+    void namedPresetsCarryPacketBorerIntoPacketDig() throws IOException {
+        CompoundTag decoded = HighwayPresetManager.decode("""
+            {"version":1,"settings":{"groups":[{"name":"Digging","settings":[{"name":"packet-borer","value":true}]}]}}
+            """);
+        CompoundTag group = (CompoundTag) decoded.getListOrEmpty("groups").getFirst();
+        CompoundTag setting = (CompoundTag) group.getListOrEmpty("settings").getFirst();
+        assertEquals("packet-dig", setting.getStringOr("name", ""));
+        assertTrue(setting.getBooleanOr("value", false));
         assertEquals(decoded, HighwayPresetManager.decode(HighwayPresetManager.encode(decoded)));
     }
 

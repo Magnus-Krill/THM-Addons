@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.modules;
 
@@ -82,13 +90,12 @@ public class Phase extends Module {
                     Runnable placeWeb = () -> {
                         rotation.setRotationSilent(angles[0], angles[1]);
                         try {
-                            var result = mc.gameMode.useItemOn(mc.player, hand,
-                                new BlockHitResult(hitPos, side.getOpposite(), neighbor, false));
-                            if (!result.consumesAction() || !mc.level.getBlockState(head).is(Blocks.COBWEB)) {
+                            if (!PlacementUtils.sendPlacement(head, new BlockHitResult(hitPos, side.getOpposite(), neighbor, false),
+                                hand, pearl.placementMode())
+                                || !pearl.placementMode().isPacket() && !mc.level.getBlockState(head).is(Blocks.COBWEB)) {
                                 warning("Could not place the head cobweb.");
                                 return;
                             }
-                            mc.player.swing(hand);
                             placedWeb[0] = true;
                         } finally {
                             rotation.setRotationSilentSync();

@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.modules;
 
@@ -11,18 +19,20 @@ import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.player.FindItemResult;
+import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
-import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.settings.PacketPlacementSettings;
+import xyz.thm.addon.utils.PlacementUtils;
 import xyz.thm.addon.utils.RenderUtilsTHM;
 
 import java.util.ArrayList;
@@ -45,6 +55,7 @@ public class AutoPortal extends Module {
         .sliderRange(1, 5)
         .build()
     );
+    private final PacketPlacementSettings packet = new PacketPlacementSettings(sgGeneral);
     private final Setting<Boolean> render = sgGeneral.add(new BoolSetting.Builder()
         .name("render")
         .description("Renders the portal frame as it's being placed.")
@@ -75,7 +86,7 @@ public class AutoPortal extends Module {
     }
     @Override
     public void onActivate() {
-        int obsidianCount = 0;
+        int obsidianCount = mc.player.getOffhandItem().is(Items.OBSIDIAN) ? mc.player.getOffhandItem().getCount() : 0;
         for (int i = 0; i < 36; i++) {
             if (mc.player.getInventory().getItem(i).getItem() == Items.OBSIDIAN) {
                 obsidianCount += mc.player.getInventory().getItem(i).getCount();
@@ -135,26 +146,19 @@ public class AutoPortal extends Module {
         }
         portalBlocks.add(base.relative(right, 1).above(4));
         portalBlocks.add(base.relative(right, 2).above(4));
-        for (int i = 0; i < 9; i++) {
-            if (mc.player.getInventory().getItem(i).getItem() == Items.OBSIDIAN) {
-                mc.player.getInventory().setSelectedSlot(i);
-                break;
-            }
-        }
     }
     @Override
     public void onDeactivate() {
         portalBlocks.clear();
+        waitingForBreak.clear();
         index = 0;
         delay = 0;
     }
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.level == null) return;
-        if (!(mc.player.getMainHandItem().getItem() instanceof BlockItem blockItem)) return;
-        if (blockItem.getBlock().asItem() != Items.OBSIDIAN) return;
         if (index >= portalBlocks.size()) {
-            toggle();
+            finishPortal();
             return;
         }
         delay++;
@@ -162,41 +166,47 @@ public class AutoPortal extends Module {
         for (int i = 0; i < blocksPerTick.get() && index < portalBlocks.size(); i++, index++) {
             BlockPos pos = portalBlocks.get(index);
             if (!mc.level.getBlockState(pos).canBeReplaced()) {
-                if (!waitingForBreak.contains(pos) && mc.level.getBlockState(pos).getBlock().asItem() != Items.OBSIDIAN) {
+                if (mc.level.getBlockState(pos).is(Blocks.OBSIDIAN)) continue;
+                if (!waitingForBreak.contains(pos)) {
                     if (mc.gameMode != null) {
                         mc.gameMode.startDestroyBlock(pos, Direction.UP);
                         mc.player.swing(InteractionHand.MAIN_HAND);
                         waitingForBreak.add(pos);
                     }
                 }
-                index--;
                 return;
             }
+            if (PlacementUtils.remainingPlacementPackets(packet.mode()) == 0) return;
             waitingForBreak.remove(pos);
-            BlockHitResult bhr = new BlockHitResult(Vec3.atCenterOf(pos), Direction.UP, pos, false);
-            mc.player.connection.send(new ServerboundPlayerActionPacket(
-                ServerboundPlayerActionPacket.Action.SWAP_ITEM_WITH_OFFHAND, BlockPos.ZERO, Direction.DOWN));
-            mc.player.connection.send(new ServerboundUseItemOnPacket(
-                InteractionHand.OFF_HAND, bhr, mc.player.containerMenu.getStateId() + 2));
-            mc.player.connection.send(new ServerboundPlayerActionPacket(
-                ServerboundPlayerActionPacket.Action.SWAP_ITEM_WITH_OFFHAND, BlockPos.ZERO, Direction.DOWN));
-            mc.player.swing(InteractionHand.MAIN_HAND);
+            FindItemResult obsidian = InvUtils.findInHotbar(Items.OBSIDIAN);
+            if (!obsidian.found() || !placeFrame(pos, obsidian)) return;
         }
         delay = 0;
-        if (index >= portalBlocks.size()) {
-            for (int i = 0; i < 9; i++) {
-                if (mc.player.getInventory().getItem(i).getItem() == Items.FLINT_AND_STEEL) {
-                    mc.player.getInventory().setSelectedSlot(i);
-                    BlockPos firePos = portalBlocks.get(0).above();
-                    BlockHitResult fireHit = new BlockHitResult(Vec3.atCenterOf(firePos), Direction.UP, firePos, false);
-                    mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND, fireHit);
-                    mc.player.swing(InteractionHand.MAIN_HAND);
-                    break;
-                }
+        if (index >= portalBlocks.size()) finishPortal();
+    }
+
+    private boolean placeFrame(BlockPos pos, FindItemResult obsidian) {
+        var mode = packet.mode();
+        if (!mode.isPacket()) return PlacementUtils.place(pos, obsidian, false, 0, mode);
+        InteractionHand hand = obsidian.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        if (hand == InteractionHand.MAIN_HAND && !InvUtils.swap(obsidian.slot(), false)) return false;
+        return PlacementUtils.sendPlacement(pos, PlacementUtils.packetPlacementHit(pos, null), hand, mode);
+    }
+
+    private void finishPortal() {
+        if (!portalBlocks.isEmpty()) {
+            FindItemResult lighter = InvUtils.findInHotbar(Items.FLINT_AND_STEEL);
+            if (lighter.found()) {
+                if (PlacementUtils.remainingPlacementPackets(packet.mode()) == 0) return;
+                InteractionHand hand = lighter.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+                if (hand == InteractionHand.MAIN_HAND && !InvUtils.swap(lighter.slot(), false)) return;
+                BlockPos base = portalBlocks.getFirst();
+                BlockHitResult hit = PlacementUtils.packetPlacementHit(base.above(), Direction.DOWN);
+                if (!PlacementUtils.sendPlacement(base.above(), hit, hand, packet.mode())) return;
             }
             info("Portal complete. AutoPortal disabled.");
-            toggle();
         }
+        toggle();
     }
     @EventHandler
     private void onRender(Render3DEvent event) {

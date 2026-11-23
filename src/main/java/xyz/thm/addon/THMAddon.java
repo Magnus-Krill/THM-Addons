@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon;
 
@@ -30,6 +38,7 @@ import net.minecraft.world.item.Items;
 import org.slf4j.Logger;
 import xyz.thm.addon.commands.*;
 import xyz.thm.addon.gui.themes.*;
+import xyz.thm.addon.gui.themes.bephax.BepGuiTheme;
 import xyz.thm.addon.hud.*;
 import xyz.thm.addon.modules.*;
 import xyz.thm.addon.system.THMTab;
@@ -163,9 +172,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         HighwayPresetManager.initialize(highwayBuilder);
         Modules.get().add(new AxisViewer());
         Modules.get().add(new DiscordNotifs());
-        Modules.get().add(new AntiDrop());
         Modules.get().add(new THMScaffold());
-        Modules.get().add(new CatchUpPacing());
         Modules.get().add(new ShulkerOverview());
         Modules.get().add(new Nuker());
         Modules.get().add(new PaketLimiter());
@@ -223,6 +230,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         Hud.get().register(OnlineFriendsList.INFO);
         Hud.get().register(DubCounter.INFO);
         Hud.get().register(HighwayHud.INFO);
+        Hud.get().register(HighwayLengthHud.INFO);
         Hud.get().register(WelcomerHud.INFO);
         Hud.get().register(CrystalMetrics.INFO);
         Hud.get().register(MemberHud.INFO);
@@ -247,6 +255,9 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         GuiThemes.add(MonochromeTheme.INSTANCE);
         GuiThemes.add(Nether.INSTANCE);
         GuiThemes.add(ThmTheme.INSTANCE);
+        if (!loader.isModLoaded("bephax")) GuiThemes.add(new BepGuiTheme());
+        GuiThemes.add(new VioletGlassTheme());
+        GuiThemes.add(new LiquidGlassTheme());
 
         //System/Tab
         Tabs.add(new THMTab());
@@ -269,7 +280,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
 
     @Override
     public String getWebsite() {
-        return "https://github.com/Leonn170709/THM-Addons";
+        return "https://github.com/Magnus-Krill/THM-Addons";
     }
 
     @Override
@@ -280,7 +291,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
             .get().getMetadata()
             .getCustomValue("github:branch")
             .getAsString().trim();
-        return branch.isEmpty() ? null : new GithubRepo("Leonn170709", "THM-Addons", branch, null);
+        return branch.isEmpty() ? null : new GithubRepo("Magnus-Krill", "THM-Addons", branch, null);
     }
 
     @Override

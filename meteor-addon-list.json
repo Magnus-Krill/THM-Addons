@@ -1,5 +1,5 @@
 {
-  "description": "Highway automation for anarchy servers: a THM-standard highway builder with drift recovery and live stats, plus travel, tunnel and stash tooling, PvP modules (crystal aura, surround, anti-concrete, phase), inventory and packet utilities, 15 HUD widgets and 8 GUI themes. Requires Baritone.",
+  "description": "Highway focused addon with pvp modules and more for anarchy servers. Intended to be used on 6b6t.",
   "tags": [
     "Automation",
     "Building",
@@ -14,6 +14,6 @@
   "supported_versions": [
     "26.2"
   ],
-  "icon": "https://raw.githubusercontent.com/Leonn170709/THM-Addons/1.21.11/src/main/resources/assets/icon/icon.png",
+  "icon": "https://raw.githubusercontent.com/Magnus-Krill/THM-Addons/26.2/src/main/resources/assets/icon/icon.png",
   "discord": "https://discord.gg/thm"
 }

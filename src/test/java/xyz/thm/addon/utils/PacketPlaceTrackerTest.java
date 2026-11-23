@@ -1,12 +1,21 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.utils;
 
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
+import meteordevelopment.meteorclient.utils.player.SlotUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.Connection;
@@ -16,6 +25,8 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.List;
 
@@ -23,11 +34,22 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class PacketPlaceTrackerTest {
     @Test
-    void placementCountsOnlyTheMatchingSentEvent() {
+    void placementUsesTheInventoryOffhandSlotAndRejectsContainerSlotNumbers() {
+        int offhand = SlotUtils.OFFHAND;
+        assertEquals(InteractionHand.OFF_HAND, PlacementUtils.placementHand(offhand));
+        assertEquals(InteractionHand.MAIN_HAND, PlacementUtils.placementHand(0));
+        assertEquals(InteractionHand.MAIN_HAND, PlacementUtils.placementHand(8));
+        assertNull(PlacementUtils.placementHand(9));
+        assertNull(PlacementUtils.placementHand(45));
+    }
+
+    @ParameterizedTest
+    @EnumSource(InteractionHand.class)
+    void placementCountsOnlyTheMatchingSentEvent(InteractionHand hand) {
         var tracker = new PacketPlaceTracker();
         var connection = new Connection(PacketFlow.CLIENTBOUND);
         var otherConnection = new Connection(PacketFlow.CLIENTBOUND);
-        var hand = InteractionHand.MAIN_HAND;
+        var otherHand = hand == InteractionHand.MAIN_HAND ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
         var hit = new BlockHitResult(Vec3.ZERO, Direction.UP, BlockPos.ZERO, false);
         var otherHit = new BlockHitResult(Vec3.ZERO, Direction.UP, BlockPos.ZERO, false);
         var use = new ServerboundUseItemOnPacket(hand, hit, 1);
@@ -35,7 +57,7 @@ class PacketPlaceTrackerTest {
         assertFalse(tracker.trackUseOn(connection, hand, hit, () -> {
             tracker.onSent(new PacketEvent.Sent(use, otherConnection));
             tracker.onSent(new PacketEvent.Sent(new ServerboundUseItemOnPacket(hand, otherHit, 2), connection));
-            tracker.onSent(new PacketEvent.Sent(new ServerboundUseItemOnPacket(InteractionHand.OFF_HAND, hit, 3), connection));
+            tracker.onSent(new PacketEvent.Sent(new ServerboundUseItemOnPacket(otherHand, hit, 3), connection));
         }));
         assertTrue(tracker.trackUseOn(connection, hand, hit, () -> tracker.onSent(new PacketEvent.Sent(use, connection))));
         assertFalse(tracker.trackUseOn(connection, hand, hit, () -> {}));

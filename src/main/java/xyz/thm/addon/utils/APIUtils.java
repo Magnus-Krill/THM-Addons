@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.utils;
 
@@ -23,13 +31,18 @@ import java.util.*;
 
 import static meteordevelopment.meteorclient.MeteorClient.mc;
 
-/**
- * Talks to the THM API. Endpoint URLs live encrypted in {@link GeneratedApiEndpoints} (build-time
- * generated, git-ignored); this file stays plain and is never touched by the build. Every request
- * goes through {@link TrustedHttp}, which rejects SSRF targets, cross-host redirects, and
- * oversized responses. Response bodies are treated as untrusted data.
- */
 public class APIUtils {
+    private static final String API_ORIGIN = "https://api.highwaymen.cc";
+    private static final String MEMBERS_URL = API_ORIGIN + "/users";
+    private static final String HIGHWAY_REPORT_URL = API_ORIGIN + "/";
+    private static final String HIGHWAY_STATUS_URL = API_ORIGIN + "/status";
+    private static final String HIGHWAY_LENGTHS_URL = API_ORIGIN + "/highway-lengths";
+    private static final String CAPE_LIST_URL = API_ORIGIN + "/cape/";
+    private static final String CAPE_INDEX_URL = "https://highwaymen.cc/cape/index";
+    private static final String KITS_URL = API_ORIGIN + "/kits";
+    static final String UPDATE_FEED_URL = API_ORIGIN + "/updates/feed.json";
+    static final String UPDATE_PUBLIC_KEY = "MCowBQYDK2VwAyEABOC016sw9YhavsewbR+jG1sQglaxVKGv9ikvq1kSYYA=";
+
     private static final Gson GSON = new Gson();
     private static final int MAX_MEMBERS = 4_000;
     private static final int MAX_USERNAMES_PER_MEMBER = 32;
@@ -112,11 +125,54 @@ public class APIUtils {
     }
 
     private static String apiGet(String url) {
-        return canRequest() ? TrustedHttp.getString(url, TrustedHttp.Kind.API, TrustedHttp.MAX_JSON_BYTES) : null;
+        return TrustedHttp.getString(url, TrustedHttp.Kind.PUBLIC_API, TrustedHttp.MAX_JSON_BYTES);
     }
 
     public static TrustedHttp.Response fetchKitCatalog(String token, String etag) {
-        return TrustedHttp.getConditional(GeneratedApiEndpoints.kitsUrl(), token, etag, TrustedHttp.MAX_JSON_BYTES);
+        if (!token.isEmpty()) {
+            var member = TrustedHttp.postMemberRead(KITS_URL + "/member", token, TrustedHttp.MAX_JSON_BYTES);
+            if (member != null && member.status() == 200) return member;
+            if (member != null && member.status() != 401 && member.status() != 403 && member.status() != 404) return member;
+        }
+        return TrustedHttp.getPublicConditional(KITS_URL, etag, TrustedHttp.MAX_JSON_BYTES);
+    }
+
+    public record HighwayLength(int paved, int total) {}
+
+    public static Map<String, Map<String, HighwayLength>> fetchHighwayLengths() {
+        String response = apiGet(HIGHWAY_LENGTHS_URL);
+        if (response == null) return null;
+        try {
+            return parseHighwayLengths(GSON.fromJson(response, JsonObject.class));
+        } catch (RuntimeException e) {
+            THMAddon.LOG.warn("Invalid highway lengths response");
+            return null;
+        }
+    }
+
+    static Map<String, Map<String, HighwayLength>> parseHighwayLengths(JsonObject root) {
+        Map<String, Map<String, HighwayLength>> dimensions = new HashMap<>();
+        for (String dimension : List.of("nether", "overworld", "end")) {
+            Map<String, HighwayLength> roads = new HashMap<>();
+            for (var road : root.getAsJsonObject(dimension).entrySet()) {
+                if (!road.getValue().isJsonObject()) continue;
+                JsonObject length = road.getValue().getAsJsonObject();
+                int paved = highwayBlocks(length.get("paved"));
+                int total = highwayBlocks(length.get("total"));
+                if (paved >= 0 && total > 0 && paved <= total) roads.put(road.getKey(), new HighwayLength(paved, total));
+            }
+            dimensions.put(dimension, Map.copyOf(roads));
+        }
+        return Map.copyOf(dimensions);
+    }
+
+    private static int highwayBlocks(JsonElement value) {
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) return -1;
+        try {
+            return value.getAsBigDecimal().intValueExact();
+        } catch (ArithmeticException | NumberFormatException e) {
+            return -1;
+        }
     }
 
     private static void apiPost(String name, String url, String json) {
@@ -130,11 +186,11 @@ public class APIUtils {
     }
 
     public static void sendStatus(String message) {
-        apiPost("status", GeneratedApiEndpoints.statusUrl(), jsonMessage("report", message + ":v" + THMAddon.VERSION));
+        apiPost("status", HIGHWAY_REPORT_URL, jsonMessage("report", message + ":v" + THMAddon.VERSION));
     }
 
     public static void sendStatistics(String message) {
-        apiPost("statistics", GeneratedApiEndpoints.highwayUrl(), jsonMessage("report", message + ":v" + THMAddon.VERSION));
+        apiPost("statistics", HIGHWAY_REPORT_URL, jsonMessage("report", message + ":v" + THMAddon.VERSION));
     }
 
     // Discord webhook URL, supplied by the player at runtime - never attach our API token to it.
@@ -149,7 +205,7 @@ public class APIUtils {
 
     public static List<ThmMembers.Member> fetchMembersFromApi() {
         try {
-            String response = apiGet(GeneratedApiEndpoints.memberHudUrl());
+            String response = apiGet(MEMBERS_URL);
             if (response == null) return null;
 
             JsonArray jsonArray = GSON.fromJson(response, JsonArray.class);
@@ -209,7 +265,7 @@ public class APIUtils {
 
     public static Map<String, String> fetchHighwayStatusFromApi() {
         try {
-            String url = GeneratedApiEndpoints.highwayStatusUrl();
+            String url = HIGHWAY_STATUS_URL;
             String body = apiGet(url + (url.contains("?") ? "&" : "?") + "routes=1");
             if (body == null) return null;
 
@@ -262,7 +318,7 @@ public class APIUtils {
 
     public static Map<String, String> fetchCapeListFromApi() {
         try {
-            String body = apiGet(GeneratedApiEndpoints.capeListUrl());
+            String body = apiGet(CAPE_LIST_URL);
             if (body == null) return null;
 
             JsonObject root = GSON.fromJson(body, JsonObject.class);
@@ -299,12 +355,12 @@ public class APIUtils {
         payload.addProperty("cape", cape);
         payload.addProperty("timestamp", System.currentTimeMillis());
         payload.addProperty("token", token);
-        apiPost("cape-post", GeneratedApiEndpoints.capePostUrl(), payload.toString());
+        apiPost("cape-post", CAPE_LIST_URL, payload.toString());
     }
 
     public static List<CapeManager.CapeEntry> fetchCapeIndexFromApi() {
         try {
-            String body = apiGet(GeneratedApiEndpoints.capeIndexUrl());
+            String body = apiGet(CAPE_INDEX_URL);
             if (body == null) return null;
 
             JsonObject root = GSON.fromJson(body, JsonObject.class);

@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 /*
  * Copyright 2026 Lambda
@@ -52,6 +60,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.settings.PacketPlacementSettings;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.system.THMSystem;
 import xyz.thm.addon.utils.DeepSwapManager;
@@ -100,6 +109,8 @@ public class CrystalAura extends Module {
 
     private final Setting<Integer> placeDelay = sgPlace.add(new IntSetting.Builder()
         .name("place-delay").description("Milliseconds between placement attempts.").defaultValue(50).min(0).sliderRange(0, 1000).build());
+
+    private final PacketPlacementSettings packet = new PacketPlacementSettings(sgPlace);
 
     private final Setting<Boolean> swap = sgPlace.add(new BoolSetting.Builder()
         .name("swap").description("Swap to crystals when needed.").defaultValue(true).build());
@@ -599,7 +610,7 @@ public class CrystalAura extends Module {
     }
 
     private void placeCrystal(Opportunity opportunity) {
-        if (supportTicks > 0 || !validPlacement(opportunity.base)) return;
+        if (supportTicks > 0 || PlacementUtils.remainingPlacementPackets(packet.mode()) == 0 || !validPlacement(opportunity.base)) return;
         InteractionHand hand = crystalHand();
         if (hand == null || !placeInternal(opportunity, hand)) return;
         safeToPlaceInstantly = false;
@@ -613,7 +624,7 @@ public class CrystalAura extends Module {
 
     private void placeSupport(Opportunity opportunity) {
         long now = System.currentTimeMillis();
-        if (!support.get() || now < supportRetryAfterMs || now - lastPlaceMs < placeDelay.get()) return;
+        if (!support.get() || PlacementUtils.remainingPlacementPackets(packet.mode()) == 0 || now < supportRetryAfterMs || now - lastPlaceMs < placeDelay.get()) return;
         Direction side = PlacementUtils.getPlaceSide(opportunity.base);
         BlockHitResult placement = side == null
             ? new BlockHitResult(Vec3.atCenterOf(opportunity.base), Direction.DOWN, opportunity.base, false)
@@ -634,10 +645,10 @@ public class CrystalAura extends Module {
             if (hand == InteractionHand.MAIN_HAND && silentSwap.get()) {
                 boolean[] sent = {false};
                 if (!InventoryManager.withItem(this, item.slot(), false, SwapManager.CRYSTAL,
-                    () -> sent[0] = PlacementUtils.sendPlacement(opportunity.base, placement, hand, false)) || !sent[0]) return;
+                    () -> sent[0] = PlacementUtils.sendPlacement(opportunity.base, placement, hand, packet.mode())) || !sent[0]) return;
             } else {
                 if (hand == InteractionHand.MAIN_HAND && !inventory.setClientSlot(item.slot(), SwapManager.CRYSTAL)) return;
-                if (!PlacementUtils.sendPlacement(opportunity.base, placement, hand, false)) return;
+                if (!PlacementUtils.sendPlacement(opportunity.base, placement, hand, packet.mode())) return;
             }
             supportTicks = supportDelay.get();
             supportRetryAfterMs = System.currentTimeMillis() + 500;
@@ -672,8 +683,9 @@ public class CrystalAura extends Module {
     private InteractionHand crystalHand() {
         InteractionHand preferred = swapHand.get() == SwapHand.MainHand ? InteractionHand.MAIN_HAND : InteractionHand.OFF_HAND;
         if (mc.player.getItemInHand(preferred).is(Items.END_CRYSTAL)) return preferred;
+        InteractionHand other = preferred == InteractionHand.MAIN_HAND ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        if (mc.player.getItemInHand(other).is(Items.END_CRYSTAL)) return other;
         if (!swap.get()) return null;
-        if (mc.player.getOffhandItem().is(Items.END_CRYSTAL)) return InteractionHand.OFF_HAND;
         if (preferred == InteractionHand.MAIN_HAND) return InteractionHand.MAIN_HAND;
         var item = InvUtils.find(Items.END_CRYSTAL);
         if (!item.found() || !DeepSwapManager.get().swapIntoOffhand(item.slot())) return null;
@@ -683,6 +695,7 @@ public class CrystalAura extends Module {
     private boolean placeInternal(Opportunity opportunity, InteractionHand hand) {
         Direction side = placeSide(opportunity.base);
         BlockHitResult hit = new BlockHitResult(hitPosition(opportunity.base, side), side, opportunity.base, false);
+        var mode = packet.mode();
         boolean sent;
         if (hand == InteractionHand.MAIN_HAND) {
             int slot = mc.player.getMainHandItem().is(Items.END_CRYSTAL)
@@ -690,14 +703,14 @@ public class CrystalAura extends Module {
             if (slot < 0 || slot >= 36) return false;
             if (silentSwap.get() || slot >= 9) {
                 boolean[] placed = {false};
-                InventoryManager.withItem(this, slot, silentSwap.get(), SwapManager.CRYSTAL,
-                    () -> placed[0] = PlacementUtils.sendPlacement(opportunity.base, hit, hand, true));
+                InventoryManager.withItem(this, slot, mode.isPacket() && silentSwap.get(), SwapManager.CRYSTAL,
+                    () -> placed[0] = PlacementUtils.sendPlacement(opportunity.base, hit, hand, mode));
                 sent = placed[0];
             } else {
                 sent = InventoryManager.getInstance().setClientSlot(slot, SwapManager.CRYSTAL)
-                    && PlacementUtils.sendPlacement(opportunity.base, hit, hand, true);
+                    && PlacementUtils.sendPlacement(opportunity.base, hit, hand, mode);
             }
-        } else sent = PlacementUtils.sendPlacement(opportunity.base, hit, hand, true);
+        } else sent = PlacementUtils.sendPlacement(opportunity.base, hit, hand, mode);
         if (!sent) return false;
         lastPlace = opportunity.base;
         lastPlaceMs = System.currentTimeMillis();

@@ -1,12 +1,21 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.mixin;
 
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import net.minecraft.client.player.LocalPlayer;
@@ -38,8 +47,10 @@ public abstract class MinecraftClientMixin {
     @com.llamalad7.mixinextras.injector.ModifyExpressionValue(method = "runTick", at = @At(value = "INVOKE",
         target = "Lnet/minecraft/client/DeltaTracker$Timer;advanceGameTime(J)I"))
     private int thm$paceCatchUp(int wanted) {
-        return xyz.thm.addon.modules.CatchUpPacing.limit(wanted,
-            (net.minecraft.client.DeltaTracker.Timer) ((Minecraft) (Object) this).getDeltaTracker());
+        Modules modules = Modules.get();
+        HighwayBuilderTHM builder = modules == null ? null : modules.get(HighwayBuilderTHM.class);
+        return builder == null ? wanted
+            : builder.limitCatchUpTicks(wanted, (DeltaTracker.Timer) ((Minecraft) (Object) this).getDeltaTracker());
     }
 
 

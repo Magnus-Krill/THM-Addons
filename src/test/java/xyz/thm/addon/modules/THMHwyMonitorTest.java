@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.modules;
 
@@ -39,7 +47,7 @@ class THMHwyMonitorTest {
 
     @ParameterizedTest
     @CsvSource({"123.5,3131.5,-90,E,Ring", "123.5,3500.5,-90,E,Ring", "123.5,6250.5,-90,E,Ring",
-        "123.5,12500.5,-90,E,Ring", "123.5,30000000.5,-90,E,Ring", "3456.5,6544.5,-135,NE,Diamond"})
+        "123.5,12500.5,-90,E,Ring", "123.5,29999980.5,-90,E,Ring", "3456.5,6544.5,-135,NE,Diamond"})
     void mappedNetherRoadsDoNotTriggerMisalignment(double x, double z, float yaw, String direction, String highway) {
         var target = THMHwyMonitor.determineRecoveryTarget(x, z, yaw, 120, true, true, null, direction);
 

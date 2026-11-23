@@ -1,11 +1,20 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.test;
 
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.Minecraft;
@@ -29,6 +38,7 @@ import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
+import net.minecraft.nbt.TagParser;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
 import meteordevelopment.meteorclient.MeteorClient;
@@ -42,6 +52,7 @@ import meteordevelopment.meteorclient.gui.themes.meteor.MeteorGuiTheme;
 import meteordevelopment.meteorclient.gui.widgets.containers.WContainer;
 import meteordevelopment.meteorclient.gui.widgets.input.WDropdown;
 import meteordevelopment.meteorclient.settings.ItemSetting;
+import meteordevelopment.meteorclient.settings.ProvidedStringSetting;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.misc.input.KeyAction;
 import meteordevelopment.meteorclient.utils.render.color.Color;
@@ -52,6 +63,8 @@ import xyz.thm.addon.gui.MainMenuFx;
 import xyz.thm.addon.gui.MainMenuSettingsScreen;
 import xyz.thm.addon.gui.ServerFolderSidebar;
 import xyz.thm.addon.gui.ThmStyledButtons;
+import xyz.thm.addon.gui.themes.LiquidGlassTheme;
+import xyz.thm.addon.gui.themes.bephax.BepGuiTheme;
 import xyz.thm.addon.accessor.ServerFolderView;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
 import xyz.thm.addon.modules.HotbarManager;
@@ -81,10 +94,14 @@ public final class StartupClient implements ClientModInitializer {
             closing = true;
             try {
                 verifyPacketBudget();
+                verifyPacketPlacementModes();
+                verifyHighwayUtilityMigration();
                 verifyHotbarManager();
                 verifyKitbotUpdateIsolation();
                 verifyServerFolders(client);
                 verifyClickGuiAnimations(client);
+                verifyBepHaxTheme(client);
+                verifyGlassThemes(client);
                 if (Arrays.asList(GuiThemes.getNames()).contains("Catppuccin")) {
                     String theme = GuiThemes.get().name;
                     try {
@@ -98,11 +115,135 @@ public final class StartupClient implements ClientModInitializer {
                 Files.writeString(client.gameDirectory.toPath().resolve("startup-ok"), Long.toString(now - readyAt));
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
-            } catch (ReflectiveOperationException e) {
+            } catch (ReflectiveOperationException | CommandSyntaxException e) {
                 throw new IllegalStateException("Module regression check failed", e);
             }
             client.stop();
         });
+    }
+
+    private static void verifyBepHaxTheme(Minecraft client) throws ReflectiveOperationException {
+        var original = GuiThemes.get();
+        var title = client.gui.screen();
+        try {
+            GuiThemes.select("BepHax");
+            if (!(GuiThemes.get() instanceof BepGuiTheme)) {
+                throw new IllegalStateException("BepHax is missing from the theme selector");
+            }
+            Tabs.get(GuiTab.class).openScreen(GuiThemes.get());
+            var settings = (WidgetScreen) client.gui.screen();
+            settings.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 4);
+            client.gui.setScreen(title);
+            verifyClickGuiAnimations(client);
+        } finally {
+            GuiThemes.select(original.name);
+            client.gui.setScreen(title);
+        }
+    }
+
+    private static void verifyGlassThemes(Minecraft client) {
+        var original = GuiThemes.get();
+        var title = client.gui.screen();
+        var names = Arrays.asList(GuiThemes.getNames());
+        if (names.contains("Blue Hour") || names.contains("Teal Slate")) {
+            throw new IllegalStateException("Removed themes are still registered");
+        }
+        try {
+            for (String name : new String[] {"Violet Glass", "Liquid Glass"}) {
+                GuiThemes.select(name);
+                var theme = GuiThemes.get();
+                if (!theme.name.equals(name)) throw new IllegalStateException("Missing theme " + name);
+
+                Tabs.get(GuiTab.class).openScreen(theme);
+                var settings = (WidgetScreen) client.gui.screen();
+                settings.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+                if (theme instanceof LiquidGlassTheme glass && !glass.renderedGlass()) {
+                    throw new IllegalStateException("Liquid Glass did not render on the GUI tab");
+                }
+
+                var modules = theme.modulesScreen();
+                client.gui.setScreen(modules);
+                modules.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+                if (theme instanceof LiquidGlassTheme glass) {
+                    if (!glass.renderedGlass()) throw new IllegalStateException("Liquid Glass did not render on the Modules screen");
+                    verifyLiquidGlassControls(client, glass);
+                    verifyLiquidGlassOverscroll(client, glass);
+                }
+            }
+        } finally {
+            GuiThemes.select(original.name);
+            client.gui.setScreen(title);
+        }
+    }
+
+    private static void verifyLiquidGlassOverscroll(Minecraft client, LiquidGlassTheme theme) {
+        var window = theme.window("Scrollable");
+        var first = theme.label("First row");
+        var controls = new WidgetScreen(theme, "Liquid Glass scrolling") {
+            @Override
+            public void initWidgets() {
+                add(window).center();
+                window.view.maxHeight = theme.scale(70);
+                window.add(first);
+                for (int i = 0; i < 10; i++) window.add(theme.label("Another row"));
+            }
+        };
+        client.gui.setScreen(controls);
+        controls.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+
+        window.view.mouseOver = true;
+        double top = first.y;
+        if (!window.view.onMouseScrolled(1)) throw new IllegalStateException("Liquid Glass did not handle overscroll at the top");
+        window.view.onMouseScrolled(-100);
+        controls.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+        double bottom = first.y;
+        if (bottom >= top || !window.view.onMouseScrolled(-1)) {
+            throw new IllegalStateException("Liquid Glass did not scroll to and handle the bottom edge");
+        }
+        controls.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+        if (first.y != bottom) throw new IllegalStateException("Liquid Glass overscroll moved the control positions");
+
+        window.view.mouseOver = false;
+        if (window.view.onMouseScrolled(-1)) throw new IllegalStateException("Liquid Glass handled scroll outside the view");
+    }
+
+    private static void verifyLiquidGlassControls(Minecraft client, LiquidGlassTheme theme) {
+        var dropdown = theme.dropdown(new String[]{"First", "Second"}, "First");
+        var checkbox = theme.checkbox(false);
+        var controls = new WidgetScreen(theme, "Liquid Glass controls") {
+            @Override
+            public void initWidgets() {
+                var list = add(theme.horizontalList()).center().widget();
+                list.add(dropdown).minWidth(140).expandWidgetX();
+                list.add(checkbox);
+            }
+        };
+        client.gui.setScreen(controls);
+        controls.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+
+        var left = new MouseButtonInfo(GLFW.GLFW_MOUSE_BUTTON_LEFT, 0);
+        double x = dropdown.x + dropdown.width - theme.scale(8);
+        double y = dropdown.y + dropdown.height / 2;
+        dropdown.mouseMoved(x, y, x, y);
+        var open = new MouseButtonEvent(x, y, left);
+        dropdown.mouseClicked(open, false);
+        dropdown.mouseReleased(open);
+        controls.renderCustom(new GuiGraphicsExtractor(client, new GuiRenderState(), 0, 0), 0, 0, 14);
+
+        double optionY = y + dropdown.height * 2;
+        dropdown.mouseMoved(x, optionY, x, y);
+        var select = new MouseButtonEvent(x, optionY, left);
+        dropdown.mouseClicked(select, false);
+        dropdown.mouseReleased(select);
+        if (!"Second".equals(dropdown.get())) throw new IllegalStateException("Liquid Glass string select did not select the second option");
+
+        double switchX = checkbox.x + checkbox.width / 2;
+        double switchY = checkbox.y + checkbox.height / 2;
+        checkbox.mouseMoved(switchX, switchY, x, optionY);
+        var toggle = new MouseButtonEvent(switchX, switchY, left);
+        checkbox.mouseClicked(toggle, false);
+        checkbox.mouseReleased(toggle);
+        if (!checkbox.checked) throw new IllegalStateException("Liquid Glass switch did not toggle");
     }
 
     private static void verifyClickGuiAnimations(Minecraft client) throws ReflectiveOperationException {
@@ -336,6 +477,35 @@ public final class StartupClient implements ClientModInitializer {
             .filter(button -> button.getMessage().getString().equals(label)).findFirst().orElseThrow();
     }
 
+    private static void verifyPacketPlacementModes() {
+        var modules = Modules.get();
+        var surround = modules.get("surround-plus").settings;
+        var autoTrap = modules.get("auto-trap+").settings;
+        var surroundPacket = surround.get("packet", Boolean.class);
+        var trapPacket = autoTrap.get("packet", Boolean.class);
+        var surroundMode = (ProvidedStringSetting) surround.get("packet-mode");
+        var trapMode = (ProvidedStringSetting) autoTrap.get("packet-mode");
+        if (surroundPacket.get() || trapPacket.get() || surroundMode.isVisible() || trapMode.isVisible()) {
+            throw new IllegalStateException("Packet mode must be off by default");
+        }
+        try {
+            surroundPacket.set(true);
+            if (!surroundMode.isVisible() || !surroundMode.get().equals("Pace")
+                || trapMode.isVisible() || !Arrays.equals(surroundMode.supplier.get(), new String[]{"Pace", "Direct"})) {
+                throw new IllegalStateException("Packet modes must default to Pace and be selected independently");
+            }
+            surroundMode.set("Direct");
+            trapPacket.set(true);
+            if (!surroundMode.get().equals("Direct") || !trapMode.get().equals("Pace")) {
+                throw new IllegalStateException("Packet modes shared a setting value");
+            }
+        } finally {
+            surroundMode.reset();
+            surroundPacket.reset();
+            trapPacket.reset();
+        }
+    }
+
     private static void verifyPacketBudget() throws ReflectiveOperationException {
         HighwayBuilderTHM builder = Modules.get().get(HighwayBuilderTHM.class);
         var saved = builder.settings.toTag();
@@ -345,10 +515,12 @@ public final class StartupClient implements ClientModInitializer {
         allowance.setAccessible(true);
         Field costsField = field("packetCostsThisTick"), mine = field("mineActionsThisTick");
         Field place = field("placeActionsThisTick"), remaining = field("minePacketsLeft");
+        Field state = field("state");
+        Object savedState = state.get(builder);
         try {
             builder.packetBudget.set(true);
-            builder.settings.get("packet-build", Boolean.class).set(true);
-            builder.settings.get("packet-borer", Boolean.class).set(false);
+            builder.settings.get("packet", Boolean.class).set(true);
+            builder.settings.get("packet-dig", Boolean.class).set(false);
             builder.settings.get("enable-experimental", Boolean.class).set(false);
             builder.settings.get("packet-build-normal-rate", Boolean.class).set(false);
             mine.setInt(builder, 1000);
@@ -369,6 +541,20 @@ public final class StartupClient implements ClientModInitializer {
             if ((int) allowance.invoke(builder) != costs.placements(left) || (int) allowance.invoke(builder) <= 0) {
                 throw new IllegalStateException("Unused mining budget was not reclaimed with experimental settings off");
             }
+            builder.settings.get("packet-dig", Boolean.class).set(true);
+            builder.settings.get("legacy-mode", Boolean.class).set(false);
+            builder.settings.get("rotation", HighwayBuilderTHM.Rotation.class).set(HighwayBuilderTHM.Rotation.None);
+            Object forward = java.util.Arrays.stream(state.getType().getEnumConstants())
+                .filter(value -> ((Enum<?>) value).name().equals("Forward"))
+                .findFirst().orElseThrow();
+            state.set(builder, forward);
+            mine.setInt(builder, 1000);
+            apply.invoke(builder);
+            costs = (PacketBudget.Costs) costsField.get(builder);
+            int packetDigs = costs.dig() == 0 ? 1000 : Math.max(1, costs.available() / costs.dig());
+            if (mine.getInt(builder) != packetDigs) {
+                throw new IllegalStateException("Packet Dig did not reserve one dig packet per block");
+            }
             builder.packetBudget.set(false);
             mine.setInt(builder, 1000);
             place.setInt(builder, Integer.MAX_VALUE);
@@ -377,7 +563,40 @@ public final class StartupClient implements ClientModInitializer {
                 throw new IllegalStateException("Disabled budget still throttles mining or placing");
             }
         } finally {
+            state.set(builder, savedState);
             builder.loadSettingsSnapshot(saved);
+        }
+    }
+
+    private static void verifyHighwayUtilityMigration() throws CommandSyntaxException {
+        var modules = Modules.get();
+        var saved = modules.toTag();
+        var builder = modules.get(HighwayBuilderTHM.class);
+        var legacy = TagParser.parseCompoundFully("""
+            {modules:[
+                {name:"THM-HighwayBuilder",settings:{groups:[{name:"Inventory",settings:[
+                    {name:"anti-drop-items",value:["minecraft:diamond"]}
+                ]}]}},
+                {name:"catch-up-pacing",active:true},
+                {name:"AntiDrop",active:true,settings:{groups:[{name:"General",settings:[
+                    {name:"check-shulkers",value:true},{name:"items",value:["minecraft:obsidian"]}
+                ]}]}}
+            ]}
+            """);
+        try {
+            modules.fromTag(legacy);
+            if (!builder.settings.get("catch-up-pacing", Boolean.class).get()
+                || !builder.settings.get("Anti-drop", Boolean.class).get()
+                || !builder.settings.get("anti-drop-check-shulkers", Boolean.class).get()
+                || !builder.settings.get("anti-drop-items").get().equals(java.util.List.of(Items.DIAMOND))) {
+                throw new IllegalStateException("HighwayBuilder lost migrated settings or overwrote its item filter");
+            }
+            if (modules.get("catch-up-pacing") != null || modules.get("AntiDrop") != null
+                || builder.limitCatchUpTicks(8, null) != 8) {
+                throw new IllegalStateException("Highway utilities ran independently of HighwayBuilder");
+            }
+        } finally {
+            modules.fromTag(saved);
         }
     }
 

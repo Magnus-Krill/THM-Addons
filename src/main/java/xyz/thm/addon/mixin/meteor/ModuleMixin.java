@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.mixin.meteor;
 
@@ -13,14 +21,27 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import xyz.thm.addon.settings.PacketPlacementSettings;
 
 @Mixin(value = Module.class, remap = false)
 public abstract class ModuleMixin {
     @Shadow @Final @Mutable public String title;
 
     @ModifyVariable(method = "fromTag", at = @At("HEAD"), argsOnly = true)
-    private CompoundTag thm$loadOffhandFilter(CompoundTag tag) {
-        return ((Module) (Object) this).name.equals("offhand") ? thm$migrateOffhandFilter(tag) : tag;
+    private CompoundTag thm$loadSettings(CompoundTag tag) {
+        String module = ((Module) (Object) this).name;
+        if (module.equals("offhand")) return thm$migrateOffhandFilter(tag);
+        String legacy = switch (module) {
+            case "auto-portal", "thmcrystal-aura" -> "packet-place";
+            case "phase" -> "packet-self-fill";
+            default -> null;
+        };
+        if (legacy == null || !(tag.get("settings") instanceof CompoundTag settings)) return tag;
+        CompoundTag updated = PacketPlacementSettings.migrateToggle(settings, legacy);
+        if (updated == settings) return tag;
+        CompoundTag migrated = tag.copy();
+        migrated.put("settings", updated);
+        return migrated;
     }
 
     @Unique

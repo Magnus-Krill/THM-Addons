@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.utils;
 
@@ -559,6 +567,10 @@ public class THMUtils {
 
     public static @Nullable String getCurrentHighway(double x, double z, boolean nether, HorizontalDirection direction) {
         if (!AxisViewer.highwayRouteAt(x, z, nether, direction).equals("main")) return null;
+        return outboundHighwayCode(x, z, direction);
+    }
+
+    private static @Nullable String outboundHighwayCode(double x, double z, HorizontalDirection direction) {
         double along = (x - 0.5) * direction.offsetX + (z - 0.5) * direction.offsetZ;
         if (along == 0) return null;
         return highwayCode(along > 0 ? direction : direction.opposite());
@@ -574,6 +586,16 @@ public class THMUtils {
         String route = AxisViewer.highwayRouteAt(x, z, nether, direction);
         int separator = route.indexOf('-');
         return separator < 0 ? route : route.substring(0, separator);
+    }
+
+    public static @Nullable String getCurrentMappedHighway() {
+        if (mc.player == null || mc.level == null) return null;
+        double x = mc.player.getX(), z = mc.player.getZ();
+        boolean nether = mc.level.dimension() == Level.NETHER;
+        HorizontalDirection direction = currentRoadDirection();
+        String route = AxisViewer.highwayRouteAt(x, z, nether, direction);
+        if (route.equals("main")) return outboundHighwayCode(x, z, direction);
+        return route.startsWith("ring-") || route.startsWith("diamond-") ? route : null;
     }
 
     private static HorizontalDirection currentRoadDirection() {

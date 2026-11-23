@@ -1,0 +1,47 @@
+/*
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
+ * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
+ * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
+ */
+
+
+
+
+
+
+
+// BepHax 0.5.5 theme by Dekto, adapted for Meteor 26.2.
+// https://bep.dek.to/changelog 
+//To Dekto, if you want this removed then open a issue and ill remove it
+
+package xyz.thm.addon.gui.themes.bephax.widgets;
+
+import meteordevelopment.meteorclient.gui.renderer.GuiRenderer;
+import meteordevelopment.meteorclient.gui.widgets.WMultiLabel;
+import meteordevelopment.meteorclient.utils.render.color.Color;
+
+import xyz.thm.addon.gui.themes.bephax.BepWidget;
+
+public class WBepMultiLabel extends WMultiLabel implements BepWidget {
+    public WBepMultiLabel(String text, boolean title, double maxWidth) {
+        super(text, title, maxWidth);
+    }
+
+    @Override
+    protected void onRender(GuiRenderer renderer, double mouseX, double mouseY, double delta) {
+        double h = this.theme.textHeight(this.title);
+        Color defaultColor =
+                this.title ? this.theme().titleTextColor.get() : this.theme().textColor.get();
+
+        for (int i = 0; i < this.lines.size(); ++i) {
+            renderer.text(
+                    this.lines.get(i),
+                    this.x,
+                    this.y + h * i,
+                    this.color != null ? this.color : defaultColor,
+                    this.title);
+        }
+    }
+}

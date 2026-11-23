@@ -29,7 +29,7 @@ Callers use `InventoryManager.withItem(owner, inventorySlot, silent, priority, a
 | AutoArmor, THM Mending | `mending-threshold` | 100% | Durability at which the next mending piece can be equipped. |
 | AutoArmor, THM Mending | `mending-swap-delay` | 10 ticks | Spaces equipment swaps. |
 | THM Highway | `shulker-overview` | Off | Overlays the dominant contents on shulker icons in inventories and the hotbar. |
-| THM Highway | `catch-up-pacing` | Off | Limits catch-up bursts to three ticks per 60 ms and carries deferred ticks forward. |
+| HighwayBuilder, General | `catch-up-pacing` | Off | Limits catch-up bursts to three ticks per 60 ms while HighwayBuilder is active. |
 
 AutoArmor preserves binding-curse, avoided-enchantment and equipped-elytra protections. Catch-up pacing affects the client tick loop, so leave it off when deliberate fast Timer behavior is needed. Shulker icons use Minecraft's GUI extraction and THM render helpers for both graphics backends; their cache is capped at 256 entries.
 

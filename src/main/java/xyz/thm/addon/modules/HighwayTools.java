@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.modules;
 
@@ -43,6 +51,8 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.settings.DescribedOption;
+import xyz.thm.addon.settings.PacketPlacementSettings;
+import xyz.thm.addon.utils.PlacementUtils;
 import xyz.thm.addon.utils.THMUtils;
 import xyz.thm.addon.utils.TrustedHttp;
 
@@ -90,6 +100,7 @@ public class HighwayTools extends Module {
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgChecker = settings.createGroup("Highway Checker");
+    private final PacketPlacementSettings packetPlacement = new PacketPlacementSettings(sgChecker);
     private final SettingGroup sgLogging = settings.createGroup("Highway Checker Logging");
 
     public final Setting<Boolean> axiswalker = sgGeneral.add(new BoolSetting.Builder()
@@ -542,9 +553,10 @@ public class HighwayTools extends Module {
         if (!boatItem.found()) return;
 
         BoatPlacementCandidate placement = findBoatPlacementCandidate();
-        if (placement == null) return;
+        var mode = packetPlacement.mode();
+        if (placement == null || PlacementUtils.remainingPlacementPackets(mode) == 0) return;
 
-        if (!boatItem.isHotbar()) {
+        if (!boatItem.isHotbar() && !boatItem.isOffhand()) {
             int hotbarSlot = findEmptyHotbarSlot();
             if (hotbarSlot == -1) {
                 debug("boat-recovery", "no-empty-hotbar-slot-for-boat");
@@ -555,14 +567,13 @@ public class HighwayTools extends Module {
             if (!boatItem.found()) return;
         }
 
-        if (!InvUtils.swap(boatItem.slot(), true)) return;
-
-        mc.gameMode.useItemOn(
-            mc.player,
-            InteractionHand.MAIN_HAND,
-            placement.hitResult()
-        );
-        mc.player.swing(InteractionHand.MAIN_HAND);
+        InteractionHand hand = boatItem.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        if (hand == InteractionHand.MAIN_HAND && !InvUtils.swap(boatItem.slot(), true)) return;
+        try {
+            if (!PlacementUtils.placeWithItem(hand, placement.hitResult().getLocation(), mode)) return;
+        } finally {
+            if (hand == InteractionHand.MAIN_HAND) InvUtils.swapBack();
+        }
         boatMountGraceTicks = BOAT_MOUNT_GRACE_TICKS;
         debug("boat-recovery", "placed-boat floor=%s", formatPos(placement.floorAnchor()));
     }
@@ -891,7 +902,8 @@ public class HighwayTools extends Module {
     }
 
     private FindItemResult findBoatItem() {
-        return InvUtils.find(stack -> isBoatItem(stack.getItem()));
+        FindItemResult held = InvUtils.findInHotbar(stack -> isBoatItem(stack.getItem()));
+        return held.found() ? held : InvUtils.find(stack -> isBoatItem(stack.getItem()), 9, 35);
     }
 
     private boolean isBoatItem(Item item) {

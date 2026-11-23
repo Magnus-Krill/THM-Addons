@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.modules;
 
@@ -34,10 +42,13 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.settings.PacketPlacementSettings;
+import xyz.thm.addon.utils.PlacementUtils;
 import xyz.thm.addon.utils.RenderUtilsTHM;
 
 public class BetterEchestFarmer extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+    private final PacketPlacementSettings packetPlacement = new PacketPlacementSettings(sgGeneral);
     private final SettingGroup sgRender = settings.createGroup("Render");
 
     // --- General Settings ---
@@ -248,19 +259,20 @@ public class BetterEchestFarmer extends Module {
     }
 
     private void doPlace() {
-        FindItemResult echest = ensureEchestInHotbar();
-        if (!echest.found()) {
-            error("Out of echests.");
-            toggle();
-            return;
-        }
-
-        // Place the block
+        var mode = packetPlacement.mode();
         int prevSlot = mc.player.getInventory().getSelectedSlot();
-        int chestSlot = echest.slot();
-        if (prevSlot != chestSlot) InvUtils.swap(chestSlot, false);
-        BlockUtils.place(target, InteractionHand.MAIN_HAND, chestSlot, rotate.get(), 0, swing.get(), true, false);
-        if (silentSwap.get() && prevSlot != chestSlot) InvUtils.swap(prevSlot, false);
+        if (!mode.isPacket() || !mc.level.getBlockState(target).is(Blocks.ENDER_CHEST)) {
+            if (PlacementUtils.remainingPlacementPackets(mode) == 0
+                || mode.isPacket() && !xyz.thm.addon.utils.PacketPlaceTracker.canSend(target)) return;
+            FindItemResult echest = ensureEchestInHotbar();
+            if (!echest.found()) {
+                error("Out of echests.");
+                toggle();
+                return;
+            }
+            boolean placed = PlacementUtils.place(target, echest, rotate.get(), 0, swing.get(), true, silentSwap.get(), mode);
+            if (mode.isPacket() || !placed && !mc.level.getBlockState(target).is(Blocks.ENDER_CHEST)) return;
+        }
 
         // Immediately ready the tool and move to next state
         int tool = findBestTool();
@@ -268,7 +280,7 @@ public class BetterEchestFarmer extends Module {
 
         if (instaMine.get() && miningProgress >= 1.0) rebreakPrimed = true;
 
-        currentState = State.Breaking; // Assume it's placed and ready to be broken
+        currentState = State.Breaking;
         delayTimer = packetDelay.get();
     }
 

@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.settings;
 
@@ -25,7 +33,8 @@ class DropdownDescriptionsTest {
     void everyEnumSettingChoiceHasAShortDescription() throws Exception {
         Set<String> enumTypes = new HashSet<>();
         Pattern settingType = Pattern.compile("Lmeteordevelopment/meteorclient/settings/Setting<L([^;]+);>;");
-        try (var paths = Files.walk(Path.of("build/classes/java/main/xyz/thm/addon"))) {
+        Path classes = Path.of(DropdownDescriptions.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        try (var paths = Files.walk(classes.resolve("xyz/thm/addon"))) {
             for (Path path : paths.filter(p -> p.toString().endsWith(".class")).toList()) {
                 ClassNode owner = new ClassNode();
                 new ClassReader(Files.readAllBytes(path)).accept(owner, ClassReader.SKIP_DEBUG);
@@ -69,6 +78,15 @@ class DropdownDescriptionsTest {
             descriptions.add(description);
         }
         assertEquals(3, descriptions.size());
+    }
+
+    @Test
+    void packetModesExplainTheSharedLimit() {
+        String pace = DropdownDescriptions.providedString("packet-mode", "Pace");
+        String direct = DropdownDescriptions.providedString("packet-mode", "Direct");
+        assertShort(pace, "Pace");
+        assertShort(direct, "Direct");
+        assertNotEquals(pace, direct);
     }
 
     @Test

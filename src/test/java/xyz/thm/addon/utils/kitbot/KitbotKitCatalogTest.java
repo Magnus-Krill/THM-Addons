@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.utils.kitbot;
 
@@ -177,11 +185,15 @@ class KitbotKitCatalogTest {
     }
 
     @Test
-    void invalidTokensAndUnsolicited304DoNotCreateACatalog() {
+    void invalidTokensUseThePublicCatalogAndDoNotReuseMemberData() {
         token.set("invalid");
-        assertTrue(catalog.current().isEmpty());
-        assertTrue(pending.isEmpty());
+        response = response(200, "{\"success\":true,\"kits\":[{\"name\":\"pvp\",\"price\":0.5}]}", "\"public\"");
+        fetch();
+        assertEquals("", sentTokens.getLast());
+        assertArrayEquals(new String[] {"pvp"}, catalog.currentNames());
+        assertTrue(Files.exists(directory.resolve("public.json")));
         token.set(TOKEN_A);
+        assertTrue(catalog.current().isEmpty());
         response = response(304, "", "\"unknown\"");
         fetch();
         assertTrue(catalog.current().isEmpty());

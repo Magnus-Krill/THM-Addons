@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.utils;
 
@@ -14,6 +22,20 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PacketChokeTest {
+    @Test
+    void releaseDrainsQueuedPacketsBeforeTheNextPlacement() {
+        PacketChoke<Integer> choke = new PacketChoke<>();
+        List<Integer> sent = new ArrayList<>();
+        assertTrue(choke.hold(1));
+        assertTrue(choke.hold(2));
+        choke.release(sent::add);
+
+        assertEquals(List.of(1, 2), sent);
+        assertFalse(choke.hold(3));
+        choke.tick(5, 1, 5, sent::add);
+        assertTrue(choke.hold(4));
+    }
+
     @Test
     void flushesInOrderAtTheHoldLimitThenReleasesForConfiguredTicks() {
         PacketChoke<Integer> choke = new PacketChoke<>();

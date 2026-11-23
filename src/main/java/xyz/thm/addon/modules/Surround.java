@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.modules;
 
@@ -15,6 +23,7 @@ import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.PlayerUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
+import meteordevelopment.meteorclient.utils.player.SlotUtils;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
@@ -27,7 +36,6 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.network.protocol.BundlePacket;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.*;
-import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
@@ -45,6 +53,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.settings.PacketPlacementSettings;
 import xyz.thm.addon.mixin.accessor.ClientLevelPredictionAccessor;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.utils.InventoryManager;
@@ -68,9 +77,11 @@ public class Surround extends Module {
         .name("blocks").description("Blocks to use for surrounding.")
         .defaultValue(Blocks.OBSIDIAN, Blocks.CRYING_OBSIDIAN, Blocks.NETHERITE_BLOCK).build());
 
-    private final Setting<PlacementMode> placementMode = sgGeneral.add(new EnumSetting.Builder<PlacementMode>()
-        .name("place-mode").description("How to place surround blocks.")
-        .defaultValue(PlacementMode.Normal).build());
+    private final PacketPlacementSettings packet = new PacketPlacementSettings(sgGeneral);
+
+    private final Setting<Boolean> packetOnce = sgGeneral.add(new BoolSetting.Builder()
+        .name("packet-place-once").description("Wait for server confirmation before retrying.")
+        .defaultValue(true).visible(packet::enabled).build());
 
     private final Setting<ReplaceTrigger> replaceTrigger = sgGeneral.add(new EnumSetting.Builder<ReplaceTrigger>()
         .name("replace-trigger").description("When to replace broken blocks.")
@@ -87,6 +98,14 @@ public class Surround extends Module {
     private final Setting<Coverage> coverage = sgShape.add(new EnumSetting.Builder<Coverage>()
         .name("coverage").description("Which levels to surround.")
         .defaultValue(Coverage.Feet).build());
+
+    private final Setting<Boolean> selfTrap = sgShape.add(new BoolSetting.Builder()
+        .name("self-trap").description("Add walls at head height.")
+        .defaultValue(false).build());
+
+    private final Setting<Boolean> selfTrapHead = sgShape.add(new BoolSetting.Builder()
+        .name("head").description("Add a roof to Self Trap.")
+        .defaultValue(true).visible(selfTrap::get).build());
 
     private final Setting<Expansion> expansion = sgShape.add(new EnumSetting.Builder<Expansion>()
         .name("expansion").description("When to extend the surround.")
@@ -210,8 +229,12 @@ public class Surround extends Module {
                 if (value instanceof CompoundTag setting) values.put(setting.getStringOr("name", ""), setting.copy());
             }
         }
-        putChoice(values, "place-mode", !oldFlag(values, "packet", false) ? PlacementMode.Normal
-            : oldFlag(values, "packet-place-once", true) ? PlacementMode.Packet : PlacementMode.PacketRepeat);
+        CompoundTag legacyPlacement = values.get("place-mode");
+        if (legacyPlacement != null) {
+            String legacyMode = legacyPlacement.getStringOr("value", "Normal");
+            putFlag(values, "packet", legacyMode.equals("Packet") || legacyMode.equals("PacketRepeat"));
+            if (legacyMode.equals("PacketRepeat")) putFlag(values, "packet-place-once", false);
+        }
         putChoice(values, "coverage", Coverage.values()[(oldFlag(values, "head-level", false) ? 1 : 0)
             + (oldFlag(values, "cover-head", false) ? 2 : 0)]);
         putChoice(values, "expansion", Expansion.values()[(oldFlag(values, "extend", true) ? 1 : 0)
@@ -233,8 +256,8 @@ public class Surround extends Module {
         for (String group : List.of("General", "Shape", "Placement", "Movement", "Advanced", "Render")) grouped.put(group, new ListTag());
         for (var entry : values.entrySet()) {
             String group = switch (entry.getKey()) {
-                case "blocks", "place-mode", "replace-trigger", "blocks-per-tick", "place-delay" -> "General";
-                case "coverage", "expansion", "support" -> "Shape";
+                case "blocks", "packet", "packet-mode", "packet-place-once", "replace-trigger", "blocks-per-tick", "place-delay" -> "General";
+                case "coverage", "self-trap", "head", "expansion", "support" -> "Shape";
                 case "rotate", "airplace", "inventory-swap", "multitask", "strict-directions" -> "Placement";
                 case "center-mode", "phased", "only-on-ground", "disable-on" -> "Movement";
                 case "crystal-handling", "packet-events", "shift-delay", "confirmation-timeout", "auto-disable" -> "Advanced";
@@ -261,6 +284,14 @@ public class Surround extends Module {
     private static boolean oldFlag(Map<String, CompoundTag> values, String name, boolean fallback) {
         CompoundTag setting = values.get(name);
         return setting == null ? fallback : setting.getBooleanOr("value", fallback);
+    }
+
+    private static void putFlag(Map<String, CompoundTag> values, String name, boolean value) {
+        if (values.containsKey(name)) return;
+        CompoundTag setting = new CompoundTag();
+        setting.putString("name", name);
+        setting.putBoolean("value", value);
+        values.put(name, setting);
     }
 
     private static void putChoice(Map<String, CompoundTag> values, String name, Enum<?> choice) {
@@ -341,7 +372,8 @@ public class Surround extends Module {
 
     private void rebuildTargets() {
         Set<BlockPos> feet = footprint(mc.player.getBoundingBox(), mc.player.blockPosition(), expansion.get().edges);
-        targets = plan(feet, coverage.get().eyes, coverage.get().roof, airplace.get(), support.get());
+        targets = plan(feet, coverage.get().eyes || selfTrap.get(),
+            coverage.get().roof || selfTrap.get() && selfTrapHead.get(), airplace.get(), support.get());
         if (expansion.get().mining) {
             for (BlockPos pos : mining.keySet()) {
                 if (!targets.contains(pos)) continue;
@@ -356,14 +388,7 @@ public class Surround extends Module {
     }
 
     static Set<BlockPos> footprint(AABB bounds, BlockPos base, boolean extend) {
-        Set<BlockPos> feet = new LinkedHashSet<>();
-        if (!extend) { feet.add(base); return feet; }
-        for (int x = Mth.floor(bounds.minX + 1e-7); x <= Mth.floor(bounds.maxX - 1e-7); x++) {
-            for (int z = Mth.floor(bounds.minZ + 1e-7); z <= Mth.floor(bounds.maxZ - 1e-7); z++) {
-                feet.add(new BlockPos(x, base.getY(), z));
-            }
-        }
-        return feet;
+        return extend ? PlacementUtils.horizontalFootprint(bounds, base.getY()) : Set.of(base);
     }
 
     static Set<BlockPos> plan(Set<BlockPos> feet, boolean eye, boolean roof, boolean air, boolean floor) {
@@ -395,15 +420,15 @@ public class Surround extends Module {
     }
 
     private void tryPlace(BlockPos pos, boolean immediate) {
-        if (!canAct() || !targets.contains(pos) || pending.containsKey(pos)
+        if (!canAct() || PlacementUtils.remainingPlacementPackets(packet.mode()) == 0 || !targets.contains(pos) || pending.containsKey(pos)
             || !world.getBlockState(pos).canBeReplaced()) return;
-        if ((!placementMode.get().packet || placementMode.get().waitForAnswer) && !PacketPlaceTracker.canSend(pos)) return;
+        if ((!packet.enabled() || packetOnce.get()) && !PacketPlaceTracker.canSend(pos)) return;
         long now = System.nanoTime();
         Long previous = lastAttempt.get(pos);
         if (!immediate && previous != null && now - previous < shiftDelay.get() * 50_000_000L) return;
         int slot = findBlock();
         if (slot == -1) return;
-        ItemStack stack = slot == 45 ? mc.player.getOffhandItem() : mc.player.getInventory().getItem(slot);
+        ItemStack stack = slot == SlotUtils.OFFHAND ? mc.player.getOffhandItem() : mc.player.getInventory().getItem(slot);
         Block block = ((BlockItem) stack.getItem()).getBlock();
         if (!canPlace(pos, block)) return;
         BlockHitResult hit = hit(pos);
@@ -418,13 +443,13 @@ public class Surround extends Module {
         Runnable action = () -> {
             if (generation != expectedGeneration || pending.get(pos) != placement) return;
             rebuildTargets();
-            if (!canAct() || !targets.contains(pos)) {
+            if (!canAct() || PlacementUtils.remainingPlacementPackets(packet.mode()) == 0 || !targets.contains(pos)) {
                 cancel(pos, placement);
                 return;
             }
             int actualSlot = findBlock();
             if (actualSlot == -1) { cancel(pos, placement); return; }
-            ItemStack actualStack = actualSlot == 45 ? mc.player.getOffhandItem() : mc.player.getInventory().getItem(actualSlot);
+            ItemStack actualStack = actualSlot == SlotUtils.OFFHAND ? mc.player.getOffhandItem() : mc.player.getInventory().getItem(actualSlot);
             BlockHitResult actualHit = hit(pos);
             if (actualHit == null || !canPlace(pos, ((BlockItem) actualStack.getItem()).getBlock())) {
                 cancel(pos, placement);
@@ -445,8 +470,8 @@ public class Surround extends Module {
             placement.sent = true;
             placement.started = System.nanoTime();
             BlockState predicted = world.getBlockState(pos);
-            if (!placementMode.get().packet && !predicted.canBeReplaced()) placement.predicted = predicted;
-            if (placementMode.get().packet && placementMode.get().waitForAnswer) PacketPlaceTracker.markSent(pos, confirmationTimeout.get());
+            if (!packet.enabled() && !predicted.canBeReplaced()) placement.predicted = predicted;
+            if (packet.enabled() && packetOnce.get()) PacketPlaceTracker.markSent(pos, confirmationTimeout.get());
             if ((renderStyle.get() != RenderStyle.Off)) renderMap.put(pos, System.nanoTime());
         };
         if (rotate.get() && !immediate) Rotations.rotate(Rotations.getYaw(hit.getLocation()), Rotations.getPitch(hit.getLocation()), 50, action);
@@ -484,7 +509,7 @@ public class Surround extends Module {
     }
 
     private int findBlock() {
-        if (isBlock(mc.player.getOffhandItem())) return 45;
+        if (isBlock(mc.player.getOffhandItem())) return SlotUtils.OFFHAND;
         for (int slot = 0; slot < 9; slot++) if (isBlock(mc.player.getInventory().getItem(slot))) return slot;
         if (inventorySwap.get() && mc.player.containerMenu == mc.player.inventoryMenu && mc.player.containerMenu.getCarried().isEmpty()) {
             for (int slot = 9; slot < 36; slot++) if (isBlock(mc.player.getInventory().getItem(slot))) return slot;
@@ -497,12 +522,12 @@ public class Surround extends Module {
     }
 
     private boolean sendPlacement(BlockPos pos, BlockHitResult hit, int slot) {
-        InteractionHand hand = slot == 45 ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
-        boolean packet = placementMode.get().packet;
-        if (hand == InteractionHand.OFF_HAND) return PlacementUtils.sendPlacement(pos, hit, hand, packet);
+        InteractionHand hand = slot == SlotUtils.OFFHAND ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        var mode = packet.mode();
+        if (hand == InteractionHand.OFF_HAND) return PlacementUtils.sendPlacement(pos, hit, hand, mode);
         boolean[] sent = {false};
-        InventoryManager.withItem(this, slot, packet, xyz.thm.addon.utils.SwapManager.SURROUND, multitask.get(),
-            () -> sent[0] = PlacementUtils.sendPlacement(pos, hit, hand, packet));
+        InventoryManager.withItem(this, slot, mode.isPacket(), xyz.thm.addon.utils.SwapManager.SURROUND, multitask.get(),
+            () -> sent[0] = PlacementUtils.sendPlacement(pos, hit, hand, mode));
         return sent[0];
     }
 
@@ -516,7 +541,7 @@ public class Surround extends Module {
             early.before = state;
             ((ClientLevelPredictionAccessor) level).thm$getBlockStatePredictionHandler().updateKnownServerState(pos, state);
             PacketPlaceTracker.forget(pos);
-            if (placementMode.get().packet && placementMode.get().waitForAnswer) PacketPlaceTracker.markSent(pos, confirmationTimeout.get());
+            if (packet.enabled() && packetOnce.get()) PacketPlaceTracker.markSent(pos, confirmationTimeout.get());
             return;
         }
         Placement placement = pending.remove(pos);
@@ -560,7 +585,7 @@ public class Surround extends Module {
         while (iterator.hasNext()) {
             var entry = iterator.next();
             Placement placement = entry.getValue();
-            if (placement.sent && placementMode.get() == PlacementMode.PacketRepeat) {
+            if (placement.sent && packet.enabled() && !packetOnce.get()) {
                 iterator.remove();
                 continue;
             }
@@ -710,21 +735,6 @@ public class Surround extends Module {
             return true;
         }
         void cancel() { reserved--; }
-    }
-
-    public enum PlacementMode implements DescribedOption {
-        Normal(false, false, "Use normal placement with client prediction."),
-        Packet(true, true, "Send packets and wait for server confirmation."),
-        PacketRepeat(true, false, "Send packets without waiting for confirmation.");
-        final boolean packet;
-        final boolean waitForAnswer;
-        private final String description;
-        PlacementMode(boolean packet, boolean waitForAnswer, String description) {
-            this.packet = packet;
-            this.waitForAnswer = waitForAnswer;
-            this.description = description;
-        }
-        @Override public String description() { return description; }
     }
 
     public enum Coverage implements DescribedOption {

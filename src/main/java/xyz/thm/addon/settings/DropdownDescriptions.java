@@ -1,11 +1,20 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon.settings;
 
+import meteordevelopment.meteorclient.gui.utils.AlignmentX;
 import meteordevelopment.meteorclient.gui.widgets.input.WDropdown;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.utils.entity.SortPriority;
@@ -21,6 +30,11 @@ public final class DropdownDescriptions {
     public static String description(Object value) {
         return switch (value) {
             case DescribedOption option -> option.description();
+            case AlignmentX alignment -> switch (alignment) {
+                case Left -> "Align module names to the left.";
+                case Center -> "Center module names.";
+                case Right -> "Align module names to the right.";
+            };
             case ShapeMode mode -> switch (mode) {
                 case Lines -> "Draw outlines only.";
                 case Sides -> "Draw filled faces only.";
@@ -52,6 +66,11 @@ public final class DropdownDescriptions {
 
     public static String providedString(String setting, Object value) {
         return switch (setting) {
+            case "packet-mode" -> switch (value.toString()) {
+                case "Pace" -> "Share the nine-packet limit across modules in Pace mode.";
+                case "Direct" -> "Send placement packets without the shared limit.";
+                default -> null;
+            };
             case "show-branch" -> switch (value.toString()) {
                 case "All" -> "Show members from every branch.";
                 case "Main" -> "Show main-branch members only.";

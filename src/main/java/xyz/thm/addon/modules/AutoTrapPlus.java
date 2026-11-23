@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 /*
  * Base module copied from Meteor Client AutoTrap
@@ -17,6 +25,7 @@ import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.systems.modules.render.LogoutSpots;
 import meteordevelopment.meteorclient.utils.entity.EntityUtils;
 import meteordevelopment.meteorclient.utils.entity.SortPriority;
 import meteordevelopment.meteorclient.utils.entity.TargetUtils;
@@ -25,11 +34,17 @@ import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.PlayerUtils;
+import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.network.protocol.game.ServerboundSwingPacket;
+import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
 import net.minecraft.util.Mth;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ClipContext;
@@ -38,15 +53,18 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.phys.shapes.CollisionContext;
 import xyz.thm.addon.THMAddon;
+import xyz.thm.addon.settings.PacketPlacementSettings;
 import xyz.thm.addon.interfaces.LogoutSpotsPlayers;
 import xyz.thm.addon.interfaces.LogoutSpotsPoseData;
 import xyz.thm.addon.settings.DescribedOption;
+import xyz.thm.addon.utils.InventoryManager;
 import xyz.thm.addon.utils.PacketPlaceTracker;
 import xyz.thm.addon.utils.PlacementUtils;
 import xyz.thm.addon.utils.RenderUtilsTHM;
+import xyz.thm.addon.utils.SwapManager;
 
 import java.util.*;
 
@@ -125,7 +143,12 @@ public class AutoTrapPlus extends Module {
         .build()
     );
 
-    // Bottom blocks are always placed in Full mode (with crystal/anchor gap support)
+    private final Setting<Boolean> antiStep = sgGeneral.add(new BoolSetting.Builder()
+        .name("anti-step")
+        .description("Add a second layer over the target.")
+        .defaultValue(false)
+        .build()
+    );
 
     private final Setting<BuildOrder> buildOrder = sgGeneral.add(new EnumSetting.Builder<BuildOrder>()
         .name("build-order")
@@ -147,19 +170,13 @@ public class AutoTrapPlus extends Module {
         .defaultValue(false)
         .build()
     );
-    // WIP: packet placing support
-    private final Setting<Boolean> packet = sgGeneral.add(new BoolSetting.Builder()
-        .name("packet")
-        .description("Only place via packets (no client-side block set). WIP")
-        .defaultValue(false)
-        .build()
-    );
+    private final PacketPlacementSettings packet = new PacketPlacementSettings(sgGeneral);
 
     private final Setting<Boolean> packetOnce = sgGeneral.add(new BoolSetting.Builder()
         .name("packet-place-once")
-        .description("Experimental: one packet per block, sent again only once the server says it's still air.")
+        .description("Wait for the server before retrying a block.")
         .defaultValue(false)
-        .visible(packet::get)
+        .visible(packet::enabled)
         .build()
     );
 
@@ -172,7 +189,7 @@ public class AutoTrapPlus extends Module {
 
     private final Setting<Boolean> airPlace = sgGeneral.add(new BoolSetting.Builder()
         .name("air-place")
-        .description("Allows placing blocks in the air. Disable to build supports first.")
+        .description("Place head walls first and allow unsupported placements.")
         .defaultValue(false)
         .build()
     );
@@ -194,7 +211,7 @@ public class AutoTrapPlus extends Module {
 
     private final Setting<Keybind> logoutTrapKeybind = sgLogoutTrap.add(new KeybindSetting.Builder()
         .name("manual-keybind")
-        .description("In Manual mode, press to trap known logout spots.")
+        .description("Queue known logout spots.")
         .defaultValue(Keybind.none())
         .visible(() -> logoutTrap.get() && logoutTrapMode.get() == LogoutTrapMode.Manual)
         .build()
@@ -257,264 +274,109 @@ public class AutoTrapPlus extends Module {
         .build()
     );
 
-    private final List<BlockPos> placePositions = new ArrayList<>();
-    private Player target;
-    private boolean placedAny;
-    private int timer;
-    private BlockPos gapPos;
+    private final Set<BlockPos> placePositions = new LinkedHashSet<>();
+    private final Set<BlockPos> scheduled = new HashSet<>();
     private final Map<BlockPos, Long> renderMap = new HashMap<>();
-    private final Map<UUID, LogoutSpotData> trackedPlayers = new HashMap<>();
-    private final List<LogoutSpotData> pendingLogoutSpots = new ArrayList<>();
+    private final Set<UUID> completedLogoutSpots = new HashSet<>();
+    private final Set<UUID> manualLogoutSpots = new HashSet<>();
+    private Player target;
+    private ClientLevel level;
+    private boolean placedAny;
     private boolean logoutManualPressed;
-    private boolean logoutTrapWasEnabled;
+    private long tick;
+    private long lastPlacementTick;
+    private int batchLimit;
 
     public AutoTrapPlus() {
-        super(THMAddon.PVP, "auto-trap+", "Traps a target player. Adds an optional anti-cheat friendly support placement mode.");
+        super(THMAddon.PVP, "auto-trap+", "Builds traps around players and logout spots.");
     }
 
     @Override
     public void onActivate() {
-        target = null;
-        placePositions.clear();
-        timer = 0;
-        placedAny = false;
-        gapPos = null;
-        renderMap.clear();
-        trackedPlayers.clear();
-        pendingLogoutSpots.clear();
-        logoutManualPressed = false;
-        logoutTrapWasEnabled = logoutTrap.get();
-
-        if (logoutTrap.get()) seedPendingFromExistingLogoutSpots();
+        reset(mc.level);
     }
 
     @Override
     public void onDeactivate() {
-        placePositions.clear();
-        renderMap.clear();
-        trackedPlayers.clear();
-        pendingLogoutSpots.clear();
+        reset(null);
+    }
+
+    private void reset(ClientLevel world) {
+        level = world;
+        lastPlacementTick = ++tick;
+        target = null;
+        placedAny = false;
         logoutManualPressed = false;
-        logoutTrapWasEnabled = false;
+        placePositions.clear();
+        scheduled.clear();
+        renderMap.clear();
+        completedLogoutSpots.clear();
+        manualLogoutSpots.clear();
     }
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
-        if (logoutTrap.get() && !logoutTrapWasEnabled) {
-            seedPendingFromExistingLogoutSpots();
-        }
-        logoutTrapWasEnabled = logoutTrap.get();
-
-        if (logoutTrap.get()) updateLogoutTracking();
-
-        boolean hasPendingLogoutWork = logoutTrap.get() && !pendingLogoutSpots.isEmpty();
-        if (selfToggle.get() && placedAny && placePositions.isEmpty() && !hasPendingLogoutWork) {
-            placedAny = false;
-            toggle();
-            return;
-        }
-
-        // Find blocks in hotbar
-        FindItemResult block = InvUtils.findInHotbar(itemStack -> blocks.get().contains(Block.byItem(itemStack.getItem())));
-        if (!block.found()) return;
-
-        if (logoutTrap.get() && runLogoutTrapTick(block)) {
-            if (logoutOnly.get()) return;
-        } else if (logoutOnly.get()) {
-            target = null;
-            placePositions.clear();
-            return;
-        }
-
-        // Find targets
-        List<Player> targets = getTargets();
-        if (targets.isEmpty()) {
-            target = null;
-            placePositions.clear();
-            return;
-        }
-
-        boolean doPlace = timer >= delay.get();
-        int placedCount = 0;
-        LinkedHashSet<BlockPos> allPositions = new LinkedHashSet<>();
-
-        for (Player t : targets) {
-            target = t;
-
-            // Compute gap position (feet-level) to skip and to avoid filling with supports
-            gapPos = null;
-            if (gapSide.get() != GapSide.None) {
-                int feetY = (int) Math.floor(t.getBoundingBox().minY);
-                int gapY = heightMode.get() == HeightMode.Eye ? (int) Math.floor(t.getEyeY()) : feetY;
-                BlockPos center = BlockPos.containing(t.getX(), gapY, t.getZ());
-                gapPos = center.offset(getGapOffsetX(t), 0, getGapOffsetZ(t));
-            }
-
-            // Compute trap positions for this target
-            fillPlaceArray(t);
-            allPositions.addAll(placePositions);
-
-            // Place following sorted order (column-wise, respecting build order)
-            if (doPlace && !placePositions.isEmpty()) {
-                for (BlockPos placePos : placePositions) {
-                    if (placedCount >= blocksPerTick.get()) break;
-                    if (tryPlaceWithSupports(placePos, block)) {
-                        placedAny = true;
-                        placedCount++;
-                    }
-                }
-            }
-
-            if (placedCount >= blocksPerTick.get()) break;
-        }
-
+        if (mc.player == null || mc.level == null) return;
+        if (level != mc.level) reset(mc.level);
+        tick++;
+        scheduled.clear();
         placePositions.clear();
-        placePositions.addAll(allPositions);
+        batchLimit = tick > lastPlacementTick + delay.get()
+            ? Math.min(blocksPerTick.get(), PlacementUtils.remainingPlacementPackets(packet.mode())) : 0;
 
-        if (doPlace) timer = 0;
-        else timer++;
-    }
+        FindItemResult block = InvUtils.findInHotbar(stack -> blocks.get().contains(Block.byItem(stack.getItem())));
+        boolean logoutWork = logoutTrap.get() && runLogoutTraps(block);
 
-    private boolean runLogoutTrapTick(FindItemResult block) {
-        List<LogoutSpotData> spotsToProcess = new ArrayList<>();
-
-        if (logoutTrapMode.get() == LogoutTrapMode.Auto) {
-            if (!pendingLogoutSpots.isEmpty()) spotsToProcess.addAll(pendingLogoutSpots);
-        } else {
-            if (logoutTrapKeybind.get().isPressed() && mc.gui.screen() == null) {
-                if (!logoutManualPressed) {
-                    logoutManualPressed = true;
-                    if (!pendingLogoutSpots.isEmpty()) spotsToProcess.addAll(pendingLogoutSpots);
-                }
-            } else {
-                logoutManualPressed = false;
+        target = null;
+        boolean liveWork = false;
+        if (!logoutOnly.get()) {
+            for (Player player : getTargets()) {
+                if (target == null) target = player;
+                AABB body = player.getBoundingBox();
+                int eyeY = Mth.floor(player.getEyeY());
+                liveWork |= runTrap(body, eyeY, gapPosition(body, eyeY), block);
             }
         }
 
-        if (spotsToProcess.isEmpty()) return false;
+        if (selfToggle.get() && placedAny && !liveWork && !logoutWork) toggle();
+    }
 
-        boolean doPlace = timer >= delay.get();
-        if (!doPlace) {
-            fillPlaceArrayForLogoutSpot(spotsToProcess.getFirst());
-            timer++;
-            return true;
-        }
+    private boolean runLogoutTraps(FindItemResult block) {
+        LogoutSpots module = Modules.get().get(LogoutSpots.class);
+        if (!(module instanceof LogoutSpotsPlayers accessor) || !module.isActive()) return false;
 
-        int placedCount = 0;
-        LinkedHashSet<BlockPos> allPositions = new LinkedHashSet<>();
-        List<LogoutSpotData> remaining = new ArrayList<>();
+        Set<UUID> currentSpots = new HashSet<>();
+        boolean manual = logoutTrapMode.get() == LogoutTrapMode.Manual;
+        boolean pressed = manual && mc.gui.screen() == null && logoutTrapKeybind.get().isPressed();
+        boolean queue = pressed && !logoutManualPressed;
+        logoutManualPressed = pressed;
+        boolean unfinished = false;
 
-        for (int i = 0; i < spotsToProcess.size(); i++) {
-            LogoutSpotData spot = spotsToProcess.get(i);
-            target = null;
-            gapPos = null;
-            fillPlaceArrayForLogoutSpot(spot);
-            allPositions.addAll(placePositions);
-
-            if (!placePositions.isEmpty()) {
-                for (BlockPos placePos : placePositions) {
-                    if (placedCount >= blocksPerTick.get()) break;
-                    if (tryPlaceWithSupports(placePos, block)) {
-                        placedAny = true;
-                        placedCount++;
-                    }
-                }
+        for (Object value : accessor.thm$getPlayers()) {
+            if (!(value instanceof LogoutSpotsPoseData spot)) continue;
+            if (Friends.get().get(spot.thm$getName()) != null) continue;
+            UUID id = spot.thm$getUuid();
+            currentSpots.add(id);
+            if (completedLogoutSpots.contains(id)) continue;
+            if (queue) manualLogoutSpots.add(id);
+            if (manual && !manualLogoutSpots.contains(id)) {
+                unfinished = true;
+                continue;
             }
 
-            // Recompute after placements; keep queued until the spot is actually fully trapped.
-            fillPlaceArrayForLogoutSpot(spot);
-            if (!placePositions.isEmpty() || hasUnfilledLogoutTrapPositions(spot)) remaining.add(spot);
-
-            if (placedCount >= blocksPerTick.get()) {
-                int nextIndex = i + 1;
-                for (int j = nextIndex; j < spotsToProcess.size(); j++) remaining.add(spotsToProcess.get(j));
-                break;
+            double x = spot.thm$getX(), y = spot.thm$getY(), z = spot.thm$getZ();
+            AABB body = new AABB(x, y, z, x + spot.thm$getXWidth(), y + spot.thm$getHeight(), z + spot.thm$getZWidth());
+            int eyeY = Mth.floor(body.maxY - 0.18);
+            if (runTrap(body, eyeY, null, block)) unfinished = true;
+            else {
+                completedLogoutSpots.add(id);
+                manualLogoutSpots.remove(id);
             }
         }
 
-        pendingLogoutSpots.clear();
-        pendingLogoutSpots.addAll(remaining);
-
-        placePositions.clear();
-        placePositions.addAll(allPositions);
-
-        timer = 0;
-
-        return true;
-    }
-
-    private void updateLogoutTracking() {
-        if (!isLogoutSpotsModuleActive()) return;
-
-        Set<UUID> aliveNow = new HashSet<>();
-        List<Player> currentPlayers = getTargets();
-        for (Player player : currentPlayers) {
-            aliveNow.add(player.getUUID());
-            trackedPlayers.put(player.getUUID(), new LogoutSpotData(
-                player.getUUID(),
-                EntityUtils.getName(player),
-                BlockPos.containing(player.getX(), Math.floor(player.getBoundingBox().minY), player.getZ()),
-                player.getEyeY()
-            ));
-        }
-
-        Iterator<Map.Entry<UUID, LogoutSpotData>> it = trackedPlayers.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<UUID, LogoutSpotData> entry = it.next();
-            if (aliveNow.contains(entry.getKey())) continue;
-            queueLogoutSpot(entry.getValue());
-            it.remove();
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private void seedPendingFromExistingLogoutSpots() {
-        try {
-            Class<?> clazz = Class.forName("meteordevelopment.meteorclient.systems.modules.render.LogoutSpots");
-            if (!Module.class.isAssignableFrom(clazz)) return;
-
-            Module module = Modules.get().get((Class<? extends Module>) clazz);
-            if (!(module instanceof LogoutSpotsPlayers accessor) || !module.isActive()) return;
-
-            for (Object entryObj : accessor.thm$getPlayers()) {
-                if (!(entryObj instanceof LogoutSpotsPoseData entry)) continue;
-
-                String name = entryObj instanceof LogoutSpotsPoseData poseData
-                    ? poseData.thm$getName()
-                    : "logout-spot";
-
-                double centerX = entry.thm$getX() + entry.thm$getXWidth() / 2.0;
-                double centerZ = entry.thm$getZ() + entry.thm$getZWidth() / 2.0;
-                double feetY = entry.thm$getY();
-                double eyeY = feetY + Math.max(1.0, entry.thm$getHeight() - 0.18);
-
-                queueLogoutSpot(new LogoutSpotData(
-                    entry.thm$getUuid(),
-                    name,
-                    BlockPos.containing(centerX, feetY, centerZ),
-                    eyeY
-                ));
-            }
-        } catch (ClassNotFoundException ignored) {
-        }
-    }
-
-    private void queueLogoutSpot(LogoutSpotData spot) {
-        for (LogoutSpotData queued : pendingLogoutSpots) {
-            if (queued.playerId.equals(spot.playerId)) return;
-        }
-        pendingLogoutSpots.add(spot);
-    }
-
-    @SuppressWarnings("unchecked")
-    private boolean isLogoutSpotsModuleActive() {
-        try {
-            Class<?> clazz = Class.forName("meteordevelopment.meteorclient.systems.modules.render.LogoutSpots");
-            if (!Module.class.isAssignableFrom(clazz)) return false;
-            return Modules.get().isActive((Class<? extends Module>) clazz);
-        } catch (ClassNotFoundException ignored) {
-            return false;
-        }
+        completedLogoutSpots.retainAll(currentSpots);
+        manualLogoutSpots.retainAll(currentSpots);
+        return unfinished;
     }
 
     private List<Player> getTargets() {
@@ -535,256 +397,172 @@ public class AutoTrapPlus extends Module {
         return players;
     }
 
-    private boolean tryPlaceWithSupports(BlockPos placePos, FindItemResult block) {
-        if (isBlockedByOtherEntity(placePos, target)) return false;
-        // Direct place if allowed
-        if (airPlace.get() || PlacementUtils.getPlaceSide(placePos) != null) {
-            if (placeBlock(placePos, block)) {
-                markPlaced(placePos);
-                return true;
-            }
-            return false;
+    private boolean runTrap(AABB body, int eyeY, BlockPos gap, FindItemResult block) {
+        HeightMode height = heightMode.get();
+        Set<BlockPos> shape = plan(body, eyeY, height, topPlacement.get(), antiStep.get());
+        shape.remove(gap);
+        boolean unfinished = false;
+        List<BlockPos> candidates = new ArrayList<>();
+        for (BlockPos pos : shape) {
+            if (!level.getBlockState(pos).canBeReplaced()) continue;
+            unfinished = true;
+            if (!canPlace(pos) || !inRange(Vec3.atCenterOf(pos))) continue;
+            candidates.add(pos);
         }
 
-        if (!mc.level.getBlockState(placePos).canBeReplaced()) return false;
+        boolean air = airPlace.get();
+        int feetY = Mth.floor(body.minY + 1e-7);
+        int roofY = Mth.ceil(body.maxY - 1e-7);
+        int headWallY = height == HeightMode.Eye ? eyeY : Math.min(feetY + 1, roofY - 1);
+        candidates.sort(placementOrder(mc.player.getEyePosition(), buildOrder.get(), air, headWallY, roofY));
+        placePositions.addAll(candidates);
 
-        // Build candidate directions with outward first, then others
-        net.minecraft.core.Direction outward = net.minecraft.core.Direction.NORTH;
-        if (target != null) {
-            BlockPos center = BlockPos.containing(target.getX(), Math.floor(target.getBoundingBox().minY), target.getZ());
-            int dx = placePos.getX() - center.getX();
-            int dz = placePos.getZ() - center.getZ();
-            if (Math.abs(dx) >= Math.abs(dz)) outward = dx > 0 ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST;
-            else outward = dz > 0 ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH;
+        if (!block.found() || scheduled.size() >= batchLimit) return unfinished;
+        List<BlockPos> unsupported = new ArrayList<>();
+        for (BlockPos pos : candidates) {
+            if (scheduled.size() >= batchLimit) break;
+            Direction side = PlacementUtils.getPlaceSide(pos);
+            if (side == null && !air) unsupported.add(pos);
+            else placeBlock(pos, side, block);
         }
-
-        net.minecraft.core.Direction[] dirs = new net.minecraft.core.Direction[] {
-            outward,
-            outward.getClockWise(),
-            outward.getCounterClockWise(),
-            outward.getOpposite()
-        };
-
-        BlockPos support = PlacementUtils.findSupportStep(placePos, dirs, 2, pos ->
-            (gapPos == null || !pos.atY(gapPos.getY()).equals(gapPos))
-                && mc.level.getWorldBorder().isWithinBounds(pos) && !isOutOfRange(pos)
-                && BlockUtils.canPlace(pos) && !isBlockedByOtherEntity(pos, target),
-            pos -> PlacementUtils.getPlaceSide(pos) != null);
-        if (support == null || !placeBlock(support, block)) return false;
-        markPlaced(support);
-        return true;
-    }
-
-    private boolean placeBlock(BlockPos pos, FindItemResult block) {
-        if (packet.get()) {
-            if (packetOnce.get() && !PacketPlaceTracker.canSend(pos)) return false;
-            boolean placed = PlacementUtils.placeBlockPacket(pos, block, rotate.get(), 50, airPlace.get());
-            if (placed && packetOnce.get()) PacketPlaceTracker.markSent(pos, PacketPlaceTracker.DEFAULT_RESEND_TICKS);
-            return placed;
-        }
-        if (airPlace.get() && PlacementUtils.getPlaceSide(pos) == null) return BlockUtils.place(pos, block, rotate.get(), 50, true);
-        return PlacementUtils.placeOnSolidSide(this, pos, block, rotate.get(), 50);
-    }
-
-    // Removed old helper methods for broad support search to keep logic minimal
-
-    private void fillPlaceArray(Player t) {
-        placePositions.clear();
-
-        double epsilon = 1e-5;
-        AABB box = t.getBoundingBox();
-        List<BlockPos> corners = new ArrayList<>();
-        corners.add(BlockPos.containing(box.minX, box.minY, box.minZ));
-        corners.add(BlockPos.containing(box.minX, box.minY, box.maxZ - epsilon));
-        corners.add(BlockPos.containing(box.maxX - epsilon, box.minY, box.minZ));
-        corners.add(BlockPos.containing(box.maxX - epsilon, box.minY, box.maxZ - epsilon));
-
-        Set<BlockPos> overlappedPositions = new LinkedHashSet<>(corners);
-        for (BlockPos base : overlappedPositions) {
-            if (heightMode.get() == HeightMode.Eye) {
-                int eyeY = (int) Math.floor(t.getEyeY());
-                BlockPos eyeBase = new BlockPos(base.getX(), eyeY, base.getZ());
-                // Eye-height ring
-                add(eyeBase.offset(1, 0, 0));
-                add(eyeBase.offset(-1, 0, 0));
-                add(eyeBase.offset(0, 0, -1));
-                add(eyeBase.offset(0, 0, 1));
-                // Top block above eye height to prevent jumping
-                add(eyeBase.offset(0, 1, 0));
+        for (BlockPos pos : unsupported) {
+            if (scheduled.size() >= batchLimit) break;
+            Direction side = PlacementUtils.getPlaceSide(pos);
+            if (side != null) {
+                placeBlock(pos, side, block);
                 continue;
             }
+            Vec3 center = body.getCenter();
+            Direction outward = Direction.getApproximateNearest(pos.getX() + 0.5 - center.x, 0, pos.getZ() + 0.5 - center.z);
+            if (outward.getAxis().isVertical()) outward = Direction.NORTH;
+            Direction[] sides = {outward, outward.getClockWise(), outward.getCounterClockWise(), outward.getOpposite(), Direction.DOWN, Direction.UP};
+            BlockPos support = PlacementUtils.findSupportStep(pos, sides, 3, next ->
+                (gap == null || !next.atY(gap.getY()).equals(gap))
+                    && !body.intersects(new AABB(next)) && canPlace(next) && inRange(Vec3.atCenterOf(next)),
+                next -> {
+                    Direction supportSide = PlacementUtils.getPlaceSide(next);
+                    return supportSide != null && inRange(PlacementUtils.packetPlacementHit(next, supportSide).getLocation());
+                });
+            if (support != null) placeBlock(support, PlacementUtils.getPlaceSide(support), block);
+        }
+        return unfinished;
+    }
 
-            switch (topPlacement.get()) {
-                case Full -> {
-                    add(base.offset(0, 2, 0));
-                    add(base.offset(1, 1, 0));
-                    add(base.offset(-1, 1, 0));
-                    add(base.offset(0, 1, 1));
-                    add(base.offset(0, 1, -1));
-                }
-                case Face -> {
-                    add(base.offset(1, 1, 0));
-                    add(base.offset(-1, 1, 0));
-                    add(base.offset(0, 1, 1));
-                    add(base.offset(0, 1, -1));
-                }
-                case Top -> add(base.offset(0, 2, 0));
-                case None -> {}
+    private boolean canPlace(BlockPos pos) {
+        return level.getWorldBorder().isWithinBounds(pos) && level.getChunkSource().hasChunk(pos.getX() >> 4, pos.getZ() >> 4)
+            && BlockUtils.canPlace(pos);
+    }
+
+    private void placeBlock(BlockPos pos, Direction side, FindItemResult block) {
+        var mode = packet.mode();
+        boolean packetOnly = mode.isPacket();
+        if (packetOnly && packetOnce.get() && !PacketPlaceTracker.canSend(pos)) return;
+        BlockHitResult hit = PlacementUtils.packetPlacementHit(pos, side);
+        if (!inRange(hit.getLocation()) || !scheduled.add(pos)) return;
+
+        var player = mc.player;
+        var world = level;
+        long queuedTick = tick;
+        InteractionHand hand = block.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        Runnable action = () -> {
+            boolean[] sent = {false};
+            try {
+                if (!isActive() || queuedTick != tick || mc.player != player || mc.level != world
+                    || mode != packet.mode() || PlacementUtils.remainingPlacementPackets(packet.mode()) == 0 || !canPlace(pos)
+                    || PlacementUtils.getPlaceSide(pos) != side || side == null && !airPlace.get()
+                    || !inRange(hit.getLocation()) || packetOnly && packetOnce.get() && !PacketPlaceTracker.canSend(pos)) return;
+
+                Runnable send = () -> {
+                    var stack = block.isOffhand() ? player.getOffhandItem() : player.getInventory().getItem(block.slot());
+                    if (!blocks.get().contains(Block.byItem(stack.getItem()))) return;
+                    if (packetOnly) {
+                        sent[0] = PlacementUtils.sendPlacementPacket(new ServerboundUseItemOnPacket(hand, hit, 0), mode);
+                        if (sent[0]) player.connection.send(new ServerboundSwingPacket(hand));
+                    } else sent[0] = PlacementUtils.interactPlacement(pos, hit, hand, true);
+                };
+                if (hand == InteractionHand.OFF_HAND) send.run();
+                else InventoryManager.withItem(this, block.slot(), packetOnly, SwapManager.SURROUND, send);
+                if (!sent[0]) return;
+
+                if (packetOnly && packetOnce.get()) PacketPlaceTracker.markSent(pos, PacketPlaceTracker.DEFAULT_RESEND_TICKS);
+                placedAny = true;
+                lastPlacementTick = tick;
+                if (render.get()) renderMap.put(pos, System.currentTimeMillis());
+            } finally {
+                if (!sent[0] && queuedTick == tick) scheduled.remove(pos);
             }
-            // Bottom - always Full: platform below (y -1) and full ring at feet level (y 0)
-            add(base.offset(0, -1, 0));
-            add(base.offset(1, -1, 0));
-            add(base.offset(-1, -1, 0));
-            add(base.offset(0, -1, 1));
-            add(base.offset(0, -1, -1));
-
-            add(base.offset(1, 0, 0));
-            add(base.offset(-1, 0, 0));
-            add(base.offset(0, 0, -1));
-            add(base.offset(0, 0, 1));
-        }
-
-        // Apply gap: remove only the feet-level block on the chosen side
-        if (gapSide.get() != GapSide.None) {
-            if (gapPos != null) placePositions.remove(gapPos);
-        }
-        // Column-wise build order: group by exact (x,z), then order Y strictly by buildOrder
-        boolean bottomToTop = buildOrder.get() == BuildOrder.BottomToTop;
-        placePositions.sort((a, b) -> {
-            if (a.getX() != b.getX()) return Integer.compare(a.getX(), b.getX());
-            if (a.getZ() != b.getZ()) return Integer.compare(a.getZ(), b.getZ());
-            return bottomToTop ? Integer.compare(a.getY(), b.getY()) : Integer.compare(b.getY(), a.getY());
-        });
+        };
+        if (rotate.get()) Rotations.rotate(Rotations.getYaw(hit.getLocation()), Rotations.getPitch(hit.getLocation()), 50, action);
+        else action.run();
     }
 
-    private void add(BlockPos blockPos) {
-        if (placePositions.contains(blockPos)) return;
-        if (!canQueue(blockPos)) return;
-        if (isOutOfRange(blockPos)) return;
-        placePositions.add(blockPos);
+    static Comparator<BlockPos> placementOrder(Vec3 eye, BuildOrder order, boolean air, int headWallY, int roofY) {
+        Comparator<BlockPos> heightOrder = Comparator.comparingInt(BlockPos::getY);
+        if (order == BuildOrder.TopToBottom) heightOrder = heightOrder.reversed();
+        Comparator<BlockPos> columns = Comparator.<BlockPos>comparingDouble(pos ->
+            Mth.square(pos.getX() + 0.5 - eye.x) + Mth.square(pos.getZ() + 0.5 - eye.z)).thenComparing(heightOrder);
+        if (!air) return columns;
+        return Comparator.<BlockPos>comparingInt(pos -> {
+            if (pos.getY() == headWallY) return 0;
+            if (pos.getY() == roofY) return 1;
+            return 2;
+        }).thenComparing(columns);
     }
 
-    private void fillPlaceArrayForLogoutSpot(LogoutSpotData spot) {
-        placePositions.clear();
-
-        BlockPos base = spot.feetPos;
-        if (heightMode.get() == HeightMode.Eye) {
-            int eyeY = (int) Math.floor(spot.eyeY);
-            BlockPos eyeBase = new BlockPos(base.getX(), eyeY, base.getZ());
-            add(eyeBase.offset(1, 0, 0));
-            add(eyeBase.offset(-1, 0, 0));
-            add(eyeBase.offset(0, 0, -1));
-            add(eyeBase.offset(0, 0, 1));
-            add(eyeBase.offset(0, 1, 0));
-        } else {
-            switch (topPlacement.get()) {
-                case Full -> {
-                    add(base.offset(0, 2, 0));
-                    add(base.offset(1, 1, 0));
-                    add(base.offset(-1, 1, 0));
-                    add(base.offset(0, 1, 1));
-                    add(base.offset(0, 1, -1));
+    static Set<BlockPos> plan(AABB body, int eyeY, HeightMode height, TopMode top, boolean antiStep) {
+        int feetY = Mth.floor(body.minY + 1e-7);
+        int roofY = Mth.ceil(body.maxY - 1e-7);
+        Set<BlockPos> feet = PlacementUtils.horizontalFootprint(body, feetY);
+        Set<BlockPos> result = new LinkedHashSet<>();
+        for (BlockPos foot : feet) {
+            for (Direction side : Direction.Plane.HORIZONTAL) {
+                BlockPos edge = foot.relative(side);
+                if (feet.contains(edge)) continue;
+                if (height == HeightMode.Eye) {
+                    result.add(edge.atY(eyeY));
+                } else {
+                    result.add(edge.below());
+                    result.add(edge);
+                    if (roofY > feetY + 1 && (top == TopMode.Full || top == TopMode.Face)) result.add(edge.above());
                 }
-                case Face -> {
-                    add(base.offset(1, 1, 0));
-                    add(base.offset(-1, 1, 0));
-                    add(base.offset(0, 1, 1));
-                    add(base.offset(0, 1, -1));
-                }
-                case Top -> add(base.offset(0, 2, 0));
-                case None -> {}
             }
-            add(base.offset(0, -1, 0));
-            add(base.offset(1, -1, 0));
-            add(base.offset(-1, -1, 0));
-            add(base.offset(0, -1, 1));
-            add(base.offset(0, -1, -1));
-
-            add(base.offset(1, 0, 0));
-            add(base.offset(-1, 0, 0));
-            add(base.offset(0, 0, -1));
-            add(base.offset(0, 0, 1));
+            if (height == HeightMode.Feet) result.add(foot.below());
+            if (height == HeightMode.Eye || top == TopMode.Full || top == TopMode.Top) result.add(foot.atY(roofY));
+            if (antiStep) result.add(foot.atY(roofY + 1));
         }
-
-        boolean bottomToTop = buildOrder.get() == BuildOrder.BottomToTop;
-        placePositions.sort((a, b) -> {
-            if (a.getX() != b.getX()) return Integer.compare(a.getX(), b.getX());
-            if (a.getZ() != b.getZ()) return Integer.compare(a.getZ(), b.getZ());
-            return bottomToTop ? Integer.compare(a.getY(), b.getY()) : Integer.compare(b.getY(), a.getY());
-        });
+        return result;
     }
 
-    private boolean hasUnfilledLogoutTrapPositions(LogoutSpotData spot) {
-        BlockPos base = spot.feetPos;
-
-        if (heightMode.get() == HeightMode.Eye) {
-            int eyeY = (int) Math.floor(spot.eyeY);
-            BlockPos eyeBase = new BlockPos(base.getX(), eyeY, base.getZ());
-            return isTrapPosUnfilled(eyeBase.offset(1, 0, 0))
-                || isTrapPosUnfilled(eyeBase.offset(-1, 0, 0))
-                || isTrapPosUnfilled(eyeBase.offset(0, 0, -1))
-                || isTrapPosUnfilled(eyeBase.offset(0, 0, 1))
-                || isTrapPosUnfilled(eyeBase.offset(0, 1, 0));
-        }
-
-        if (topPlacement.get() == TopMode.Full || topPlacement.get() == TopMode.Top) {
-            if (isTrapPosUnfilled(base.offset(0, 2, 0))) return true;
-        }
-        if (topPlacement.get() == TopMode.Full || topPlacement.get() == TopMode.Face) {
-            if (isTrapPosUnfilled(base.offset(1, 1, 0))) return true;
-            if (isTrapPosUnfilled(base.offset(-1, 1, 0))) return true;
-            if (isTrapPosUnfilled(base.offset(0, 1, 1))) return true;
-            if (isTrapPosUnfilled(base.offset(0, 1, -1))) return true;
-        }
-
-        return isTrapPosUnfilled(base.offset(0, -1, 0))
-            || isTrapPosUnfilled(base.offset(1, -1, 0))
-            || isTrapPosUnfilled(base.offset(-1, -1, 0))
-            || isTrapPosUnfilled(base.offset(0, -1, 1))
-            || isTrapPosUnfilled(base.offset(0, -1, -1))
-            || isTrapPosUnfilled(base.offset(1, 0, 0))
-            || isTrapPosUnfilled(base.offset(-1, 0, 0))
-            || isTrapPosUnfilled(base.offset(0, 0, -1))
-            || isTrapPosUnfilled(base.offset(0, 0, 1));
+    private boolean inRange(Vec3 click) {
+        Vec3 eye = mc.player.getEyePosition();
+        double distance = eye.distanceToSqr(click);
+        if (distance > Mth.square(placeRange.get())) return false;
+        if (distance <= Mth.square(placeWallsRange.get())) return true;
+        BlockHitResult trace = level.clip(new ClipContext(eye, click, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player));
+        return trace.getType() == HitResult.Type.MISS || trace.getLocation().distanceToSqr(click) < 1e-6;
     }
 
-    private boolean isTrapPosUnfilled(BlockPos pos) {
-        return mc.level.getBlockState(pos).canBeReplaced();
+    private BlockPos gapPosition(AABB body, int eyeY) {
+        Vec3 center = body.getCenter();
+        Vec3 offset = mc.player.position().subtract(center);
+        Direction side = switch (gapSide.get()) {
+            case None -> null;
+            case North -> Direction.NORTH;
+            case South -> Direction.SOUTH;
+            case East -> Direction.EAST;
+            case West -> Direction.WEST;
+            case TowardPlayer -> Direction.getApproximateNearest(offset.x, 0, offset.z);
+        };
+        if (side == null || side.getAxis().isVertical()) return null;
+        int y = heightMode.get() == HeightMode.Eye ? eyeY : Mth.floor(body.minY + 1e-7);
+        return switch (side) {
+            case NORTH -> new BlockPos(Mth.floor(center.x), y, Mth.floor(body.minZ + 1e-7) - 1);
+            case SOUTH -> new BlockPos(Mth.floor(center.x), y, Mth.ceil(body.maxZ - 1e-7));
+            case WEST -> new BlockPos(Mth.floor(body.minX + 1e-7) - 1, y, Mth.floor(center.z));
+            case EAST -> new BlockPos(Mth.ceil(body.maxX - 1e-7), y, Mth.floor(center.z));
+            default -> null;
+        };
     }
-
-    private boolean canQueue(BlockPos pos) {
-        // Allow positions without neighbors; supports/air-place handle those later.
-        if (!mc.level.getBlockState(pos).canBeReplaced()) return false;
-        // Ignore entity collisions here so straddling targets still queue correctly.
-        if (!mc.level.isUnobstructed(Blocks.OBSIDIAN.defaultBlockState(), pos, CollisionContext.empty())) return false;
-        return !isBlockedByOtherEntity(pos, target);
-    }
-
-    private boolean isBlockedByOtherEntity(BlockPos pos, Player allowed) {
-        AABB checkBox = new AABB(pos);
-        List<net.minecraft.world.entity.Entity> entities = mc.level.getEntities(null, checkBox);
-        for (net.minecraft.world.entity.Entity entity : entities) {
-            if (entity == allowed) continue;
-            if (!entity.isSpectator() && entity.isAlive()) return true;
-        }
-        return false;
-    }
-
-    private void markPlaced(BlockPos pos) {
-        if (render.get()) renderMap.put(pos, System.currentTimeMillis());
-    }
-
-    private boolean isOutOfRange(BlockPos blockPos) {
-        Vec3 pos = net.minecraft.world.phys.Vec3.atCenterOf(blockPos);
-        if (!PlayerUtils.isWithin(pos, placeRange.get())) return true;
-
-        ClipContext raycastContext = new ClipContext(mc.player.getEyePosition(), pos, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
-        BlockHitResult result = mc.level.clip(raycastContext);
-        if (result == null || !result.getBlockPos().equals(blockPos)) return !PlayerUtils.isWithin(pos, placeWallsRange.get());
-        return false;
-    }
-
-    // Removed unused isAirPlace()
 
     @Override
     public String getInfoString() {
@@ -809,42 +587,6 @@ public class AutoTrapPlus extends Module {
 
             RenderUtilsTHM.renderBlockFaded(event, pos, sideColor.get(), lineColor.get(), shapeMode.get(), progress);
         });
-    }
-
-    private int getGapOffsetX(Player t) {
-        return switch (gapSide.get()) {
-            case East -> 1;
-            case West -> -1;
-            case South, North -> 0;
-            case TowardPlayer -> {
-                //? if >=1.21.9 {
-                Vec3 toPlayer = mc.player.position().subtract(t.position());
-                //?} else
-                /*Vec3d toPlayer = mc.player.getPos().subtract(t.getPos());
-                */
-                if (Math.abs(toPlayer.x) >= Math.abs(toPlayer.z)) yield toPlayer.x > 0 ? 1 : -1;
-                else yield 0;
-            }
-            case None -> 0;
-        };
-    }
-
-    private int getGapOffsetZ(Player t) {
-        return switch (gapSide.get()) {
-            case South -> 1;
-            case North -> -1;
-            case East, West -> 0;
-            case TowardPlayer -> {
-                //? if >=1.21.9 {
-                Vec3 toPlayer = mc.player.position().subtract(t.position());
-                //?} else
-                /*Vec3d toPlayer = mc.player.getPos().subtract(t.getPos());
-                */
-                if (Math.abs(toPlayer.z) > Math.abs(toPlayer.x)) yield toPlayer.z > 0 ? 1 : -1;
-                else yield 0;
-            }
-            case None -> 0;
-        };
     }
 
     public enum TopMode implements DescribedOption {
@@ -876,8 +618,6 @@ public class AutoTrapPlus extends Module {
             };
         }
     }
-
-    // Bottom mode is fixed to Full; enum removed
 
     public enum GapSide implements DescribedOption {
         None,
@@ -924,8 +664,5 @@ public class AutoTrapPlus extends Module {
                 case Manual -> "Trap logout spots when the keybind is pressed.";
             };
         }
-    }
-
-    private record LogoutSpotData(UUID playerId, String playerName, BlockPos feetPos, double eyeY) {
     }
 }

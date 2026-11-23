@@ -1,8 +1,16 @@
 /*
- * This file is part of THM Addons — https://github.com/Leonn170709/THM-Addons
+ * This file is part of THM Addons — https://github.com/Magnus-Krill/THM-Addons
  * Copyright (c) THM Addons contributors. Credit the devs, keep the link.
  * By using this code you agree to the license terms and to keep your repo public.
+By using this code you agree to the license terms and to keep your repo public.
+
  */
+
+
+
+
+
+
 
 package xyz.thm.addon;
 
@@ -44,6 +52,8 @@ class MinecraftStartupTest {
         Path launch = Path.of(System.getProperty("thm.startup.command"));
         Path run = Files.createTempDirectory(launch.getParent(), "run-");
         Path log = run.resolve("console.log");
+        // Meteor enables Discord Presence on first run if its config directory is absent.
+        Files.createDirectory(run.resolve("meteor-client"));
         Files.writeString(run.resolve("options.txt"), """
             version:%d
             onboardAccessibility:false
