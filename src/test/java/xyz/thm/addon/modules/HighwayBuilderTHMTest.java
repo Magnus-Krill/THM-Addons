@@ -634,6 +634,14 @@ class HighwayBuilderTHMTest {
     }
 
     @Test
+    void enclosureRetriesWaitForBothTheGracePeriodAndPacketTracker() {
+        var attempt = new HighwayBuilderTHM.EnclosureAttempt(10, false, false);
+        assertTrue(attempt.isPending(1_000_000_009L, true));
+        assertTrue(attempt.isPending(1_000_000_010L, false));
+        assertFalse(attempt.isPending(1_000_000_010L, true));
+    }
+
+    @Test
     void safetyEnclosureCoversAllFourSidesAtFeetAndHeadWithoutTouchingFloor() {
         BlockPos anchor = new BlockPos(-17, 119, 23);
         var targets = HighwayBuilderTHM.tpsSafetyTargets(anchor);

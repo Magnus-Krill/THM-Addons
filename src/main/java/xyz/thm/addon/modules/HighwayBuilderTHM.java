@@ -216,7 +216,7 @@ public class HighwayBuilderTHM extends Module {
     private static final String STATS_SHADOW_FILE_NAME = "highwaybuildersettings.shadow";
     private static final int STATS_GCM_TAG_BITS = 128;
     private static final int STATS_GCM_NONCE_BYTES = 12;
-    private static final int ENCLOSURE_PLACE_CREDIT_SCALE = 10;
+    private static final long ENCLOSURE_CONFIRM_NANOS = 1_000_000_000L;
     private static final int RESTOCK_WATCHDOG_LOCAL_RETRY_MAX = 3;
     private static final int RESTOCK_WATCHDOG_RECOVERY_DELAY_TICKS = 40;
     private static final int RESTOCK_WATCHDOG_SETUP_TIMEOUT_TICKS = 600;
@@ -327,6 +327,18 @@ public class HighwayBuilderTHM extends Module {
             return switch (this) {
                 case Teleport -> "Snap to the block center.";
                 case Walk -> "Walk to the block center.";
+            };
+        }
+    }
+
+    public enum EnclosurePlacement implements DescribedOption {
+        Normal, Pace;
+
+        @Override
+        public String description() {
+            return switch (this) {
+                case Normal -> "Place one enclosure block per tick.";
+                case Pace -> "Use the shared packet budget to place multiple enclosure blocks.";
             };
         }
     }
@@ -1555,6 +1567,13 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
+    private final Setting<EnclosurePlacement> enclosurePlacement = sgInventory.add(new EnumSetting.Builder<EnclosurePlacement>()
+        .name("enclosure-placement")
+        .description("How restock and KitBot enclosure blocks are placed.")
+        .defaultValue(EnclosurePlacement.Pace)
+        .build()
+    );
+
     public final Setting<Boolean> manageHotbar = sgInventory.add(new BoolSetting.Builder()
         .name("Manage-hotbar")
         .description("Keeps highway supplies ready in the hotbar.")
@@ -2073,7 +2092,6 @@ public class HighwayBuilderTHM extends Module {
     private BlockPos tpsSafetyEnclosureAnchor;
     private final ArrayDeque<BlockPos> tpsSafetyEnclosureTargets = new ArrayDeque<>();
     private final Set<BlockPos> tpsSafetyPlacedBlocks = new LinkedHashSet<>();
-    private int enclosurePlaceCreditTenths;
     private final Set<BlockPos> countedBrokenForwardPositions = new HashSet<>();
     private final Set<BlockPos> countedPlacedForwardPositions = new HashSet<>();
     private final Map<BlockPos, ForwardBreakStatCredit> pendingForwardBreakCredits = new HashMap<>();
@@ -2132,6 +2150,8 @@ public class HighwayBuilderTHM extends Module {
     private BlockPos centerTeleportBlockedTarget;
     private String centerTeleportBlockedReason = "";
     private State pendingEnclosurePlacementConfirmState;
+    private State enclosurePlacementOwner;
+    private final Map<BlockPos, EnclosureAttempt> enclosureAttempts = new HashMap<>();
     private boolean pendingEnclosurePlacementObsidian;
     private BlockPos pendingEnclosurePlacementConfirmPos;
     private BlockState pendingEnclosureServerState;
@@ -3310,7 +3330,6 @@ public class HighwayBuilderTHM extends Module {
         mineFractionCarry[0] = 0.0;
         placeActionsThisTick = Math.max(0, (int) Math.floor(basePlacementsPerTick()));
         placeFractionCarry[0] = 0.0;
-        resetEnclosurePlaceCredit();
         clearEnclosurePlacementConfirmation();
         clearDesyncWiggleProbe("module-activate");
         lastForwardDesyncWiggleEpisodeId = Integer.MIN_VALUE;
@@ -3393,7 +3412,6 @@ public class HighwayBuilderTHM extends Module {
         placeFractionCarry[0] = 0.0;
         resetTpsThrottleRuntime();
         clearSafetyRuntime("module-deactivate");
-        resetEnclosurePlaceCredit();
         clearEnclosurePlacementConfirmation();
         lastForwardDesyncWiggleEpisodeId = Integer.MIN_VALUE;
         restockWatchdog.reset("module-deactivate");
@@ -5531,6 +5549,8 @@ public class HighwayBuilderTHM extends Module {
             pendingPacketDigs.clear();
             packetDigLevel = mc.level;
             lastEChestServerAirNanos = 0;
+            enclosureAttempts.clear();
+            enclosurePlacementOwner = null;
         }
         pendingPacketDigs.expire(rateNow, pos -> mc.level.hasChunk(pos.getX() >> 4, pos.getZ() >> 4));
         pendingBlockPlacements.confirm(rateNow,
@@ -5700,7 +5720,6 @@ public class HighwayBuilderTHM extends Module {
         }
         applyPacketBudget();
         tickDoubleMine();
-        accrueEnclosurePlaceCredit();
         enforceKitbotFoodRestockFoodType();
         maybeQueuePickaxeRestock();
         maybeQueueEnderChestReserveRestock();
@@ -6479,7 +6498,6 @@ public class HighwayBuilderTHM extends Module {
 
         placeTimer = breakTimer = count = syncId = 0;
         forwardMineCount = forwardPlaceCount = 0;
-        resetEnclosurePlaceCredit();
         clearEnclosurePlacementConfirmation();
         restockWatchdog.reset("update-variables");
         countedBrokenForwardPositions.clear();
@@ -7144,7 +7162,6 @@ public class HighwayBuilderTHM extends Module {
         clearKitbotEnclosureState(reason);
         kitbotOrderResumeAfterCenter = false;
         clearEnclosurePlacementConfirmation();
-        resetEnclosurePlaceCredit();
         kitbotUpdateOnFinishActive = false;
         kitbotUpdateOnFinishStartTick = 0;
         kitbotUpdateOnFinishTpAccepted = false;
@@ -8436,29 +8453,6 @@ public class HighwayBuilderTHM extends Module {
         return AdaptiveRate.actionsThisTick(effectivePlacementsPerTickActionRate(), placeFractionCarry);
     }
 
-    private int computeEnclosurePlaceCreditGainTenths() {
-        double configured = Math.max(0.0, effectivePlacementsPerTickActionRate());
-        int gain = (int) Math.round(configured * ENCLOSURE_PLACE_CREDIT_SCALE);
-        return Math.max(0, Math.min(gain, ENCLOSURE_PLACE_CREDIT_SCALE));
-    }
-
-    private void accrueEnclosurePlaceCredit() {
-        enclosurePlaceCreditTenths = Math.min(
-            enclosurePlaceCreditTenths + computeEnclosurePlaceCreditGainTenths(),
-            ENCLOSURE_PLACE_CREDIT_SCALE
-        );
-    }
-
-    private void resetEnclosurePlaceCredit() {
-        enclosurePlaceCreditTenths = 0;
-    }
-
-    private boolean consumeEnclosurePlaceCredit() {
-        if (enclosurePlaceCreditTenths < ENCLOSURE_PLACE_CREDIT_SCALE) return false;
-        enclosurePlaceCreditTenths -= ENCLOSURE_PLACE_CREDIT_SCALE;
-        return true;
-    }
-
     private int currentMineActionsThisTick() {
         return Math.max(0, mineActionsThisTick);
     }
@@ -8543,7 +8537,17 @@ public class HighwayBuilderTHM extends Module {
 
     public void onServerBlockUpdate(ClientLevel level, BlockPos pos, BlockState state) {
         if (level != mc.level || !isActive()) return;
-        if (pos.equals(pendingEnclosurePlacementConfirmPos)) pendingEnclosureServerState = state;
+        boolean serialConfirmation = pos.equals(pendingEnclosurePlacementConfirmPos);
+        if (serialConfirmation) pendingEnclosureServerState = state;
+        EnclosureAttempt attempt = enclosureAttempts.get(pos);
+        if (attempt != null && attempt.accepts(state)) {
+            enclosureAttempts.remove(pos);
+            if (!serialConfirmation) {
+                if (attempt.obsidian() && state.is(Blocks.OBSIDIAN)) restockEnclosureObsidian.add(pos.asLong());
+                recordPlacedBlockForStats(pos);
+                restockWatchdog.markProgress("enclosure-placement-confirmed");
+            }
+        }
         if (this.state == State.MineEnderChests && state.isAir() && pos.equals(eChestMiningTarget)) {
             lastEChestServerAirNanos = System.nanoTime();
         }
@@ -9313,6 +9317,8 @@ public class HighwayBuilderTHM extends Module {
             placeTrail.remove(key);
         }
         restockPacketPlaceTargets.clear();
+        enclosureAttempts.clear();
+        enclosurePlacementOwner = null;
         restockEnclosureObsidian.clear();
     }
 
@@ -13188,6 +13194,57 @@ public class HighwayBuilderTHM extends Module {
         return box.intersects(pos.getX(), pos.getY(), pos.getZ(), pos.getX() + 1.0, pos.getY() + 1.0, pos.getZ() + 1.0);
     }
 
+    record EnclosureAttempt(long sentAt, boolean obsidian, boolean enderChest) {
+        boolean isPending(long now, boolean canResend) {
+            return !canResend || now - sentAt < ENCLOSURE_CONFIRM_NANOS;
+        }
+
+        boolean accepts(BlockState block) {
+            return enderChest && block.is(Blocks.ENDER_CHEST) || isValidRestockStructureBlock(block);
+        }
+    }
+
+    private void prepareEnclosurePlacement(State owner) {
+        if (enclosurePlacementOwner == owner) return;
+        enclosureAttempts.clear();
+        enclosurePlacementOwner = owner;
+    }
+
+    private boolean isEnclosurePlacementPending(BlockPos pos) {
+        EnclosureAttempt attempt = enclosureAttempts.get(pos);
+        return attempt != null && (attempt.isPending(System.nanoTime(), PacketPlaceTracker.canSend(pos))
+            || attempt.accepts(mc.level.getBlockState(pos)));
+    }
+
+    private boolean hasPendingEnclosureBlocks() {
+        return enclosureAttempts.keySet().stream().anyMatch(this::isEnclosurePlacementPending);
+    }
+
+    private Mode enclosurePlacementMode() {
+        return enclosurePlacement.get() == EnclosurePlacement.Pace ? Mode.Pace : Mode.Normal;
+    }
+
+    private boolean placeEnclosureBlock(BlockPos pos, int slot, Mode mode, String label, boolean enderChest) {
+        if (!inBorder(pos) || !PacketPlaceTracker.canSend(pos)) return false;
+        State owner = enclosurePlacementOwner;
+        BlockPos target = pos.immutable();
+        boolean obsidian = isObsidianEnclosureSlot(slot);
+        return PlacementUtils.place(target, slot, rotation.get().place, 0, true, true, allowsSilentSwap(), mode, () -> {
+            if (state != owner || enclosurePlacementOwner != owner) return;
+            if (mode.isPacket()) restockPacketPlaceTargets.add(target.asLong());
+            if (owner != State.KitbotOrder && renderPlace.get()) placeTrail.add(target.asLong());
+            if (enclosureAttempts.containsKey(target)) {
+                startEnclosurePlacementConfirmation(owner, target, enclosureCenterTargetForState(owner), label, obsidian);
+            } else {
+                enclosureAttempts.put(target, new EnclosureAttempt(System.nanoTime(), obsidian, enderChest));
+            }
+        });
+    }
+
+    private boolean canRetryEnclosureBlock(BlockPos pos) {
+        return pendingEnclosurePlacementConfirmPos == null || pendingEnclosurePlacementConfirmPos.equals(pos);
+    }
+
     private void clearEnclosurePlacementConfirmation() {
         pendingEnclosurePlacementObsidian = false;
         pendingEnclosurePlacementConfirmState = null;
@@ -13352,7 +13409,7 @@ public class HighwayBuilderTHM extends Module {
                 );
             }
             clearEnclosurePlacementConfirmation();
-            return true;
+            return false;
         }
 
         if (pendingEnclosurePlacementConfirmWaitTicks > 0) {
@@ -16469,7 +16526,7 @@ public class HighwayBuilderTHM extends Module {
             protected void tick(HighwayBuilderTHM b) {
                 if (!b.ensureCenteredBeforeBlockadePlacement(this)) return;
 
-                place(b, b.blockPosProvider.getBlockade(false, b.getEffectiveBlockadeType()), -1, MineEnderChests);
+                placeEnclosure(b, b.blockPosProvider.getBlockade(false, b.getEffectiveBlockadeType()), MineEnderChests);
             }
         },
 
@@ -17599,6 +17656,7 @@ public class HighwayBuilderTHM extends Module {
             }
 
             private boolean ensureRequiredBlocks(HighwayBuilderTHM b, KitbotFootprint target, String label, FailureMode failureMode) {
+                b.prepareEnclosurePlacement(KitbotOrder);
                 if (b.handlePendingEnclosurePlacementConfirmation(KitbotOrder, () ->
                     failKitbotOrder(
                         b,
@@ -17607,33 +17665,24 @@ public class HighwayBuilderTHM extends Module {
                     )
                 )) return true;
 
-                for (Map.Entry<BlockPos, KitbotStructureBlockType> entry : target.requiredBlocks.entrySet()) {
-                    BlockPos pos = entry.getKey();
-                    KitbotStructureBlockType type = entry.getValue();
+                Mode mode = b.enclosurePlacementMode();
+                boolean waitingForBlocks = false;
+                for (BlockPos pos : target.requiredBlocks.keySet()) {
+                    if (b.isEnclosurePlacementPending(pos)) {
+                        waitingForBlocks = true;
+                        continue;
+                    }
+
                     BlockState state = b.mc.level.getBlockState(pos);
-
                     if (isValidRestockStructureBlock(state)) continue;
-
+                    waitingForBlocks = true;
                     if (!b.isKitbotRequiredAirClear(state)) {
                         if (breakBlockingBlock(b, pos, state, label, failureMode)) return true;
                         continue;
                     }
 
-                    if (!BlockUtils.canPlace(pos)) {
-                        if (b.restockDebugLog.get()) {
-                            b.restockDebug("KitbotOrder waiting to place %s block at %s while reconciling the %s because BlockUtils.canPlace=false.",
-                                type.name().toLowerCase(Locale.ROOT),
-                                b.formatBlockPos(pos),
-                                label
-                            );
-                        }
-                        return true;
-                    }
-
-                    if (b.placeTimer > 0 || b.count >= b.currentPlaceActionsThisTick()) return true;
-
-                    BlockPos centerTarget = b.enclosureCenterTargetForState(KitbotOrder);
                     if (b.isPlayerHitboxBlockingBlock(pos)) {
+                        BlockPos centerTarget = b.enclosureCenterTargetForState(KitbotOrder);
                         if (!ensureKitbotWalkCenteredOnBlock(b, centerTarget, "kitbot-" + label + "-target-blocked", failureMode)) return true;
                         failKitbotOrder(
                             b,
@@ -17643,50 +17692,21 @@ public class HighwayBuilderTHM extends Module {
                         return true;
                     }
 
+                    boolean retry = b.enclosureAttempts.containsKey(pos);
+                    if (!BlockUtils.canPlace(pos) || !PacketPlaceTracker.canSend(pos)
+                        || (retry && !b.canRetryEnclosureBlock(pos))) continue;
+                    if (PlacementUtils.remainingPlacementPackets(mode) == 0) return true;
                     int slot = b.findRestockEnclosureBlockSlot();
                     if (slot == -1) {
+                        if (b.hasPendingEnclosureBlocks()) return true;
                         failKitbotOrder(b, "Not enough blocks are available to complete the " + label + ".", failureMode);
                         return true;
                     }
 
-                    if (!b.consumeEnclosurePlaceCredit()) {
-                        if (b.restockDebugLog.get()) {
-                            b.restockDebug("KitbotOrder paused: enclosure placement throttle credit=%d/%d before placing %s block at %s while reconciling the %s.",
-                                b.enclosurePlaceCreditTenths,
-                                ENCLOSURE_PLACE_CREDIT_SCALE,
-                                type.name().toLowerCase(Locale.ROOT),
-                                b.formatBlockPos(pos),
-                                label
-                            );
-                        }
-                        return true;
-                    }
-
-                    boolean placingObsidian = b.isObsidianEnclosureSlot(slot);
-                    boolean placed = PlacementUtils.place(pos, slot,
-                        b.rotation.get().place, 0, true, true, b.allowsSilentSwap(), Mode.Normal);
-                    if (placed) {
-                        b.placeTimer = b.placeDelay.get();
-                        b.startEnclosurePlacementConfirmation(KitbotOrder, pos, centerTarget, label, placingObsidian);
-                        if (b.restockDebugLog.get()) {
-                            b.restockDebug("KitbotOrder attempted %s block at %s while reconciling the %s; waiting for confirmation.",
-                                type.name().toLowerCase(Locale.ROOT),
-                                b.formatBlockPos(pos),
-                                label
-                            );
-                        }
-                    } else if (b.restockDebugLog.get()) {
-                        b.restockDebug("KitbotOrder placement call returned false for %s block at %s while reconciling the %s; retrying.",
-                            type.name().toLowerCase(Locale.ROOT),
-                            b.formatBlockPos(pos),
-                            label
-                        );
-                    }
-
-                    return true;
+                    if (b.placeEnclosureBlock(pos, slot, mode, label, false) && (mode == Mode.Normal || retry)) return true;
                 }
 
-                return false;
+                return waitingForBlocks;
             }
 
             private boolean breakBlockingBlock(HighwayBuilderTHM b, BlockPos pos, BlockState state, String label, FailureMode failureMode) {
@@ -17724,7 +17744,7 @@ public class HighwayBuilderTHM extends Module {
                 }
 
                 for (BlockPos pos : footprint.requiredBlocks.keySet()) {
-                    if (!isValidRestockStructureBlock(b.mc.level.getBlockState(pos))) return false;
+                    if (b.isEnclosurePlacementPending(pos) || !isValidRestockStructureBlock(b.mc.level.getBlockState(pos))) return false;
                 }
 
                 return true;
@@ -19563,7 +19583,7 @@ public class HighwayBuilderTHM extends Module {
             protected void tick(HighwayBuilderTHM b) {
                 if (!b.ensureCenteredBeforeBlockadePlacement(this)) return;
 
-                place(b, b.blockPosProvider.getBlockade(false, b.getEffectiveBlockadeType()), -1, Restock);
+                placeEnclosure(b, b.blockPosProvider.getBlockade(false, b.getEffectiveBlockadeType()), Restock);
             }
         },
 
@@ -19897,128 +19917,69 @@ public class HighwayBuilderTHM extends Module {
             }
         }
 
-        protected void place(HighwayBuilderTHM b, MBPIterator it, int slot, State nextState) {
-            boolean placed = false;
-            boolean finishedPlacing = false;
-            int scannedTargets = 0;
-            boolean throttleEnclosurePlacement = this == PlaceShulkerBlockade || this == PlaceEChestBlockade;
-            boolean retryEnclosurePlacement = false;
-            // Double-chest: this one blockade column is built as an ender chest instead of obsidian.
-            BlockPos doubleChestPos = throttleEnclosurePlacement ? b.doubleChestBlockadePos(this) : null;
+        protected void placeEnclosure(HighwayBuilderTHM b, MBPIterator it, State nextState) {
+            b.prepareEnclosurePlacement(this);
+            String label = b.stateName(this);
+            if (b.restockDebugLog.get()) b.logRestockBlockadeProbe(label, it);
 
-            if (b.restockDebugLog.get() && throttleEnclosurePlacement) {
-                b.restockDebug("%s tick using blockade=%s.",
-                    b.stateName(this),
-                    b.getEffectiveBlockadeType()
-                );
-                b.logRestockBlockadeProbe(b.stateName(this), it);
-            }
-
-            if (throttleEnclosurePlacement && b.handlePendingEnclosurePlacementConfirmation(this, () ->
+            if (b.handlePendingEnclosurePlacementConfirmation(this, () ->
                 b.error("Unable to complete restock blockade: placement at " + b.formatBlockPos(b.pendingEnclosurePlacementConfirmPos) + " did not confirm after centering.")
             )) return;
 
+            Mode selectedMode = b.enclosurePlacementMode();
+            BlockPos doubleChestPos = b.doubleChestBlockadePos(this);
+            boolean waitingForBlocks = false;
             for (MBlockPos pos : it) {
-                scannedTargets++;
+                BlockPos target = pos.getBlockPos();
+                if (b.isEnclosurePlacementPending(target)) {
+                    waitingForBlocks = true;
+                    continue;
+                }
+
+                BlockState block = b.mc.level.getBlockState(target);
+                boolean doubleChestTarget = target.equals(doubleChestPos);
+                if (isValidRestockStructureBlock(block) || (doubleChestTarget && block.is(Blocks.ENDER_CHEST))) continue;
+                waitingForBlocks = true;
+                if (b.isPlayerHitboxBlockingBlock(target)) {
+                    BlockPos centerTarget = b.enclosureCenterTargetForState(this);
+                    if (!b.ensureCenteredOnBlockBeforeEnclosurePlacement(this, centerTarget, label + "-target-blocked")) return;
+                    b.error("Unable to complete restock blockade: player hitbox is blocking required block " + b.formatBlockPos(target) + " after centering.");
+                    return;
+                }
+
+                boolean retry = b.enclosureAttempts.containsKey(target);
+                if (!b.isWithinConfiguredForwardRange(target) || !PacketPlaceTracker.canSend(target)
+                    || (retry && !b.canRetryEnclosureBlock(target))) continue;
+                Mode mode = doubleChestTarget ? Mode.Normal : selectedMode;
+                if (PlacementUtils.remainingPlacementPackets(mode) == 0) return;
+                int slot = doubleChestTarget ? findPlacementSlot(b, stack -> stack.is(Items.ENDER_CHEST), false) : -1;
+                if (slot == -1) slot = b.findRestockEnclosureBlockSlot();
+                if (slot == -1) {
+                    if (!b.hasPendingEnclosureBlocks()) continueWithPartialBlockade(b, nextState);
+                    return;
+                }
+
+                if (b.placeEnclosureBlock(target, slot, mode, label, doubleChestTarget) && (mode == Mode.Normal || retry)) return;
+            }
+
+            if (!waitingForBlocks) b.setState(nextState);
+        }
+
+        protected void place(HighwayBuilderTHM b, MBPIterator it, int slot, State nextState) {
+            boolean placed = false;
+            boolean finishedPlacing = false;
+            for (MBlockPos pos : it) {
                 BlockPos targetPos = pos.getBlockPos();
                 boolean lastTarget = !it.hasNext();
-                // Double-chest: the column at doubleChestPos wants an ender chest, not obsidian.
-                boolean doubleChestTarget = doubleChestPos != null && targetPos.equals(doubleChestPos);
-                if (doubleChestTarget && b.mc.level.getBlockState(targetPos).getBlock() == Blocks.ENDER_CHEST) {
-                    if (lastTarget) finishedPlacing = true;
-                    continue; // double chest already down
-                }
-
-                if (b.count >= it.placementsPerTick(b)) {
-                    if (b.restockDebugLog.get() && throttleEnclosurePlacement) {
-                        b.restockDebug("%s paused: placement count limit reached (%d/%d).",
-                            b.stateName(this),
-                            b.count,
-                            it.placementsPerTick(b)
-                        );
-                    }
-                    return;
-                }
-                if (b.placeTimer > 0) {
-                    if (b.restockDebugLog.get() && throttleEnclosurePlacement) {
-                        b.restockDebug("%s paused: placeTimer=%d before attempting %s.",
-                            b.stateName(this),
-                            b.placeTimer,
-                            b.formatBlockPos(targetPos)
-                        );
-                    }
-                    return;
-                }
-
-                if (throttleEnclosurePlacement && b.isValidRestockStructureBlock(b.mc.level.getBlockState(targetPos))) {
-                    if (lastTarget) finishedPlacing = true;
-                    continue;
-                }
-
-                if (throttleEnclosurePlacement && b.isPlayerHitboxBlockingBlock(targetPos)) {
-                    BlockPos centerTarget = b.enclosureCenterTargetForState(this);
-                    if (!b.ensureCenteredOnBlockBeforeEnclosurePlacement(this, centerTarget, b.stateName(this) + "-target-blocked")) return;
-                    b.error("Unable to complete restock blockade: player hitbox is blocking required block " + b.formatBlockPos(targetPos) + " after centering.");
-                    return;
-                }
-
+                if (b.count >= it.placementsPerTick(b) || b.placeTimer > 0) return;
                 if (!RangeUtils.isInRange(b.placeRange.get(), targetPos)) {
-                    if (b.restockDebugLog.get() && throttleEnclosurePlacement) {
-                        b.restockDebug("%s skipped %s: out of range.",
-                            b.stateName(this),
-                            b.formatBlockPos(targetPos)
-                        );
-                    }
-                    if (throttleEnclosurePlacement) retryEnclosurePlacement = true;
                     if (lastTarget) finishedPlacing = true;
                     continue;
                 }
 
-                if (!throttleEnclosurePlacement && PlacementUtils.remainingPlacementPackets(b.packetBuild.mode()) == 0) return;
-                if (throttleEnclosurePlacement && !b.consumeEnclosurePlaceCredit()) {
-                    if (b.restockDebugLog.get()) {
-                        b.restockDebug("%s paused: enclosure placement throttle credit=%d/%d before attempting %s.",
-                            b.stateName(this),
-                            b.enclosurePlaceCreditTenths,
-                            ENCLOSURE_PLACE_CREDIT_SCALE,
-                            b.formatBlockPos(targetPos)
-                        );
-                    }
-                    return;
-                }
-
-                // CheckEntities & SwapBack are disabled for waiting for better accuracy and speed of the builder
+                if (PlacementUtils.remainingPlacementPackets(b.packetBuild.mode()) == 0) return;
                 BlockState stateBefore = b.mc.level.getBlockState(targetPos);
-                int placeSlot = doubleChestTarget ? findPlacementSlot(b, stack -> stack.is(Items.ENDER_CHEST), false) : slot;
-                if (throttleEnclosurePlacement && placeSlot == -1) {
-                    placeSlot = b.findRestockEnclosureBlockSlot();
-                    if (placeSlot == -1) {
-                        continueWithPartialBlockade(b, nextState);
-                        return;
-                    }
-                }
-                boolean placingObsidian = throttleEnclosurePlacement && b.isObsidianEnclosureSlot(placeSlot);
-                boolean placedThisTick = b.tryPlaceBlock(targetPos, placeSlot, b.rotation.get().place, throttleEnclosurePlacement);
-
-                if (b.restockDebugLog.get() && throttleEnclosurePlacement) {
-                    BlockState stateAfterAttempt = b.mc.level.getBlockState(targetPos);
-                    b.restockDebug("%s attempt %s with slot %d -> success=%s, stateNow=%s, canPlaceNow=%s",
-                        b.stateName(this),
-                        b.formatBlockPos(targetPos),
-                        placeSlot,
-                        placedThisTick,
-                        stateAfterAttempt.getBlock(),
-                        BlockUtils.canPlace(targetPos)
-                    );
-                }
-
-                if (placedThisTick) {
-                    if (throttleEnclosurePlacement) {
-                        b.startEnclosurePlacementConfirmation(this, targetPos, b.enclosureCenterTargetForState(this), b.stateName(this), placingObsidian);
-                        placed = true;
-                        return;
-                    }
-
+                if (b.tryPlaceBlock(targetPos, slot, b.rotation.get().place)) {
                     boolean worldChanged = !b.mc.level.getBlockState(targetPos).equals(stateBefore);
                     if (worldChanged || b.packetBuild.enabled()) {
                         BlockPos countedPos = targetPos.immutable();
@@ -20032,38 +19993,8 @@ public class HighwayBuilderTHM extends Module {
                     placed = true;
                     if (b.currentPlaceActionsThisTick() == 1) break;
                 }
-                else if (throttleEnclosurePlacement) {
-                    BlockState stateAfterAttempt = b.mc.level.getBlockState(targetPos);
-                    if (!b.isValidRestockStructureBlock(stateAfterAttempt)) {
-                        retryEnclosurePlacement = true;
-                        if (b.restockDebugLog.get()) {
-                            b.restockDebug("%s placement failed at %s and target is still unsatisfied; staying in placement state.",
-                                b.stateName(this),
-                                b.formatBlockPos(targetPos)
-                            );
-                        }
-                        break;
-                    }
-                }
 
                 if (lastTarget) finishedPlacing = true;
-            }
-
-            if (b.restockDebugLog.get() && throttleEnclosurePlacement) {
-                b.restockDebug("%s completed tick: scanned=%d placedAny=%s finishedPlacing=%s retry=%s next=%s",
-                    b.stateName(this),
-                    scannedTargets,
-                    placed,
-                    finishedPlacing,
-                    retryEnclosurePlacement,
-                    b.stateName(nextState)
-                );
-            }
-
-            if (throttleEnclosurePlacement) {
-                if (retryEnclosurePlacement) return;
-                if (finishedPlacing || scannedTargets == 0 || !placed) b.setState(nextState);
-                return;
             }
 
             if (finishedPlacing || !placed) b.setState(nextState);

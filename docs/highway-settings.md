@@ -51,7 +51,7 @@ After that first seed, each profile loads its own saved values rather than reapp
 
 The tabbed HighwayBuilder screen can also save the current settings as a named custom preset. Each preset is stored as `<Name>.json` under `meteor-client/thm/highway-builder-presets`, loaded when HighwayBuilder is registered during Minecraft startup, and applied from the **Custom preset** selector with its **Apply** button. Imported files are size- and depth-limited and may contain only known HighwayBuilder groups and settings.
 
-Restock and KitBot enclosures use Netherrack first, then any suitable full block, including protected Obsidian. Shulkers and falling blocks are excluded. With `offhand-build`, the builder uses the offhand and restores any item it swapped out. The builder uses normal placement and waits for a server update before placing the next block.
+Restock and KitBot enclosures use Netherrack first, then any suitable full block, including protected Obsidian. Shulkers and falling blocks are excluded. With `offhand-build`, the builder uses the offhand and restores any item it swapped out. **Inventory → Enclosure Placement** defaults to **Pace**, which can use the shared budget of nine packets per 310 ms. **Normal** uses a normal block interaction for one eligible block per tick. Both modes confirm each block separately and use the selected mode for retries.
 
 TPS safety enclosures also use Netherrack. After TPS recovers, the builder removes its enclosure blocks on all four sides before moving forward. Existing nearby blocks are left alone.
 

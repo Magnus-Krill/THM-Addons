@@ -155,7 +155,7 @@ addon-specific settings screen — don't confuse the two when adding a new modul
 
 **Highway offhand build:** Disable silent hotbar swaps while `offhand-build` is on, including main-hand fallbacks and ender chest rebreaks.
 
-**Highway restock placement:** Use normal placement for containers and enclosures independently of Paving's Packet Mode. Confirm enclosure blocks with server updates. OnPlace's default-on `predict-rebreak` predicts air inside the sent STOP's sequence while server air updates stay fresh.
+**Highway restock placement:** Use normal placement for containers. Inventory's `enclosure-placement` defaults to Pace and uses the remaining shared packet budget. Normal places one block per tick. Confirm each target separately and retry in the selected mode. OnPlace's default-on `predict-rebreak` predicts air inside the sent STOP's sequence while server air updates stay fresh.
 
 **Highway packet budget:** The General toggle alone controls budgeting. Reset it before tick early
 returns and initialize it before double mining. Fast Packet Build uses the allowance actually
