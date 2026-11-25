@@ -87,7 +87,7 @@ public class APIUtils {
         return cachedPassword;
     }
 
-    private static String apiToken() {
+    static String apiToken() {
         try {
             THMSystem system = THMSystem.get();
             return system == null ? "" : system.getApiToken();
@@ -203,11 +203,17 @@ public class APIUtils {
         return o.has(field) && o.get(field).isJsonPrimitive() ? o.get(field).getAsString() : "";
     }
 
-    public static List<ThmMembers.Member> fetchMembersFromApi() {
-        try {
-            String response = apiGet(MEMBERS_URL);
-            if (response == null) return null;
+    static List<ThmMembers.Member> fetchMembersFromApi(String token) {
+        if (!token.isEmpty()) {
+            List<ThmMembers.Member> members = parseMembers(TrustedHttp.getString(MEMBERS_URL, TrustedHttp.Kind.API, TrustedHttp.MAX_JSON_BYTES));
+            if (members != null) return members;
+        }
+        return parseMembers(apiGet(MEMBERS_URL));
+    }
 
+    static List<ThmMembers.Member> parseMembers(String response) {
+        if (response == null) return null;
+        try {
             JsonArray jsonArray = GSON.fromJson(response, JsonArray.class);
             if (jsonArray == null) {
                 THMAddon.LOG.warn("Member list response was empty");
@@ -223,8 +229,7 @@ public class APIUtils {
                 JsonElement element = jsonArray.get(i);
                 if (element == null || !element.isJsonObject()) continue;
                 JsonObject jsonObject = element.getAsJsonObject();
-                JsonArray usernamesArray = jsonObject.getAsJsonArray("usernames");
-                if (usernamesArray == null) continue;
+                if (!(jsonObject.get("usernames") instanceof JsonArray usernamesArray)) continue;
 
                 int count = Math.min(usernamesArray.size(), MAX_USERNAMES_PER_MEMBER);
                 List<String> valid = new ArrayList<>(count);
@@ -245,10 +250,9 @@ public class APIUtils {
 
                 members.add(new ThmMembers.Member(displayName, valid.toArray(new String[0]), rank, rankId, branch, discordName));
             }
-            THMAddon.LOG.info("Fetched Members");
             return members;
-        } catch (Exception e) {
-            THMAddon.LOG.warn("Error fetching members from API: {}", e.getMessage());
+        } catch (RuntimeException e) {
+            THMAddon.LOG.warn("Invalid member list response");
             return null;
         }
     }

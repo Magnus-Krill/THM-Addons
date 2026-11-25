@@ -361,6 +361,10 @@ public class THMSystem extends System<THMSystem> {
         return apiTokenSnapshot;
     }
 
+    public Setting<String> apiTokenSetting() {
+        return apiToken;
+    }
+
     /** The API only accepts UUID tokens, so blank/malformed values count as "no token set". */
     public boolean hasApiToken() {
         return TrustedHttp.isValidApiToken(getApiToken());

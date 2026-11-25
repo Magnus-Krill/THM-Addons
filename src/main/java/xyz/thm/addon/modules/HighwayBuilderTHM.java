@@ -164,6 +164,8 @@ import static xyz.thm.addon.utils.ThmMembers.isNovice;
 
 @SuppressWarnings("ConstantConditions")
 public class HighwayBuilderTHM extends Module {
+    public static final String LOGGING_GROUP = "Logging";
+
     private static final String STATS_ARTIFACT_MAGIC = "HB_STATS_ARTIFACT_V1";
     private static final int STATS_ARTIFACT_VERSION = 1;
     private static final long KITBOT_FRONTEND_WINDOW_BUFFER_MS = 1_000L;
@@ -660,7 +662,7 @@ public class HighwayBuilderTHM extends Module {
     private final SettingGroup sgPaving = settings.createGroup("Paving");
     private final SettingGroup sgInventory = settings.createGroup("Inventory");
     private final SettingGroup sgNotifies = settings.createGroup("Notifies");
-    private final SettingGroup sgStatistics = settings.createGroup("Logging");
+    private final SettingGroup sgStatistics = settings.createGroup(LOGGING_GROUP);
     private final SettingGroup sgKitBotIntegration = settings.createGroup("KitBot Integration", false);
     private final SettingGroup sgEChests = settings.createGroup("Ender Chests");
     private final SettingGroup sgExperimental = settings.createGroup("Experimental", false);
@@ -1258,7 +1260,7 @@ public class HighwayBuilderTHM extends Module {
         .name("packet-build-normal-rate")
         .description("Use normal place rate and delay with packet placement.")
         .defaultValue(false)
-        .visible(() -> enableExperimental.get() && packetBuild.enabled())
+        .visible(() -> enableExperimental.get() && packetBuild.mode() == Mode.Direct)
         .build()
     );
 
@@ -1268,7 +1270,7 @@ public class HighwayBuilderTHM extends Module {
         .defaultValue(20)
         .range(2, 200)
         .sliderRange(5, 60)
-        .visible(() -> enableExperimental.get() && packetBuild.enabled() && packetBuildNormalRate.get())
+        .visible(this::normalRatePacketBuild)
         .build()
     );
 
@@ -1846,6 +1848,13 @@ public class HighwayBuilderTHM extends Module {
         .build()
     );
 
+    private final Setting<Boolean> sendStatisticsapi = sgStatistics.add(new BoolSetting.Builder()
+        .name("sends-statistics(API)")
+        .description("Submits proof of work when HighwayBuilder stops.")
+        .defaultValue(false)
+        .build()
+    );
+
     private final Setting<Boolean> sendStatisticsWebhhok = sgStatistics.add(new BoolSetting.Builder()
         .name("sends-statistics(Webhook)")
         .description("Sends Highway Builder statistics to a webhook when the module is disabled.")
@@ -1867,14 +1876,6 @@ public class HighwayBuilderTHM extends Module {
         .visible(() -> printStatistics.get() && sendStatisticsWebhhok.get())
         .build()
     );
-    private final Setting<Boolean> sendStatisticsapi = sgStatistics.add(new BoolSetting.Builder()
-        .name("sends-statistics(API)")
-        .description("Sends statistics to a Api when disabling Highway Builder.")
-        .defaultValue(false)
-        .visible(printStatistics::get)
-        .build()
-    );
-
     private final Setting<Boolean> desktopNotifies = sgNotifies.add(new BoolSetting.Builder()
         .name("desktop-notifies")
         .description("Sends desktop notifications while Highway Builder is running.")
@@ -8227,7 +8228,7 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private boolean normalRatePacketBuild() {
-        return packetBuild.enabled() && packetBuildNormalRate != null && experimental(packetBuildNormalRate);
+        return packetBuild.mode() == Mode.Direct && packetBuildNormalRate != null && experimental(packetBuildNormalRate);
     }
 
     /** The slider shows the adaptive rate. Marked as ours so it doesn't count as a hand-made change. */
@@ -8357,6 +8358,26 @@ public class HighwayBuilderTHM extends Module {
         showAdaptiveRate(placementsPerTick, adaptivePlaceRate);
     }
 
+    public Settings settingsView() {
+        THMSystem system = THMSystem.get();
+        if (system == null) return settings;
+
+        // Keep the shared token out of module presets and exports.
+        Settings view = new Settings();
+        for (SettingGroup group : settings) {
+            if (group != sgStatistics) {
+                view.groups.add(group);
+                continue;
+            }
+            SettingGroup logging = view.createGroup(group.name, group.sectionExpanded);
+            for (Setting<?> setting : group) {
+                if (setting == statuslog) logging.add(system.apiTokenSetting());
+                logging.add(setting);
+            }
+        }
+        return view;
+    }
+
     @Override
     public WWidget getWidget(GuiTheme theme) {
         WVerticalList controls = theme.verticalList();
@@ -8448,7 +8469,9 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private int computePlaceActionsThisTick() {
-        if (packetBuild.enabled() && !normalRatePacketBuild()) return Integer.MAX_VALUE;
+        if (packetBuild.enabled() && !normalRatePacketBuild()) {
+            return PlacementUtils.placementsPerTick(packetBuild.mode(), Integer.MAX_VALUE);
+        }
 
         return AdaptiveRate.actionsThisTick(effectivePlacementsPerTickActionRate(), placeFractionCarry);
     }
@@ -15407,12 +15430,13 @@ public class HighwayBuilderTHM extends Module {
                                          boolean airPlaceOnly) {
         if (row == null || queue == null || queue.isEmpty()) return false;
 
+        boolean pace = packetBuild.mode() == Mode.Pace;
         boolean changedWorld = false;
         List<ForwardTask> snapshot = new ArrayList<>(queue.values());
         Vec3 eyePos = mc.player.getEyePosition();
         snapshot.sort(Comparator.comparingDouble(task -> task.pos.distToCenterSqr(eyePos)));
         for (ForwardTask task : snapshot) {
-            if (forwardPlaceCount >= currentPlaceActionsThisTick() || placeTimer > 0) break;
+            if (forwardPlaceCount >= currentPlaceActionsThisTick() || (!pace && placeTimer > 0)) break;
             if (!shouldKeepForwardPlaceTask(task)) {
                 queue.remove(task.pos);
                 continue;
@@ -15448,7 +15472,7 @@ public class HighwayBuilderTHM extends Module {
             }
 
             if (currentPlaceActionsThisTick() == 1) break;
-            if (conflictQueue) break;
+            if (conflictQueue && !pace) break;
         }
 
         return changedWorld;
@@ -19971,7 +19995,7 @@ public class HighwayBuilderTHM extends Module {
             for (MBlockPos pos : it) {
                 BlockPos targetPos = pos.getBlockPos();
                 boolean lastTarget = !it.hasNext();
-                if (b.count >= it.placementsPerTick(b) || b.placeTimer > 0) return;
+                if (b.count >= it.placementsPerTick(b) || (b.packetBuild.mode() != Mode.Pace && b.placeTimer > 0)) return;
                 if (!RangeUtils.isInRange(b.placeRange.get(), targetPos)) {
                     if (lastTarget) finishedPlacing = true;
                     continue;

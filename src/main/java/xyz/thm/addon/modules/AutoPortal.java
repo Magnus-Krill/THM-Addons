@@ -46,6 +46,7 @@ public class AutoPortal extends Module {
         .description("Ticks between each obsidian placement.")
         .defaultValue(1)
         .sliderRange(1, 20)
+        .visible(this::usesLocalPlacementRate)
         .build()
     );
     private final Setting<Integer> blocksPerTick = sgGeneral.add(new IntSetting.Builder()
@@ -53,6 +54,7 @@ public class AutoPortal extends Module {
         .description("How many blocks to place each tick.")
         .defaultValue(1)
         .sliderRange(1, 5)
+        .visible(this::usesLocalPlacementRate)
         .build()
     );
     private final PacketPlacementSettings packet = new PacketPlacementSettings(sgGeneral);
@@ -161,12 +163,17 @@ public class AutoPortal extends Module {
             finishPortal();
             return;
         }
-        delay++;
-        if (delay < placeDelay.get()) return;
-        for (int i = 0; i < blocksPerTick.get() && index < portalBlocks.size(); i++, index++) {
+        var mode = packet.mode();
+        boolean pace = mode == PacketPlacementSettings.Mode.Pace;
+        if (!pace && ++delay < placeDelay.get()) return;
+        int limit = PlacementUtils.placementsPerTick(mode, blocksPerTick.get());
+        for (int placed = 0; placed < limit && index < portalBlocks.size(); index++) {
             BlockPos pos = portalBlocks.get(index);
             if (!mc.level.getBlockState(pos).canBeReplaced()) {
-                if (mc.level.getBlockState(pos).is(Blocks.OBSIDIAN)) continue;
+                if (mc.level.getBlockState(pos).is(Blocks.OBSIDIAN)) {
+                    if (!pace) placed++;
+                    continue;
+                }
                 if (!waitingForBreak.contains(pos)) {
                     if (mc.gameMode != null) {
                         mc.gameMode.startDestroyBlock(pos, Direction.UP);
@@ -176,13 +183,18 @@ public class AutoPortal extends Module {
                 }
                 return;
             }
-            if (PlacementUtils.remainingPlacementPackets(packet.mode()) == 0) return;
+            if (PlacementUtils.remainingPlacementPackets(mode) == 0) return;
             waitingForBreak.remove(pos);
             FindItemResult obsidian = InvUtils.findInHotbar(Items.OBSIDIAN);
             if (!obsidian.found() || !placeFrame(pos, obsidian)) return;
+            placed++;
         }
         delay = 0;
         if (index >= portalBlocks.size()) finishPortal();
+    }
+
+    private boolean usesLocalPlacementRate() {
+        return packet.mode() != PacketPlacementSettings.Mode.Pace;
     }
 
     private boolean placeFrame(BlockPos pos, FindItemResult obsidian) {

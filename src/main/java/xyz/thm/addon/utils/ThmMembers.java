@@ -19,6 +19,7 @@ import meteordevelopment.meteorclient.events.game.GameJoinedEvent;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.world.entity.player.Player;
+import xyz.thm.addon.THMAddon;
 import java.util.*;
 
 
@@ -76,6 +77,8 @@ public final class ThmMembers {
     private static Map<String, Member> cachedByMcName = null;
     private static boolean fetchInProgress = false;
     private static boolean startupFetchStarted = false;
+    private static String observedApiToken = "";
+    private static String memberToken = "";
 
     private static final long HIGHWAY_STATUS_REFRESH_MS = 10 * 60 * 1000; // 10 minutes
     private static Map<String, String> cachedHighwayByMcName = new HashMap<>();
@@ -103,32 +106,49 @@ public final class ThmMembers {
     }
 
     private static void refreshIfNeeded() {
+        updateMemberCredential();
         if (cachedMembers == null) startFetch(false);
+    }
+
+    private static void updateMemberCredential() {
+        String configured = APIUtils.apiToken();
+        if (configured.equals(observedApiToken)) return;
+        observedApiToken = configured;
+        String token = TrustedHttp.isValidApiToken(configured) ? configured : "";
+        if (!token.equals(memberToken)) {
+            memberToken = token;
+            resetCache();
+        }
     }
 
     private static void startFetch(boolean force) {
         synchronized (ThmMembers.class) {
+            updateMemberCredential();
             if (fetchInProgress) return;
             if (!force && startupFetchStarted) return;
             if (MeteorClient.mc.level == null) return;
 
             fetchInProgress = true;
             startupFetchStarted = true;
-            THMUtils.async("member-fetch", ThmMembers::runFetchLoop);
+            String token = memberToken;
+            THMUtils.async("member-fetch", () -> runFetchLoop(token));
         }
     }
 
     // Gives up after a few tries - the next server join or the refresh button starts it again.
-    private static void runFetchLoop() {
+    private static void runFetchLoop(String token) {
         long delayMs = 2000;
         try {
             for (int attempt = 1; attempt <= MAX_FETCH_ATTEMPTS && MeteorClient.mc.level != null; attempt++) {
-                List<Member> members = APIUtils.fetchMembersFromApi();
-                if (members != null) {
-                    synchronized (ThmMembers.class) {
+                List<Member> members = APIUtils.fetchMembersFromApi(token);
+                synchronized (ThmMembers.class) {
+                    updateMemberCredential();
+                    if (!token.equals(memberToken)) return;
+                    if (members != null) {
                         updateCache(members);
+                        THMAddon.LOG.info("Fetched Members");
+                        return;
                     }
-                    return;
                 }
                 if (attempt < MAX_FETCH_ATTEMPTS) Thread.sleep(delayMs);
                 delayMs *= 2;

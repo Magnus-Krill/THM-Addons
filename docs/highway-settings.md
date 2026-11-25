@@ -181,7 +181,7 @@ migrate in module configs, Highway Profiles and custom presets.
 | `packet` | `false` | Places with raw packets only: the client never sets a block itself, so what you see is always the server's state (no ghost blocks). |
 | `air-place-mode` | `Smart`; options `Never`, `Smart`, `Always`; shown when `packet` is on | Smart uses the nearest usable face and falls back to air placement. |
 | `legacy-air-place` | `false`; shown when Packet permits air placement | Uses the 1.21.11 target-center click with face `UP` for unsupported blocks. |
-| `packet-mode` | `Pace`; Packet on | Pace shares nine placements per 310 ms with other modules in Pace mode. Direct sends without the shared cap. |
+| `packet-mode` | `Pace`; Packet on | Pace uses up to nine placements per tick within the shared nine-per-310-ms budget. Direct sends without the shared cap. |
 | `packet-build-lookahead` | `true`; shown with unlimited `packet` | Also places upcoming rows in the same tick. Pauses while the active row has reachable air-placement targets. |
 | `silent-forward-place-swap` | `false`; hidden in legacy mode or with `offhand-build` | Restores your selected slot after scheduler placement. |
 | `silent-forward-tool-swap` | `false`; hidden in legacy mode or with `offhand-build` | Restores your selected slot after scheduler mining. |
@@ -191,7 +191,7 @@ migrate in module configs, Highway Profiles and custom presets.
 | Setting | Default / Range | What to change it for |
 | --- | --- | --- |
 | `enable-experimental` | `false` | Master switch: nothing else in this group does anything while it is off. |
-| `packet-build-normal-rate` | `false`; shown when `packet` is on | Uses normal placement rate and delay while placing with packets and waiting for server updates. |
+| `packet-build-normal-rate` | `false`; shown in Direct | Uses normal placement rate and delay while placing with packets and waiting for server updates. |
 | `packet-build-resend` | `20`, range `2-200`; shown when `packet-build-normal-rate` is on | Ticks before asking the server about an unanswered block. |
 | `packet-build-sequenced` | `false`; Packet | Uses Minecraft interaction sequence numbers. |
 | `packet-build-timed-air-retry` | `false`; Packet | Retries Air Place after a cooldown without probing or waiting for a server update. An unconfirmed success can produce an extra block. Choke Build uses the normal confirmation path. |
@@ -328,12 +328,12 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 | `place-range` | `4.5`, slider max `5.5` | Always | Maximum distance for block placement. |
 | `place-delay` | `0`, minimum `0` | Always | Delay in ticks between place actions. |
 | `tps-safety-enclosure` | `true` | Always | Builds a small enclosure during confirmed low or unknown TPS pauses after TPS settling. |
-| `packet` | `false` | Always | Ordinary highway placements use raw place packets and appear only after the server's block update. Restock and KitBot enclosures use server confirmations. Unless `packet-build-normal-rate` is on, it removes the per-tick placement cap and automatically enables Packet Limiter on activation. |
+| `packet` | `false` | Always | Ordinary highway placements use raw place packets and appear after the server's block update. Pace and fast Direct automatically enable Packet Limiter on activation. Restock and KitBot enclosures use server confirmations. |
 | `air-place-mode` | `Smart`; options `Never`, `Smart`, `Always` | `packet` is on | `Never` skips no-face placements, `Smart` uses the nearest usable face or falls back to air placement, and `Always` allows air placement. |
 | `legacy-air-place` | `false` | `packet` is on and air placement is allowed | Uses the 1.21.11 target-center click with face `UP` when no neighbor is available. Confirmation and duplicate protection stay active. |
-| `packet-mode` | `Pace` | Packet is on | Pace shares nine placements per 310 ms with other modules in Pace mode. Direct sends without the shared cap. |
+| `packet-mode` | `Pace` | Packet is on | Pace uses up to nine placements per tick within the shared nine-per-310-ms budget. Direct sends without the shared cap. |
 | `packet-build-lookahead` | `true` | Unlimited `packet` is on | Places upcoming rows after the active row. Pauses while the active row has reachable air-placement targets. |
-| `packet-build-normal-rate` | `false` | `enable-experimental` and `packet` are on | Replaces the former Packet Build Once option. Uses normal placement rate and delay without client-side block prediction; each target waits for a server answer before another place packet. |
+| `packet-build-normal-rate` | `false` | Experimental is on and Packet Mode is Direct | Uses normal placement rate and delay and waits for a server answer before retrying a target. |
 | `packet-build-resend` | `20`, range `2-200` | `packet-build-normal-rate` is on | Ticks before probing an unanswered placement. |
 | `choke-build` | `false` | `enable-experimental` is on | Holds outgoing packets and releases them in order. A paced placement releases the queue early. |
 | `choke-hold-ticks` | `5`, range `1-200` | `choke-build` is on | Desired hold duration. |
@@ -427,14 +427,16 @@ Vanilla 26.2 clamps the client request to a server-side minimum of 2 and retains
 
 ### THM-HighwayBuilder: Logging
 
+The **API Token** field sits above **Send Status** and the proof-of-work toggle. It edits the same saved token as the **THM Addon** tab. Get your token from the Discord bot's player panel.
+
 | Setting | Default / Range / Options | Visible when | Behavior |
 | --- | --- | --- | --- |
 | `print-statistics` | `true` | Always | Prints HighwayBuilder statistics in chat when the module disables. |
 | `auto-screenshot-statistics` | `false` | `print-statistics` is on | Captures chat or disconnect statistics after rendering. |
 | `Send-Status` | `true` | Always | Sends build mode, direction, and measured official loop progress every five minutes. |
+| `sends-statistics(API)` | `false` | Always | Submits proof of work when HighwayBuilder stops. |
 | `sends-statistics(Webhook)` | `false` | `print-statistics` is on | Sends HighwayBuilder statistics to a webhook when the module disables. |
 | `webhook` | `MyWebhookInHere` | `print-statistics` and `sends-statistics(Webhook)` are on | Webhook URL used for statistics delivery. |
-| `sends-statistics(API)` | `false` | `print-statistics` is on | Sends statistics to the API when the module disables. |
 
 Proof screenshots wait for two completed visible frames. Disconnect captures wait up to 30 seconds
 for the matching reason and statistics screen, with loading overlays cleared. Chat captures wait

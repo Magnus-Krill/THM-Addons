@@ -66,6 +66,7 @@ Keep tokens, webhook URLs and private signing keys out of Git.
 
 `TrustedHttp` skips authenticated API traffic before DNS or connection setup unless the current token is a full UUID.
 Public member refreshes need a world and work on any server. Deferred member fetching remains eligible until a request can start.
+Member HUD uses authenticated `GET /users` for linked accounts and Discord names. Anonymous fallback keeps one Minecraft account per row.
 Queued requests use the current configured token; the server still validates ownership and membership.
 `THMSystem` publishes credential changes through volatile snapshots for worker reads.
 
@@ -172,7 +173,7 @@ row pause supported placements and placement lookahead until they are resolved.
 Experimental Packet Build toggles independently test sequenced sends, timed Air Place retries,
 and direct center/UP clicks. The default confirmation path still uses probes.
 Each placement module has a default-off Packet toggle. Its Packet Mode dropdown defaults to Pace.
-Only Pace shares the nine-placement budget per 310 ms. Direct sends, normal placements, and confirmation probes bypass the shared budget.
+Only Pace shares the nine-placement budget per 310 ms. Use nine as the local placement cap in Pace and skip batch delays. Direct sends, normal placements, and confirmation probes bypass the shared budget.
 Use `PlacementUtils` to apply the mode at the send. Use the hand holding the placement item and keep offhand placements free of hotbar changes.
 With Check Behind, hold movement for reachable repairs even
 when the active row has no forward boundary. Double Mine promotes N to P after a sent STOP.

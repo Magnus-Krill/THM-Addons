@@ -118,6 +118,7 @@ public class AutoTrapPlus extends Module {
         .name("place-delay")
         .description("Ticks between block placements.")
         .defaultValue(1)
+        .visible(this::usesLocalPlacementRate)
         .build()
     );
 
@@ -126,6 +127,7 @@ public class AutoTrapPlus extends Module {
         .description("How many blocks to place per tick.")
         .defaultValue(1)
         .min(1)
+        .visible(this::usesLocalPlacementRate)
         .build()
     );
 
@@ -321,8 +323,9 @@ public class AutoTrapPlus extends Module {
         tick++;
         scheduled.clear();
         placePositions.clear();
-        batchLimit = tick > lastPlacementTick + delay.get()
-            ? Math.min(blocksPerTick.get(), PlacementUtils.remainingPlacementPackets(packet.mode())) : 0;
+        var mode = packet.mode();
+        batchLimit = mode == PacketPlacementSettings.Mode.Pace || tick > lastPlacementTick + delay.get()
+            ? Math.min(PlacementUtils.placementsPerTick(mode, blocksPerTick.get()), PlacementUtils.remainingPlacementPackets(mode)) : 0;
 
         FindItemResult block = InvUtils.findInHotbar(stack -> blocks.get().contains(Block.byItem(stack.getItem())));
         boolean logoutWork = logoutTrap.get() && runLogoutTraps(block);
@@ -339,6 +342,10 @@ public class AutoTrapPlus extends Module {
         }
 
         if (selfToggle.get() && placedAny && !liveWork && !logoutWork) toggle();
+    }
+
+    private boolean usesLocalPlacementRate() {
+        return packet.mode() != PacketPlacementSettings.Mode.Pace;
     }
 
     private boolean runLogoutTraps(FindItemResult block) {

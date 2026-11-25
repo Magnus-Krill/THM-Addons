@@ -75,7 +75,7 @@ public class HighwayBuilderScreen extends WindowScreen {
         this.module = module;
 
         tabs.put(BASICS, view(BASICS, BASIC_SETTINGS));
-        for (SettingGroup group : module.settings) tabs.put(group.name, view(group));
+        for (SettingGroup group : module.settingsView()) tabs.put(group.name, view(group));
         tabs.put(ALL, module.settings);
         if (!tabs.containsKey(activeTab)) activeTab = BASICS;
     }
@@ -256,7 +256,7 @@ public class HighwayBuilderScreen extends WindowScreen {
         // Searching looks through every group, but only groups with a hit are listed.
         Settings results = new Settings();
         int hits = 0;
-        for (SettingGroup group : module.settings) {
+        for (SettingGroup group : module.settingsView()) {
             SettingGroup matches = null;
             for (Setting<?> setting : group) {
                 if (!matches(setting, search)) continue;

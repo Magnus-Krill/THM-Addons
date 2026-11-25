@@ -75,6 +75,10 @@ public class PlacementUtils {
         return PACER;
     }
 
+    public static int placementsPerTick(Mode mode, int configured) {
+        return mode == Mode.Pace ? PlacementPacer.LIMIT : configured;
+    }
+
     public static int remainingPlacementPackets(Mode mode) {
         if (mode != Mode.Pace) return Integer.MAX_VALUE;
         var listener = mc.getConnection();

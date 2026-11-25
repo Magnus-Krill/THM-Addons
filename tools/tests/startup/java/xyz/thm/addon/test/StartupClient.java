@@ -49,10 +49,15 @@ import meteordevelopment.meteorclient.gui.tabs.Tabs;
 import meteordevelopment.meteorclient.gui.tabs.WindowTabScreen;
 import meteordevelopment.meteorclient.gui.tabs.builtin.GuiTab;
 import meteordevelopment.meteorclient.gui.themes.meteor.MeteorGuiTheme;
+import meteordevelopment.meteorclient.gui.widgets.WWidget;
 import meteordevelopment.meteorclient.gui.widgets.containers.WContainer;
+import meteordevelopment.meteorclient.gui.widgets.containers.WSection;
+import meteordevelopment.meteorclient.gui.widgets.containers.WVerticalList;
 import meteordevelopment.meteorclient.gui.widgets.input.WDropdown;
+import meteordevelopment.meteorclient.gui.widgets.input.WTextBox;
 import meteordevelopment.meteorclient.settings.ItemSetting;
 import meteordevelopment.meteorclient.settings.ProvidedStringSetting;
+import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.misc.input.KeyAction;
 import meteordevelopment.meteorclient.utils.render.color.Color;
@@ -66,6 +71,7 @@ import xyz.thm.addon.gui.ThmStyledButtons;
 import xyz.thm.addon.gui.themes.LiquidGlassTheme;
 import xyz.thm.addon.gui.themes.bephax.BepGuiTheme;
 import xyz.thm.addon.accessor.ServerFolderView;
+import xyz.thm.addon.mixin.accessor.WSectionAccessor;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
 import xyz.thm.addon.modules.HotbarManager;
 import xyz.thm.addon.modules.KitbotFrontend;
@@ -77,6 +83,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Arrays;
 
@@ -96,6 +103,7 @@ public final class StartupClient implements ClientModInitializer {
                 verifyPacketBudget();
                 verifyPacketPlacementModes();
                 verifyHighwayUtilityMigration();
+                verifyHighwayReportingSettings();
                 verifyHotbarManager();
                 verifyKitbotUpdateIsolation();
                 verifyServerFolders(client);
@@ -108,6 +116,7 @@ public final class StartupClient implements ClientModInitializer {
                         GuiThemes.select("Catppuccin");
                         verifyJoinButtonLayout(client, client.gui.screen());
                         verifyClickGuiAnimations(client);
+                        verifyHighwayReportingSettings();
                     } finally {
                         GuiThemes.select(theme);
                     }
@@ -120,6 +129,33 @@ public final class StartupClient implements ClientModInitializer {
             }
             client.stop();
         });
+    }
+
+    private static void verifyHighwayReportingSettings() {
+        var builder = Modules.get().get(HighwayBuilderTHM.class);
+        var token = THMSystem.get().apiTokenSetting();
+        var logging = builder.settings.getGroup(HighwayBuilderTHM.LOGGING_GROUP);
+        var displayed = builder.settingsView().getGroup(logging.name);
+        var rows = new ArrayList<Setting<?>>();
+        displayed.forEach(rows::add);
+        int tokenIndex = rows.indexOf(token);
+        if (tokenIndex < 0 || tokenIndex + 2 >= rows.size() || rows.get(tokenIndex) != token
+            || rows.get(tokenIndex + 1) != logging.get("Send-Status")
+            || rows.get(tokenIndex + 2) != logging.get("sends-statistics(API)") || builder.settings.get(token.name) != null) {
+            throw new IllegalStateException("Highway reporting controls must share a section without exporting the token");
+        }
+
+        var widgets = (WVerticalList) GuiThemes.get().settings(builder.settings, token.title);
+        for (var cell : widgets.cells) {
+            if (cell.widget() instanceof WSection section && logging.name.equals(((WSectionAccessor) section).thm$getTitle())
+                && hasTextBox(section)) return;
+        }
+        throw new IllegalStateException("Classic HighwayBuilder logging is missing the token field");
+    }
+
+    private static boolean hasTextBox(WWidget widget) {
+        return widget instanceof WTextBox || widget instanceof WContainer container
+            && container.cells.stream().anyMatch(cell -> hasTextBox(cell.widget()));
     }
 
     private static void verifyBepHaxTheme(Minecraft client) throws ReflectiveOperationException {

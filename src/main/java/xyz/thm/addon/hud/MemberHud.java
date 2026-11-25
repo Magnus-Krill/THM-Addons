@@ -102,7 +102,7 @@ public class MemberHud extends HudElement {
 
     public final Setting<Boolean> groupByDiscordName = sgGeneral.add(new BoolSetting.Builder()
         .name("group-by-discord-name")
-        .description("Groups a member's alts under their Discord name. Bots are never grouped.")
+        .description("Groups linked accounts under their Discord name when an API token is set.")
         .defaultValue(true)
         .build()
     );

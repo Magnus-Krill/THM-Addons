@@ -19,7 +19,7 @@ import java.util.function.LongSupplier;
 
 final class PlacementPacer {
     private static final long WINDOW_NANOS = 310_000_000L;
-    private static final int LIMIT = 9;
+    static final int LIMIT = 9;
 
     private long startedAt;
     private int sent;

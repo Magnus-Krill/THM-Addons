@@ -1301,7 +1301,9 @@ public class TunnelMinerModule extends Module {
     private int optBreaksPerTick() { return getEffectiveOptions().breaksPerTick(); }
     private int optStealthBreakDelay() { return getEffectiveOptions().stealthBreakDelay(); }
     private int optPlacesPerTick() { return getEffectiveOptions().placesPerTick(); }
-    private int optPlaceDelay() { return getEffectiveOptions().placeDelay(); }
+    private int optPlaceDelay() {
+        return packetPlacement.mode() == PacketPlacementSettings.Mode.Pace ? 0 : getEffectiveOptions().placeDelay();
+    }
     private int optInvDelay() { return getEffectiveOptions().invDelay(); }
     private ShapeMode optShapeMode() { return getEffectiveOptions().shapeMode(); }
     private boolean optRenderMining() { return getEffectiveOptions().renderMining(); }
@@ -1972,6 +1974,7 @@ public class TunnelMinerModule extends Module {
         updateWatchdogProgressTelemetry(blocksLeftFrom(Mth.floor(mc.player.getX()), Mth.floor(mc.player.getZ())));
 
         // Decrement timers and skip phase logic if active
+        if (packetPlacement.mode() == PacketPlacementSettings.Mode.Pace) placeTimer = 0;
         if (placeTimer > 0) {
             placeTimer--;
             watchdogTick("onTick-skip-place-timer", tickStartNs);
@@ -3757,7 +3760,11 @@ public class TunnelMinerModule extends Module {
         int deferredAirUnbreakable = 0;
         int deferredBreakForActiveMine = 0;
 
-        while (it.hasNext() && actions < optPlacesPerTick()) {
+        int configuredLimit = optPlacesPerTick();
+        var mode = packetPlacement.mode();
+        boolean pace = mode == PacketPlacementSettings.Mode.Pace;
+        int maxActions = PlacementUtils.placementsPerTick(mode, configuredLimit);
+        while (it.hasNext() && (pace ? actions - brokeForAir - brokeForSolid : actions) < maxActions) {
             Map.Entry<BlockPos, BlockState> entry = it.next();
             BlockPos pos = entry.getKey();
             BlockState original = entry.getValue();
@@ -3814,6 +3821,7 @@ public class TunnelMinerModule extends Module {
                     continue;
                 }
 
+                if (brokeForAir + brokeForSolid >= configuredLimit) continue;
                 if (BlockUtils.canBreak(pos, current)) {
                     ensurePickaxe();
                     BlockUtils.breakBlock(pos, true);
@@ -3831,6 +3839,7 @@ public class TunnelMinerModule extends Module {
                     continue;
                 }
 
+                if (brokeForAir + brokeForSolid >= configuredLimit) continue;
                 if (BlockUtils.canBreak(pos, current)) {
                     ensurePickaxe();
                     BlockUtils.breakBlock(pos, true);
@@ -3842,6 +3851,7 @@ public class TunnelMinerModule extends Module {
                 continue;
             }
 
+            if (PlacementUtils.remainingPlacementPackets(mode) == 0) continue;
             int slot = findExactBlockInInv(original.getBlock());
             boolean exactRestore = true;
             if (slot == -1) {
@@ -4411,26 +4421,32 @@ public class TunnelMinerModule extends Module {
             return false;
         }
 
+        var mode = packetPlacement.mode();
+        boolean placed = false;
         for (int d = 1; d <= optAirPlaceDistance(); d++) {
+            if (PlacementUtils.remainingPlacementPackets(mode) == 0) return placed;
             BlockPos placePos = new BlockPos(px + stepX * d, py - 1, pz + stepZ * d);
+            if (mode == PacketPlacementSettings.Mode.Pace && !mc.player.isWithinBlockInteractionRange(placePos, 0)) continue;
             if (mc.level.getBlockState(placePos).isAir()) {
                 int slot = findTraversalPlacementSlot(placePos);
                 if (slot == -1) {
                     watchdogCalc("place-ahead", String.format(Locale.ROOT, "result=false,reason=no-slot,pos=%s,d=%d", formatPos(placePos), d));
-                    return false;
+                    return placed;
                 }
                 int hb = preparePlacementSlot(slot);
                 if (hb == -1) {
                     watchdogCalc("place-ahead", String.format(Locale.ROOT, "result=false,reason=no-hotbar,pos=%s,slot=%d", formatPos(placePos), slot));
-                    return false;
+                    return placed;
                 }
 
                 if (tryAirPlaceAt(placePos, hb, false)) {
                     watchdogCalc("place-ahead", String.format(Locale.ROOT, "result=true,pos=%s,d=%d,slot=%d,hb=%d", formatPos(placePos), d, slot, hb));
-                    return true;
+                    if (mode != PacketPlacementSettings.Mode.Pace) return true;
+                    placed = true;
                 }
             }
         }
+        if (placed) return true;
         watchdogCalc("place-ahead", String.format(Locale.ROOT, "result=false,reason=no-placement,pos=(%d,%d),step=(%d,%d),dist=%d", px, pz, stepX, stepZ, optAirPlaceDistance()));
         return false;
     }
@@ -4488,7 +4504,11 @@ public class TunnelMinerModule extends Module {
         int skippedNoHotbar = 0;
 
         Iterator<Map.Entry<BlockPos, BlockState>> it = fillLog.entrySet().iterator();
-        while (it.hasNext() && placed < optPlacesPerTick()) {
+        var mode = packetPlacement.mode();
+        boolean pace = mode == PacketPlacementSettings.Mode.Pace;
+        int sent = 0;
+        int maxPlacements = PlacementUtils.placementsPerTick(mode, optPlacesPerTick());
+        while (it.hasNext() && (pace ? sent : placed) < maxPlacements) {
             Map.Entry<BlockPos, BlockState> e = it.next();
             BlockPos pos = e.getKey();
             BlockState original = e.getValue();
@@ -4550,6 +4570,7 @@ public class TunnelMinerModule extends Module {
                 continue;
             }
 
+            if (PlacementUtils.remainingPlacementPackets(mode) == 0) continue;
             int slot = findExactBlockInInv(original.getBlock());
             boolean exactRestore = true;
             if (slot == -1) {
@@ -4573,6 +4594,7 @@ public class TunnelMinerModule extends Module {
             }
 
             if (tryAirPlaceAt(pos, hb, false)) {
+                sent++;
                 BlockState after = mc.level.getBlockState(pos);
                 if (isRestoreSatisfied(original, after, strictExactRestore)) {
                     it.remove();
@@ -4582,8 +4604,8 @@ public class TunnelMinerModule extends Module {
         }
 
         // If we placed blocks, wait before going back to mine
-        if (placed > 0) {
-            if (optDebugMessages()) { info("Placed " + placed + " blocks behind.");}
+        if (placed > 0 || (pace && sent > 0)) {
+            if (placed > 0 && optDebugMessages()) info("Placed " + placed + " blocks behind.");
 
             placeTimer = optPlaceDelay();
             ensurePickaxe();
@@ -4643,7 +4665,10 @@ public class TunnelMinerModule extends Module {
 
     private boolean restoreBehindForRestock(int px, int pz, int forwardX, int forwardZ, int reservedX, int reservedZ) {
         int actions = 0;
-        int maxActions = Math.max(1, optPlacesPerTick());
+        int configuredLimit = Math.max(1, optPlacesPerTick());
+        var mode = packetPlacement.mode();
+        boolean pace = mode == PacketPlacementSettings.Mode.Pace;
+        int maxActions = PlacementUtils.placementsPerTick(mode, configuredLimit);
         boolean placed = false;
         double reach = 4 + Objects.requireNonNull(Modules.get().get(Reach.class)).blockReach();
         boolean strictExactRestore = isStrictStealthExactRestoreEnabled();
@@ -4664,7 +4689,7 @@ public class TunnelMinerModule extends Module {
         int placedFallback = 0;
 
         Iterator<Map.Entry<BlockPos, BlockState>> it = stealthCache.entrySet().iterator();
-        while (it.hasNext() && actions < maxActions) {
+        while (it.hasNext() && (pace ? actions - brokeForAir - brokeForSolid : actions) < maxActions) {
             Map.Entry<BlockPos, BlockState> entry = it.next();
             BlockPos pos = entry.getKey();
             BlockState original = entry.getValue();
@@ -4702,6 +4727,7 @@ public class TunnelMinerModule extends Module {
                     removedMatch++;
                     continue;
                 }
+                if (brokeForAir + brokeForSolid >= configuredLimit) continue;
                 if (!BlockUtils.canBreak(pos, current)) {
                     deferredUnbreakable++;
                     continue;
@@ -4714,6 +4740,7 @@ public class TunnelMinerModule extends Module {
             }
 
             if (!current.isAir()) {
+                if (brokeForAir + brokeForSolid >= configuredLimit) continue;
                 if (!BlockUtils.canBreak(pos, current)) {
                     deferredUnbreakable++;
                     continue;
@@ -4725,6 +4752,7 @@ public class TunnelMinerModule extends Module {
                 continue;
             }
 
+            if (PlacementUtils.remainingPlacementPackets(mode) == 0) continue;
             int slot = findExactBlockInInv(original.getBlock());
             boolean exactRestore = true;
             if (slot == -1) {

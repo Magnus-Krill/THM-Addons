@@ -89,11 +89,11 @@ public class Surround extends Module {
 
     private final Setting<Integer> blocksPerTick = sgGeneral.add(new IntSetting.Builder()
         .name("blocks-per-tick").description("Maximum placements per tick.")
-        .defaultValue(4).min(1).sliderMax(8).build());
+        .defaultValue(4).min(1).sliderMax(8).visible(this::usesLocalPlacementRate).build());
 
     private final Setting<Integer> delay = sgGeneral.add(new IntSetting.Builder()
         .name("place-delay").description("Ticks between normal placement batches.")
-        .defaultValue(0).min(0).sliderMax(10).build());
+        .defaultValue(0).min(0).sliderMax(10).visible(this::usesLocalPlacementRate).build());
 
     private final Setting<Coverage> coverage = sgShape.add(new EnumSetting.Builder<Coverage>()
         .name("coverage").description("Which levels to surround.")
@@ -420,7 +420,8 @@ public class Surround extends Module {
     }
 
     private void tryPlace(BlockPos pos, boolean immediate) {
-        if (!canAct() || PlacementUtils.remainingPlacementPackets(packet.mode()) == 0 || !targets.contains(pos) || pending.containsKey(pos)
+        var mode = packet.mode();
+        if (!canAct() || PlacementUtils.remainingPlacementPackets(mode) == 0 || !targets.contains(pos) || pending.containsKey(pos)
             || !world.getBlockState(pos).canBeReplaced()) return;
         if ((!packet.enabled() || packetOnce.get()) && !PacketPlaceTracker.canSend(pos)) return;
         long now = System.nanoTime();
@@ -436,14 +437,16 @@ public class Surround extends Module {
             if (support.get() && targets.contains(pos.below())) tryPlace(pos.below());
             return;
         }
-        if (!budget.reserve(blocksPerTick.get(), immediate ? 0 : delay.get())) return;
+        int limit = PlacementUtils.placementsPerTick(mode, blocksPerTick.get());
+        int batchDelay = immediate || mode == PacketPlacementSettings.Mode.Pace ? 0 : delay.get();
+        if (!budget.reserve(limit, batchDelay)) return;
         Placement placement = new Placement(world.getBlockState(pos), now);
         pending.put(pos, placement);
         int expectedGeneration = generation;
         Runnable action = () -> {
             if (generation != expectedGeneration || pending.get(pos) != placement) return;
             rebuildTargets();
-            if (!canAct() || PlacementUtils.remainingPlacementPackets(packet.mode()) == 0 || !targets.contains(pos)) {
+            if (!canAct() || mode != packet.mode() || PlacementUtils.remainingPlacementPackets(mode) == 0 || !targets.contains(pos)) {
                 cancel(pos, placement);
                 return;
             }
@@ -455,7 +458,7 @@ public class Surround extends Module {
                 cancel(pos, placement);
                 return;
             }
-            if (!budget.dispatch(blocksPerTick.get(), immediate ? 0 : delay.get(), () -> {
+            if (!budget.dispatch(limit, batchDelay, () -> {
                 if (immediate && rotate.get()) {
                     float yaw = (float) Rotations.getYaw(actualHit.getLocation()), pitch = (float) Rotations.getPitch(actualHit.getLocation());
                     mc.getConnection().send(new ServerboundMovePlayerPacket.Rot(yaw, pitch, mc.player.onGround(), mc.player.horizontalCollision));
@@ -476,6 +479,10 @@ public class Surround extends Module {
         };
         if (rotate.get() && !immediate) Rotations.rotate(Rotations.getYaw(hit.getLocation()), Rotations.getPitch(hit.getLocation()), 50, action);
         else action.run();
+    }
+
+    private boolean usesLocalPlacementRate() {
+        return packet.mode() != PacketPlacementSettings.Mode.Pace;
     }
 
     private void cancel(BlockPos pos, Placement placement) {

@@ -19,6 +19,14 @@ import static xyz.thm.addon.settings.PacketPlacementSettings.Mode.*;
 
 class PlacementPacerTest {
     @Test
+    void paceReplacesLowerAndHigherLocalTickCaps() {
+        assertEquals(9, PlacementUtils.placementsPerTick(Pace, 1));
+        assertEquals(9, PlacementUtils.placementsPerTick(Pace, 30));
+        assertEquals(1, PlacementUtils.placementsPerTick(Normal, 1));
+        assertEquals(30, PlacementUtils.placementsPerTick(Direct, 30));
+    }
+
+    @Test
     void onlyPacedSendsShareNineSlotsAcrossModules() {
         PlacementPacer pacer = new PlacementPacer();
         long start = 40_000_000L;

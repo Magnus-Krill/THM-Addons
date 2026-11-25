@@ -101,7 +101,9 @@ public class THMTab extends Tab {
 
         @Override
         public boolean fromClipboard() {
-            return NbtUtils.fromClipboard(THMSystem.get());
+            if (!NbtUtils.fromClipboard(THMSystem.get())) return false;
+            reload();
+            return true;
         }
     }
 

@@ -148,6 +148,7 @@ public class THMScaffold extends Module {
         .description("How many blocks to place in one tick.")
         .defaultValue(10)
         .min(1)
+        .visible(this::usesLocalPlacementLimit)
         .build()
     );
 
@@ -400,7 +401,7 @@ public class THMScaffold extends Module {
 
     private boolean thm$place(BlockPos pos, FindItemResult item, boolean rotate, int priority, boolean swing, boolean checkEntities) {
         if (mc.player == null || mc.level == null || mc.gameMode == null || !item.found()
-            || placementsThisTick >= blocksPerTick.get() || PlacementUtils.remainingPlacementPackets(thm$packet.mode()) == 0) return false;
+            || atPlacementLimit()) return false;
         BlockPos target = thm$applyKeepY(pos).immutable();
         if (!thm$canPlace(target, item, checkEntities) || !thm$queued.add(target.asLong())) return false;
         Direction side = thm$placeSide(target);
@@ -545,14 +546,15 @@ public class THMScaffold extends Module {
 
         boolean placed = false;
         for (BlockPos target : placementTargets(anchor, radius.get(), pos)) {
-            if (placementsThisTick >= blocksPerTick.get()) break;
+            if (atPlacementLimit()) break;
             placed |= place(target);
         }
         double reach = mc.player.blockInteractionRange();
         if (!placed && !airPlace.get() && mc.level.getBlockState(anchor).canBeReplaced()
             && thm$placeSide(anchor) == null && reach > radius.get()) {
             for (BlockPos target : placementTargets(anchor, reach, pos)) {
-                if (place(target)) break;
+                if (atPlacementLimit()) break;
+                if (place(target) && usesLocalPlacementLimit()) break;
             }
         }
 
@@ -572,6 +574,16 @@ public class THMScaffold extends Module {
                 mc.player.setOnGround(true);
             }
         }
+    }
+
+    private boolean usesLocalPlacementLimit() {
+        return thm$packet.mode() != PacketPlacementSettings.Mode.Pace;
+    }
+
+    private boolean atPlacementLimit() {
+        var mode = thm$packet.mode();
+        return placementsThisTick >= PlacementUtils.placementsPerTick(mode, blocksPerTick.get())
+            || PlacementUtils.remainingPlacementPackets(mode) == 0;
     }
 
     private boolean validItem(ItemStack itemStack, BlockPos pos) {
