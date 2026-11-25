@@ -41,6 +41,7 @@ import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.systems.modules.combat.AutoTotem;
 import meteordevelopment.meteorclient.systems.modules.combat.Criticals;
 import meteordevelopment.meteorclient.systems.modules.combat.KillAura;
+import meteordevelopment.meteorclient.systems.modules.misc.AutoReconnect;
 import meteordevelopment.meteorclient.systems.modules.movement.Velocity;
 import meteordevelopment.meteorclient.systems.modules.movement.speed.Speed;
 import meteordevelopment.meteorclient.systems.modules.movement.speed.SpeedModes;
@@ -133,6 +134,7 @@ import xyz.thm.addon.settings.ItemPriorityList;
 import xyz.thm.addon.system.THMSystem;
 import xyz.thm.addon.utils.*;
 import xyz.thm.addon.utils.kitbot.KitbotAvailabilityTracker;
+import xyz.thm.addon.utils.server.ServerReconnectService;
 import xyz.thm.addon.utils.server.ServerStatusHandler;
 import xyz.thm.addon.utils.server.ServerStatusHandler.ServerState;
 
@@ -2195,7 +2197,7 @@ public class HighwayBuilderTHM extends Module {
     private ReconnectBaselineLease reconnectBaselineLease;
     private boolean reconnectBaselineRestoreInProgress;
     private boolean reconnectFailureDeactivateArmed;
-    private boolean autoLogTerminalDeactivateArmed;
+    private String terminalDeactivateReason;
     private ReconnectResumeContext reconnectResumeContext;
     // travelHandoffDeactivateArmed is declared near the Auto Travel Handoff onTick check (its
     // javadoc lives there); it's used in onDeactivate alongside these other deactivate-mode flags.
@@ -2839,8 +2841,9 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private final class StatsContinuityListener {
-        @EventHandler
+        @EventHandler(priority = EventPriority.HIGH)
         private void onTick(TickEvent.Pre event) {
+            if (mc.player != null && mc.player.isDeadOrDying() && stopOnDeath()) return;
             if (isActive()) return;
             checkStatsContinuity();
             if (!statsSessionTerminalOrFinalizing) maybeCheckpointStatsSession();
@@ -3419,11 +3422,11 @@ public class HighwayBuilderTHM extends Module {
         boolean isMonitorPauseDeactivate = monitorPauseDeactivateArmed;
         boolean isTravelHandoffDeactivate = travelHandoffDeactivateArmed;
         boolean isReconnectFailureDeactivate = reconnectFailureDeactivateArmed;
-        boolean isAutoLogTerminalDeactivate = autoLogTerminalDeactivateArmed;
+        String terminalReason = terminalDeactivateReason;
         monitorPauseDeactivateArmed = false;
         travelHandoffDeactivateArmed = false;
         reconnectFailureDeactivateArmed = false;
-        autoLogTerminalDeactivateArmed = false;
+        terminalDeactivateReason = null;
         lastRepairWorkPos = null;
         // A monitor pause resumes the same repair, so the Traveler handback stays requested through it.
         if (!isMonitorPauseDeactivate) {
@@ -3511,7 +3514,7 @@ public class HighwayBuilderTHM extends Module {
             return;
         }
 
-        if (kitbotUpdateOnFinish.get() && !isReconnectFailureDeactivate && !isAutoLogTerminalDeactivate) {
+        if (kitbotUpdateOnFinish.get() && !isReconnectFailureDeactivate && terminalReason == null) {
             if (!restockingAtStop && !currentLoopRoute().isEmpty()) {
                 if (sendStatusLog(true)) info("Sent final map progress to KitBot1.");
             } else if (restockingAtStop || KitbotFrontend.hasActiveWindow()) {
@@ -3541,13 +3544,18 @@ public class HighwayBuilderTHM extends Module {
             }
         }
 
-        StatsArtifactSnapshot finalizationRecord = persistFinalizationRecord(createFinalizationRecord("deactivate"), "deactivate-finalization-record");
+        finalizeStoppedStats(terminalReason == null ? "deactivate" : terminalReason);
+    }
+
+    private void finalizeStoppedStats(String reason) {
+        if (!hasActiveInMemoryStatsSession()) return;
+        StatsArtifactSnapshot finalizationRecord = persistFinalizationRecord(createFinalizationRecord(reason), reason + "-finalization-record");
         if (finalizationRecord == null) {
             warning("Unable to persist final HighwayBuilder statistics safely before deactivate.");
             return;
         }
 
-        if (!completeFinalizationRecord(finalizationRecord, "printed-on-deactivate", true)) {
+        if (!completeFinalizationRecord(finalizationRecord, "printed-on-" + reason, true)) {
             warning("Unable to complete HighwayBuilder statistics safely during deactivate; keeping durable finalization record.");
         }
 
@@ -5063,6 +5071,8 @@ public class HighwayBuilderTHM extends Module {
     }
 
     public void hardFailForMonitorRecovery(String message, Object... args) {
+        StatsDisplaySnapshot stats = createStatsDisplaySnapshot(start, blocksBroken, blocksPlaced);
+        String sessionId = activeStatsSessionId;
         super.error(message, args);
         try {
             THMHwyMonitor.signalNonRestartHardFailFromHighwayBuilder();
@@ -5072,18 +5082,66 @@ public class HighwayBuilderTHM extends Module {
 
         monitorPauseDeactivateArmed = false;
         reconnectFailureDeactivateArmed = false;
+        logTerminalStats("monitor-recovery-failed", stats);
         if (isActive()) {
+            terminalDeactivateReason = "monitor-recovery-failed";
             suppressThmHwyMonitorSync = true;
             try {
                 disable();
             } finally {
                 suppressThmHwyMonitorSync = false;
             }
+        } else if (disconnectOnToggle.get()) {
+            finalizePausedTerminalStop("monitor-recovery-failed");
         }
 
         if (disconnectOnToggle.get()) {
-            disconnect(message, args);
+            disconnect(stats, sessionId, message, args);
         }
+    }
+
+    public boolean stopOnDeath() {
+        THMHwyMonitor monitor = Modules.get().get(THMHwyMonitor.class);
+        if (!isActive() && (monitor == null || !monitor.isRecoveringBuilder(this))) return false;
+        if (!canDisconnectThroughHighwayBuilder()) return false;
+
+        if (isActive()) checkStatsContinuity();
+        StatsDisplaySnapshot stats = createStatsDisplaySnapshot(start, blocksBroken, blocksPlaced);
+        String sessionId = activeStatsSessionId;
+        logTerminalStats("player-death", stats);
+
+        try {
+            if (monitor != null) monitor.prepareForTerminalLogout("player-death");
+            else ServerReconnectService.getInstance().disarmReconnect("HighwayBuilder player death");
+            AutoReconnect autoReconnect = Modules.get().get(AutoReconnect.class);
+            if (autoReconnect != null) autoReconnect.disable();
+
+            resumeStatsSessionOnNextActivate = false;
+            monitorPauseDeactivateArmed = false;
+            reconnectFailureDeactivateArmed = false;
+            if (isActive()) {
+                terminalDeactivateReason = "player-death";
+                disable();
+            } else {
+                finalizePausedTerminalStop("player-death");
+                syncThmHwyMonitorOnDeactivate();
+            }
+        } finally {
+            if (canDisconnectThroughHighwayBuilder()) disconnect(stats, sessionId, "You died.");
+        }
+        return true;
+    }
+
+    private void finalizePausedTerminalStop(String reason) {
+        resumeStatsSessionOnNextActivate = false;
+        releaseThmSpeedOwnership(reason, true);
+        invalidateReconnectBaseline(reason);
+        finalizeStoppedStats(reason);
+    }
+
+    private void logTerminalStats(String reason, StatsDisplaySnapshot stats) {
+        statsCacheDebug("terminal-stop reason={} distance={} broken={} placed={}", reason,
+            String.format(Locale.ROOT, "%.0f", stats.distance()), stats.blocksBroken(), stats.blocksPlaced());
     }
 
     public boolean hardFailFromAutoLog(Component autoLogReason) {
@@ -5100,7 +5158,7 @@ public class HighwayBuilderTHM extends Module {
 
         monitorPauseDeactivateArmed = false;
         reconnectFailureDeactivateArmed = false;
-        autoLogTerminalDeactivateArmed = true;
+        terminalDeactivateReason = "deactivate";
 
         suppressThmHwyMonitorSync = true;
         try {
@@ -12581,7 +12639,10 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private MutableComponent createStatsText(Vec3 statsStart, int statsBroken, int statsPlaced) {
-        StatsDisplaySnapshot display = createStatsDisplaySnapshot(statsStart, statsBroken, statsPlaced);
+        return createStatsText(createStatsDisplaySnapshot(statsStart, statsBroken, statsPlaced));
+    }
+
+    private MutableComponent createStatsText(StatsDisplaySnapshot display) {
         MutableComponent text = Component.literal(String.format("%sDistance: %s%.0f\n", ChatFormatting.GRAY, ChatFormatting.WHITE, display.distance()));
         text.append(String.format("%sBlocks broken: %s%d\n", ChatFormatting.GRAY, ChatFormatting.WHITE, display.blocksBroken()));
         text.append(String.format("%sBlocks placed: %s%d\n", ChatFormatting.GRAY, ChatFormatting.WHITE, display.blocksPlaced()));
@@ -14242,6 +14303,10 @@ public class HighwayBuilderTHM extends Module {
     }
 
     private void disconnect(String message, Object... args) {
+        disconnect(null, null, message, args);
+    }
+
+    private void disconnect(StatsDisplaySnapshot stats, String sessionId, String message, Object... args) {
         notifyDesktop(notifyDisconnect, "THM Highway Builder", "Disconnected: " + String.format(message, args));
 
         MutableComponent text = Component.literal("[")
@@ -14250,7 +14315,8 @@ public class HighwayBuilderTHM extends Module {
             .append(Component.literal("] ").withStyle(style -> style.withColor(ChatFormatting.WHITE)))
             .append(Component.literal(String.format(message, args)).withStyle(style -> style.withColor(ChatFormatting.RED)));
 
-        StatsDisconnectPresentation presentation = appendRetiredStatsToDisconnectPresentation(text);
+        StatsDisconnectPresentation presentation = stats == null ? appendRetiredStatsToDisconnectPresentation(text)
+            : new StatsDisconnectPresentation(text.append("\n").append(createStatsText(stats)), sessionId);
 
         mc.getConnection().getConnection().disconnect(presentation.text());
         scheduleRetiredStatsDisconnectScreenshot(presentation, "disconnect-screen-stats");

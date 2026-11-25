@@ -87,7 +87,7 @@ public class AutoLogMixin {
     private void thm$prepareHwyMonitorTerminalLogout(String reason) {
         try {
             THMHwyMonitor monitor = Modules.get().get(THMHwyMonitor.class);
-            if (monitor != null) monitor.prepareForAutoLogTerminalLogout(reason);
+            if (monitor != null) monitor.prepareForTerminalLogout("autolog:" + reason);
             else THMHwyMonitor.signalNonRestartHardFailFromHighwayBuilder();
         } catch (NoClassDefFoundError | ExceptionInInitializerError ignored) {
             // Baritone-dependent monitor not available.

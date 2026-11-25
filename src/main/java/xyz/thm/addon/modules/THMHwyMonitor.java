@@ -415,10 +415,14 @@ public class THMHwyMonitor extends Module {
         RESTART_HARD_FAIL_SIGNAL.set(true);
     }
 
-    public void prepareForAutoLogTerminalLogout(String reason) {
+    boolean isRecoveringBuilder(HighwayBuilderTHM builder) {
+        return isActive() && recoveryBuilder == builder;
+    }
+
+    public void prepareForTerminalLogout(String reason) {
         String safeReason = reason == null || reason.isBlank() ? "unknown" : reason;
         abortActiveRecoveryForNonRestartHardFail();
-        clearRestartAutomationState("autolog-terminal-logout:" + safeReason, true, true);
+        clearRestartAutomationState("terminal-logout:" + safeReason, true, true);
         clearRestartDisconnectEvidence();
         unresolvedMainServerDisconnectCandidate = false;
         deferRestartScreenshotUntilReconnect = false;
@@ -3123,6 +3127,9 @@ public class THMHwyMonitor extends Module {
     }
 
     private void abortActiveRecoveryForNonRestartHardFail() {
+        if (recoveryPhase == RecoveryPhase.BaritoneWalking || recoveryPhase == RecoveryPhase.BaritoneStopping) {
+            stopBaritoneForRecovery(getPrimaryBaritoneForRecovery());
+        }
         preserveHighwayBuilderDisabledAcrossRecoveryResume();
         resetRecoveryState();
         resetForwardProgressWatch();

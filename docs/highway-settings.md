@@ -471,6 +471,10 @@ Every THM debug category also writes to `logs/thm/<start-time>/thm-debug-all.log
 
 ### Recovery across disconnects
 
+Death stops HighwayBuilder and any monitor recovery, disarms reconnect, and disconnects with the
+run statistics on screen. Death and recovery failures log the distance locally. Both finalize the
+run on disconnect and submit proof of work when API statistics are enabled and the run qualifies.
+
 A disconnect during monitor-owned recovery preserves the builder's resume intent, even while the
 monitor has temporarily disabled it. Leaving the main server cancels recovery pathing. Normal
 misalignment correction applies the server-state and maximum-distance checks and waits until the

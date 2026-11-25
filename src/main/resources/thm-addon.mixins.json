@@ -105,6 +105,7 @@
     "ClientConnectionChokeMixin",
     "ClientLevelBlockUpdateMixin",
     "DistantHorizonsLightmapMixin",
+    "HighwayBuilderDeathMixin",
     "InventoryScreenMixin",
     "JoinMultiplayerScreenMixin",
     "KeyboardMixin",
