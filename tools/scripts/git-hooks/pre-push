@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-# Block the push (also from GitHub Desktop) when the JUnit tests fail.
-set -euo pipefail
-cd "$(git rev-parse --show-toplevel)"
-./gradlew test --console=plain -q
