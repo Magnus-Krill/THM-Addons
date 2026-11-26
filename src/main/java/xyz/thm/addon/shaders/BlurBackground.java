@@ -166,30 +166,46 @@ class BlurBackground {
             vec2 side = q.x > q.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
             vec2 normal = sign(p) * (dot(corner, corner) > 0.001 ? normalize(corner) : side);
             float depth = -distance;
-            float bevel = 1.0 - smoothstep(0.0, radius * 1.15, depth);
+            float bevel = 1.0 - smoothstep(0.0, min(radius * 1.45, 26.0), depth);
             vec2 bend = normal * bevel * bevel * radius * pointerAndLens.z;
-            vec2 uv = (gl_FragCoord.xy - bend) / frameAndStyle.xy;
-            vec3 scene = texture(InSampler, uv).rgb;
+            vec2 texel = 1.0 / frameAndStyle.xy;
+            vec2 uv = (gl_FragCoord.xy - bend) * texel;
+            // Light 3x3 blur keeps labels readable; it tightens toward the rim so the lens stays crisp.
+            float spread = mix(3.0, 1.0, bevel);
+            vec3 scene = vec3(0.0);
+            for (int ix = -1; ix <= 1; ix++) {
+                for (int iy = -1; iy <= 1; iy++) {
+                    float w = (2.0 - abs(float(ix))) * (2.0 - abs(float(iy))) / 16.0;
+                    scene += texture(InSampler, uv + vec2(float(ix), float(iy)) * spread * texel).rgb * w;
+                }
+            }
             if (bevel > 0.0) {
-                vec2 dispersion = normal * bevel * 1.35 / frameAndStyle.xy;
+                vec2 dispersion = normal * bevel * 1.6 * texel;
                 scene.r = texture(InSampler, uv + dispersion).r;
                 scene.b = texture(InSampler, uv - dispersion).b;
             }
+            scene = mix(vec3(dot(scene, vec3(0.299, 0.587, 0.114))), scene, 1.35);
 
-            vec3 glass = mix(scene, tint.rgb, tint.a) * 0.61 + vec3(0.025, 0.031, 0.044);
+            vec3 glass = mix(scene, tint.rgb, tint.a) * 0.78 + vec3(0.04, 0.047, 0.065);
             // Compress bright backdrops while keeping their color behind light labels.
             float peak = max(glass.r, max(glass.g, glass.b));
-            glass *= 1.0 / (1.0 + peak * 1.25);
+            glass *= 1.0 / (1.0 + peak * 0.95);
+            // Soft top-down sheen, as on a curved pane.
+            glass += vec3(0.07, 0.078, 0.09) * smoothstep(0.0, 1.0, p.y / (rectPixels.w * 0.5));
 
             vec2 toPointer = pointerAndLens.xy - gl_FragCoord.xy;
             float proximity = 1.0 - smoothstep(18.0, 240.0, length(toPointer));
             vec2 light = normalize(vec2(-0.68, 0.8) + toPointer / max(length(toPointer), 1.0) * proximity * 0.8);
             float facing = dot(normal, light);
-            float glint = exp(-0.47 * abs(depth - 1.5)) * pow(max(facing, 0.0), 2.0);
-            float bounce = exp(-0.57 * abs(depth - 1.2)) * max(-facing, 0.0);
-            float edgeShadow = exp(-0.43 * abs(depth - 5.0)) * max(-facing, 0.0);
-            glass *= 1.0 - edgeShadow * 0.23;
-            glass = mix(glass, vec3(0.83, 0.9, 1.0), glint * (0.48 + proximity * 0.2) + bounce * 0.18);
+            float lit = pow(max(facing, 0.0), 2.0);
+            // Continuous specular rim, strongest toward the light, with a fainter bounce opposite.
+            float rim = exp(-1.1 * abs(depth - 0.9)) * (0.22 + 0.78 * lit);
+            float glint = exp(-0.4 * abs(depth - 2.2)) * lit;
+            float bounce = exp(-0.5 * abs(depth - 1.4)) * max(-facing, 0.0);
+            float edgeShadow = exp(-0.4 * abs(depth - 6.0)) * max(-facing, 0.0);
+            glass *= 1.0 - edgeShadow * 0.2;
+            glass += vec3(0.05, 0.06, 0.08) * exp(-0.1 * depth) * bevel;
+            glass = mix(glass, vec3(0.9, 0.95, 1.0), clamp(rim * 0.6 + glint * (0.38 + proximity * 0.2) + bounce * 0.22, 0.0, 1.0));
             fragColor = vec4(glass, coverage * frameAndStyle.w);
         }
         """;
