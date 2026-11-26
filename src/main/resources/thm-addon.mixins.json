@@ -17,6 +17,7 @@
     "GhostAlphaMixin",
     "GhostPipelineMixin",
     "GhostRenderMixin",
+    "DisconnectedScreenMixin",
     "GuiBackgroundMixin",
     "GuiItemRenderStateMixin",
     "GuiScreenMixin",
