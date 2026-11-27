@@ -129,9 +129,16 @@ public class Speedmine extends Module {
 
     public final Setting<Keybind> autoMineBind = sgAuto.add(new KeybindSetting.Builder()
         .name("auto-mine-bind")
-        .description("Hold this to auto-mine. Leave unbound to have auto-mine run whenever the module is on.")
+        .description("Switches auto-mine on and off. Leave unbound to have auto-mine run whenever the module is on.")
         .defaultValue(Keybind.none())
         .visible(autoMine::get)
+        .build());
+
+    private final Setting<BindMode> autoMineBindMode = sgAuto.add(new EnumSetting.Builder<BindMode>()
+        .name("auto-mine-bind-mode")
+        .description("How the auto-mine bind works.")
+        .defaultValue(BindMode.Toggle)
+        .visible(() -> autoMine.get() && autoMineBind.get().isSet())
         .build());
 
     private final Setting<Boolean> debugAutoMine = sgAuto.add(new BoolSetting.Builder()
@@ -380,6 +387,7 @@ public class Speedmine extends Module {
     private String autoMineStatus;
     private String lastAutoMineStatus;
     private long nextAutoMineReportTick;
+    private boolean autoMineBindOn, autoMineBindDown;
     private int autoAirRejected, autoSelfRejected, autoRangeRejected, autoDisabledRejected, autoUnbreakableRejected;
 
     // ── Constructor ───────────────────────────────────────────────────────────
@@ -449,6 +457,7 @@ public class Speedmine extends Module {
         lastMiningActionTick = 0;
         autoMineStatus = lastAutoMineStatus = null;
         nextAutoMineReportTick = 0;
+        autoMineBindOn = autoMineBindDown = false;
         resetRebreakMonitor();
     }
 
@@ -593,6 +602,7 @@ public class Speedmine extends Module {
         if (mc.level == null || mc.player == null) return;
 
         clientTick++;
+        tickAutoMineBind();
         if (!mc.options.keyAttack.isDown()) queueClickConsumed = false;
         if (toolLatencyCheck.get()) toolLatency.record(System.nanoTime(),
             efficiency(InventoryManager.getInstance().getServerItem()), toolLatencyWindow());
@@ -978,7 +988,17 @@ public class Speedmine extends Module {
 
     /** A bound key is hold-to-mine; an unbound one means "always on". */
     private boolean autoMineHeld() {
-        return !autoMineBind.get().isSet() || autoMineBind.get().isPressed();
+        return !autoMineBind.get().isSet() || autoMineBindOn;
+    }
+
+    private void tickAutoMineBind() {
+        boolean down = autoMineBind.get().isSet() && mc.gui.screen() == null && autoMineBind.get().isPressed();
+        boolean pressed = down && !autoMineBindDown;
+        autoMineBindDown = down;
+        boolean on = autoMineBindMode.get() == BindMode.Hold ? down : autoMineBindOn ^ pressed;
+        if (on == autoMineBindOn) return;
+        autoMineBindOn = on;
+        if (autoMine.get()) info("Auto Mine " + (on ? "(highlight)on" : "(highlight)off") + "(default).");
     }
 
     /** Every valid target around nearby enemies, nearest first. */
@@ -1359,6 +1379,22 @@ public class Speedmine extends Module {
     private void renderBlock(Render3DEvent event, BlockPos pos) {
         RenderUtilsTHM.renderBlockShape(event, pos, mc.level.getBlockState(pos),
             renderColor.get(), renderColor.get(), ShapeMode.Lines);
+    }
+
+    public enum BindMode implements DescribedOption {
+        Toggle("Press the bind to switch auto-mine on or off."),
+        Hold("Auto-mine only while the bind is held.");
+
+        private final String description;
+
+        BindMode(String description) {
+            this.description = description;
+        }
+
+        @Override
+        public String description() {
+            return description;
+        }
     }
 
     public enum RebreakTrigger implements DescribedOption {
