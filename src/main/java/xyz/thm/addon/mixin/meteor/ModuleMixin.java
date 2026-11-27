@@ -21,7 +21,9 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import xyz.thm.addon.settings.GuiSoundSettings;
 import xyz.thm.addon.settings.PacketPlacementSettings;
+import xyz.thm.addon.system.THMSystem;
 
 @Mixin(value = Module.class, remap = false)
 public abstract class ModuleMixin {
@@ -76,5 +78,12 @@ public abstract class ModuleMixin {
         // Titles preserve the existing distinct registry names.
         if (((Module) (Object) this).name.equals("thmcrystal-aura")) title = "THMcrystal aura";
         if (((Module) (Object) this).name.equals("surround-plus")) title = "Surround";
+    }
+
+    @Inject(method = "toggle", at = @At("TAIL"))
+    private void thm$toggleSound(CallbackInfo ci) {
+        THMSystem system = THMSystem.get();
+        if (system == null || !GuiSoundSettings.guiOpen()) return;
+        (((Module) (Object) this).isActive() ? system.guiSounds.toggleOn : system.guiSounds.toggleOff).play();
     }
 }

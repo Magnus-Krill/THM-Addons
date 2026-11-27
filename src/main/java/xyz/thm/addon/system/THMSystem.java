@@ -24,6 +24,7 @@ import net.minecraft.nbt.CompoundTag;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.gui.ClickGuiAnimation;
 import xyz.thm.addon.modules.HighwayBuilderTHM;
+import xyz.thm.addon.settings.GuiSoundSettings;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.settings.StringMultiSelect;
 import xyz.thm.addon.shaders.ShaderManager;
@@ -59,6 +60,7 @@ public class THMSystem extends System<THMSystem> {
 
     public final Settings guiSettings = new Settings();
     private final SettingGroup sgGuiAppearance = guiSettings.createGroup("Appearance");
+    public final GuiSoundSettings guiSounds = new GuiSoundSettings(guiSettings.createGroup("Sounds"));
 
     // Separate settings object for the Main Menu screen, opened from a button on the title screen
     public final Settings mainMenuSettings = new Settings();

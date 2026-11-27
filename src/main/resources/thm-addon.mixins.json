@@ -74,6 +74,7 @@
     "meteor.LogoutSpotsMixin",
     "meteor.MeteorGuiThemeMixin",
     "meteor.ModuleMixin",
+    "meteor.WWidgetSoundMixin",
     "meteor.ModulesMixin",
     "meteor.ModulesScreenMixin",
     "meteor.NametagsMixin",

@@ -106,3 +106,4 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - Disconnect button on the vanilla "Loading terrain" screen, which otherwise has no way out when it hangs.
 - GUI themes: `Dark`, `Snowy`, `Lambda`, `Stardust`, `Midnight`, `Monochrome`, `Nether`, `BepHax`, `Violet Glass`, `Liquid Glass`.
 - **GUI → Appearance → Click GUI Animation** changes how the Modules screen opens and closes. Choose Fade, Scatter, Drop, Unfold, Split, or Ripple. Set **Animation Speed** to 25–300% for any preset.
+- **GUI → Sounds** plays sounds for module hover, toggle on and off, right click, and button clicks. Each event has its own sound, volume, and pitch. On by default.
