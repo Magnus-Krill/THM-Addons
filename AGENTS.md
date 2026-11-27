@@ -180,7 +180,7 @@ when the active row has no forward boundary. Double Mine promotes N to P after a
 
 **Local client diagnostics:** `-Dthm.localClientBridge=true` enables a private Unix socket.
 Find its path in `latest.log` and send one JSON line per connection. Methods are `status`,
-`settings`, `modules`, `inventory`, `start`, `stop` and `chat` (with a `message` string).
+`settings` and `toggle` (optional `module`, default HighwayBuilder), `set` (`module`, `setting`, `value`), `modules`, `inventory`, `start`, `stop` and `chat` (with a `message` string).
 Run actions on the client thread and keep chat messages local. Exclude secrets from responses.
 
 **Highway KitBot stock guard:** Remaining supplies or an unchecked bank trigger bounded local

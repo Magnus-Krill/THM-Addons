@@ -16,6 +16,8 @@ package xyz.thm.addon.utils;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import meteordevelopment.meteorclient.settings.Setting;
+import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -38,12 +40,14 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import static meteordevelopment.meteorclient.MeteorClient.mc;
 
 public final class LocalClientBridge {
     private static final Gson JSON = new Gson();
     private static final int MAX_REQUEST_BYTES = 2048;
+    private static final Pattern SECRET = Pattern.compile("(?i)token|password|passwd|webhook|secret|api-?key|auth");
 
     private LocalClientBridge() {}
 
@@ -134,10 +138,20 @@ public final class LocalClientBridge {
     private static Object execute(JsonObject request, HighwayBuilderTHM builder) {
         return switch (requiredString(request, "method")) {
             case "status" -> status(builder);
-            case "settings" -> settings(builder);
+            case "settings" -> settings(request, builder);
             case "modules" -> Modules.get().getAll().stream().map(module ->
                 Map.of("name", module.name, "active", module.isActive())).toList();
             case "inventory" -> inventory();
+            case "set" -> {
+                var setting = setting(request, builder);
+                if (!setting.parse(requiredString(request, "value"))) throw new IllegalArgumentException("Invalid value for " + setting.name + ".");
+                yield Map.of(setting.name, readable(setting.get()));
+            }
+            case "toggle" -> {
+                Module module = module(request, builder);
+                module.toggle();
+                yield Map.of("name", module.name, "active", module.isActive());
+            }
             case "start" -> {
                 if (mc.player == null || mc.level == null) throw new IllegalArgumentException("Join a world before starting HighwayBuilder.");
                 if (!builder.isReturningFromPause()) builder.enable();
@@ -183,13 +197,27 @@ public final class LocalClientBridge {
         return status;
     }
 
-    private static Map<String, Object> settings(HighwayBuilderTHM builder) {
+    private static Module module(JsonObject request, HighwayBuilderTHM builder) {
+        Module module = request != null && request.has("module") ? Modules.get().get(requiredString(request, "module")) : builder;
+        if (module == null) throw new IllegalArgumentException("Unknown module.");
+        return module;
+    }
+
+    private static Setting<?> setting(JsonObject request, HighwayBuilderTHM builder) {
+        Setting<?> setting = module(request, builder).settings.get(requiredString(request, "setting"));
+        if (setting == null || SECRET.matcher(setting.name).find()) throw new IllegalArgumentException("Unknown setting.");
+        return setting;
+    }
+
+    private static Object readable(Object value) {
+        return value instanceof Boolean || value instanceof Number ? value : String.valueOf(value);
+    }
+
+    private static Map<String, Object> settings(JsonObject request, HighwayBuilderTHM builder) {
         Map<String, Object> values = new LinkedHashMap<>();
-        for (var group : builder.settings) {
+        for (var group : module(request, builder).settings) {
             for (var setting : group) {
-                Object value = setting.get();
-                if (!(value instanceof String)) values.put(setting.name,
-                    value instanceof Boolean || value instanceof Number ? value : String.valueOf(value));
+                if (!SECRET.matcher(setting.name).find()) values.put(setting.name, readable(setting.get()));
             }
         }
         return values;

@@ -144,7 +144,12 @@ public class RenderUtilsTHM {
     /** A vertical color gradient using Meteor's backend-independent primitives. */
     public static void renderBlockGradient(Render3DEvent event, BlockPos pos,
                                           Color bottomFill, Color topFill, Color bottomLine, Color topLine) {
-        double x = pos.getX(), y = pos.getY(), z = pos.getZ();
+        renderBoxGradient(event, pos.getX(), pos.getY(), pos.getZ(), bottomFill, topFill, bottomLine, topLine);
+    }
+
+    /** One-block box at any position, for animated boxes. */
+    public static void renderBoxGradient(Render3DEvent event, double x, double y, double z,
+                                         Color bottomFill, Color topFill, Color bottomLine, Color topLine) {
         double X = x + 1, Y = y + 1, Z = z + 1;
         event.renderer.quad(x, y, z, X, y, z, X, y, Z, x, y, Z, bottomFill);
         event.renderer.quad(x, Y, z, x, Y, Z, X, Y, Z, X, Y, z, topFill);

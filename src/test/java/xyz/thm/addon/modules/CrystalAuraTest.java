@@ -15,11 +15,22 @@ By using this code you agree to the license terms and to keep your repo public.
 package xyz.thm.addon.modules;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.Test;
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class CrystalAuraTest {
+    @Test void placeRotationFromAboveAlsoFacesTheCrystal() {
+        var base = new BlockPos(3, 64, 2);
+        Vec3 eye = new Vec3(0.3, 66.62, 0.4), aim = CrystalAura.crystalPosition(base).subtract(eye);
+        float yaw = (float) Math.toDegrees(Math.atan2(aim.z, aim.x)) - 90, pitch = (float) -Math.toDegrees(Math.atan2(aim.y, aim.horizontalDistance()));
+        assertTrue(CrystalAura.faces(eye, yaw, pitch, new AABB(base)));
+        assertTrue(CrystalAura.faces(eye, yaw, pitch, CrystalAura.crystalBox(base)));
+        assertFalse(CrystalAura.faces(eye, yaw + 90, pitch, CrystalAura.crystalBox(base)));
+    }
+
     @Test void existingBasesTakePriorityOverHigherDamageSupport() {
         var existing = new CrystalAura.Opportunity(new BlockPos(0, 64, 0), 8, 1, 8, null, null, false);
         var support = new CrystalAura.Opportunity(new BlockPos(1, 64, 0), 15, 1, 15, null, null, true);
