@@ -278,7 +278,7 @@ passive. Do not execute discovery chat commands or send payload probes. `channel
 Copy payloads before asynchronous logging and keep the packet buffer's indices and reference count untouched.
 Log to `logs/thm-channels/` with a separate file per connection and apply redaction before file or chat output.
 
-**Crystal Aura:** `modules/CrystalAura` ports Lambda's opportunity scoring and prediction modes. Its visible title is THMcrystal aura; `thmcrystal-aura` keeps Meteor's registry intact. Async work stays bounded and runs world operations on the client thread. Source and adaptations: `docs/crystal-aura-lambda-port.md`.
+**Crystal Aura:** `modules/CrystalAura` ports Lambda's opportunity scoring and prediction modes. Its visible title is THMcrystal aura; `thmcrystal-aura` keeps Meteor's registry intact. Async work stays bounded and runs world operations on the client thread. Default-off extrapolation, face place, place-on-break, anti-weakness, wall ranges, ticks-existed, attack factor, swap penalty, i-frame sync and mine-ignore come from Open Zio (MIT). Source and adaptations: `docs/crystal-aura-lambda-port.md`.
 
 **Auto Mine Sync:** Crystal Aura can rank Speedmine Auto Mine targets by safe crystal openings. Simulate air only for target selection, then use the server block update for the actual crystal action.
 
@@ -323,7 +323,7 @@ refresh on demand after six hours, retry failures after five minutes, and clear 
 Keep requests in `TrustedHttp` and the endpoint in `APIUtils`. Kit menus
 update while open; existing saved kit strings remain readable. Restock keeps its fixed kit choices.
 
-**GUI sounds:** `settings/GuiSoundSettings` lives in `THMSystem.guiSettings` (Meteor's GUI tab). `WWidgetSoundMixin` plays hover and click sounds; `ModuleMixin` plays toggle sounds while a Meteor `WidgetScreen` is open. Module buttons are detected by their `Module` field, so third-party themes work too.
+**GUI sounds:** `settings/GuiSoundSettings` lives in `THMSystem.guiSettings` (Meteor's GUI tab). `WWidgetSoundMixin` plays hover, click, checkbox, dropdown, slider and typing sounds; `WSectionSoundMixin` plays expand sounds; `ModuleMixin` plays toggle sounds while a Meteor `WidgetScreen` is open. Module buttons are detected by their `Module` field, so third-party themes work too. `GuiTabScreenMixin` ticks the settings so visibility updates live.
 
 **Ping:** `PingTracker` sends vanilla ping requests on demand and keeps the median of raw round trips from pongs on the network thread. It falls back to the tab-list latency.
 

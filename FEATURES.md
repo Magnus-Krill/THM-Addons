@@ -63,7 +63,7 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - `AntiConcreteDetection` — Breaks buttons and torches inside enemy hit-box.
 - `AntiFeetPlace` — Interrupts enemies FeetPlace with a chosen block (ender chest by default).
 - `armor-notify` — Notifies you when your armor pieces are low.
-- **THMcrystal aura** (`thmcrystal-aura`) — Lambda-based crystal PvP with obsidian support, five prediction modes, lethal finishers, and optional Speedmine Auto Mine coordination.
+- **THMcrystal aura** (`thmcrystal-aura`) — Lambda-based crystal PvP with obsidian support, five prediction modes, lethal finishers, optional target extrapolation, face placing, place-on-break, anti-weakness, wall ranges, attack timing guards, mine-ignore, and Speedmine Auto Mine coordination.
 - `mainhand` — Refills a hotbar slot with totems, with optional danger-based selection and a golden-apple bind. Based on [Open Zio](https://github.com/minecraftlover74/open-zio).
 - `anti-mine` — Phases or clips when your surround gets mined out.
 - `hole-jitter` — Random sub-block clips to break enemy crystal aura prediction.
@@ -106,4 +106,4 @@ This document lists the modules, HUD widgets, and utilities shipped with THM Add
 - Disconnect button on the vanilla "Loading terrain" screen, which otherwise has no way out when it hangs.
 - GUI themes: `Dark`, `Snowy`, `Lambda`, `Stardust`, `Midnight`, `Monochrome`, `Nether`, `BepHax`, `Violet Glass`, `Liquid Glass`.
 - **GUI → Appearance → Click GUI Animation** changes how the Modules screen opens and closes. Choose Fade, Scatter, Drop, Unfold, Split, or Ripple. Set **Animation Speed** to 25–300% for any preset.
-- **GUI → Sounds** plays sounds for module hover, toggle on and off, right click, and button clicks. Each event has its own sound, volume, and pitch. On by default.
+- **GUI → Sounds** plays sounds for module and option hover, module toggles, right click, button clicks, checkboxes, sliders, dropdowns, typing, and expanding or collapsing categories and sections. Each event has its own sound, volume, and pitch, hidden while the event is off. On by default.

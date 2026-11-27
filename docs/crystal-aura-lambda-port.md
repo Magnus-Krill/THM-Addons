@@ -14,6 +14,8 @@ Ported from [Lambda's 1.21.11 Crystal Aura](https://github.com/lambda-client/lam
 
 Support placement is adapted from [Meteor CrystalAura](https://github.com/MeteorDevelopment/meteor-client/blob/master/src/main/java/meteordevelopment/meteorclient/systems/modules/combat/CrystalAura.java), using the installed 26.2-SNAPSHOT source. It keeps Lambda's single-target scoring and THM's inventory handling.
 
+Extrapolation, face placing, place-on-break, anti-weakness, wall ranges, ticks-existed, attack factor, swap penalty, i-frame sync and mine-ignore are adapted from [Open Zio](https://git.spectrum.best/SpectrumDevs/open-zio)'s AutoCrystal (MIT).
+
 ## Behavior
 
 - Select a target by distance, health, or field of view, using configurable entity types and named/tamed/owned filters.
@@ -24,6 +26,16 @@ Support placement is adapted from [Meteor CrystalAura](https://github.com/Meteor
 - Prediction modes: **None**, **Packet**, **Deferred**, **Tick**, and **Mixed**. None is the default. Packet modes use client-thread spawn events; deferred modes guess IDs immediately after placement while recent spawn information is valid.
 - Ticked evaluation is the default. Optional Async mode schedules bounded client-thread work with update-delay and per-frame limits; worker threads never read or modify the world.
 - Enable `auto-mine-sync` in Prediction and `auto-mine` in Speedmine to prioritize blocks that open a safe crystal placement or improve damage against the aura's target. Speedmine waits for server air on coordinated breaks, and the aura reevaluates the opening on its next update. Inspired by [Open Zio](https://github.com/minecraftlover74/open-zio).
+- Default-off Zio additions:
+  - `extrapolation` scores damage against the target's hitbox a few ticks ahead, continuing its last motion with gravity and block collisions. A weak predicted hit falls back to the current position.
+  - `face-place` drops the minimum target damage to 0.6 once the target's health or lowest armor durability reaches its threshold. It also skips the advantage requirement.
+  - `place-on-break` places again in the same frame the crystal at an opportunity leaves the world, ignoring the place delay.
+  - `anti-weakness` attacks with a hotbar sword or axe through a silent swap when Weakness would make a bare hit deal no damage.
+  - `place-wall-range` and `explode-wall-range` (default 7, so unlimited) cap the distance when a block ray from the eyes misses the base top or crystal center.
+  - `ticks-existed` waits until a crystal has existed for that many client ticks. `attack-factor` also attacks the next entity IDs after each crystal.
+  - `swap-penalty` holds attacks for that many ticks after a slot change. Anti-weakness swaps are exempt because they are part of the attack.
+  - `i-frame-sync` holds attacks while the target shows hurt time within 500 ms of our last hit, unless the new hit deals more. Vanilla only applies the excess during those ticks.
+  - `mine-ignore` treats blocks as air for damage once other players reach 80% mining progress within 12 blocks (from broadcast stages) or THM Speedmine reaches 80% of its break.
 - Draw the recent placement base with THM's purple outline and translucent fill through THM's rendering helper. Debug reports observed crystal removals over three seconds.
 
 ## Port adaptations

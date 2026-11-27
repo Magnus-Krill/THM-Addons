@@ -1502,6 +1502,13 @@ public class Speedmine extends Module {
         }
     }
 
+    /** Adds targets at or past {@code fraction} of their break progress. */
+    void addNearlyBroken(double fraction, java.util.Set<BlockPos> out) {
+        for (MineContext ctx : new MineContext[]{primary, secondary}) {
+            if (ctx != null && ctx.progress() >= fraction) out.add(ctx.pos);
+        }
+    }
+
     public class MineContext {
 
         public final BlockPos   pos;
