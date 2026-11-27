@@ -438,6 +438,13 @@ public class PlacementUtils {
         return placeBlockPacket(pos, item, rotate, rotateTicks, swapBack, packetPlacementHit(pos, side), packet -> sendPlacementPacket(packet, mode));
     }
 
+    /** Clicks {@code pos} on the face toward {@code toward}; a filled target then spills into the player's own space, which is blocked. */
+    public static BlockHitResult towardHit(BlockPos pos, Vec3 toward) {
+        Vec3 center = Vec3.atCenterOf(pos);
+        Direction face = Direction.getApproximateNearest(toward.x - center.x, toward.y - center.y, toward.z - center.z);
+        return new BlockHitResult(center.add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5), face, pos, false);
+    }
+
     public static BlockHitResult packetPlacementHit(BlockPos pos, Direction side) {
         BlockPos neighbour = side == null ? pos : pos.relative(side);
         Direction hitSide = side == null ? Direction.UP : side.getOpposite();

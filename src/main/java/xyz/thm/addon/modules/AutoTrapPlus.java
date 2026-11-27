@@ -37,7 +37,13 @@ import meteordevelopment.meteorclient.utils.player.PlayerUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
+import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.orbit.EventHandler;
+import meteordevelopment.orbit.EventPriority;
+import net.minecraft.network.protocol.game.ClientboundBlockDestructionPacket;
+import net.minecraft.network.protocol.game.ClientboundLevelEventPacket;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -60,8 +66,10 @@ import xyz.thm.addon.settings.PacketPlacementSettings;
 import xyz.thm.addon.interfaces.LogoutSpotsPlayers;
 import xyz.thm.addon.interfaces.LogoutSpotsPoseData;
 import xyz.thm.addon.settings.DescribedOption;
+import xyz.thm.addon.utils.BreakPredictor;
 import xyz.thm.addon.utils.InventoryManager;
 import xyz.thm.addon.utils.PacketPlaceTracker;
+import xyz.thm.addon.utils.PingTracker;
 import xyz.thm.addon.utils.PlacementUtils;
 import xyz.thm.addon.utils.RenderUtilsTHM;
 import xyz.thm.addon.utils.SwapManager;
@@ -196,6 +204,23 @@ public class AutoTrapPlus extends Module {
         .build()
     );
 
+    private final Setting<Boolean> predict = sgGeneral.add(new BoolSetting.Builder()
+        .name("predict")
+        .description("Keep placements arriving as trap blocks break, timed to your ping.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Integer> predictLead = sgGeneral.add(new IntSetting.Builder()
+        .name("predict-lead")
+        .description("Extra lead time in milliseconds.")
+        .defaultValue(0)
+        .min(-100)
+        .sliderRange(-50, 100)
+        .visible(predict::get)
+        .build()
+    );
+
     private final Setting<Boolean> logoutTrap = sgLogoutTrap.add(new BoolSetting.Builder()
         .name("logout-trap")
         .description("Enables trapping of player logout spots.")
@@ -278,6 +303,8 @@ public class AutoTrapPlus extends Module {
 
     private final Set<BlockPos> placePositions = new LinkedHashSet<>();
     private final Set<BlockPos> scheduled = new HashSet<>();
+    private final BreakPredictor breaks = new BreakPredictor();
+    private Set<BlockPos> shapeNow = new HashSet<>(), shapeLast = new HashSet<>();
     private final Map<BlockPos, Long> renderMap = new HashMap<>();
     private final Set<UUID> completedLogoutSpots = new HashSet<>();
     private final Set<UUID> manualLogoutSpots = new HashSet<>();
@@ -311,6 +338,7 @@ public class AutoTrapPlus extends Module {
         logoutManualPressed = false;
         placePositions.clear();
         scheduled.clear();
+        breaks.clear();
         renderMap.clear();
         completedLogoutSpots.clear();
         manualLogoutSpots.clear();
@@ -323,9 +351,14 @@ public class AutoTrapPlus extends Module {
         tick++;
         scheduled.clear();
         placePositions.clear();
+        shapeLast = shapeNow;
+        shapeNow = new HashSet<>();
         var mode = packet.mode();
         batchLimit = mode == PacketPlacementSettings.Mode.Pace || tick > lastPlacementTick + delay.get()
             ? Math.min(PlacementUtils.placementsPerTick(mode, blocksPerTick.get()), PlacementUtils.remainingPlacementPackets(mode)) : 0;
+
+        if (!predict.get()) breaks.clear();
+        else for (BlockPos pos : breaks.due(System.nanoTime(), lead())) preplace(pos, level.getBlockState(pos), true);
 
         FindItemResult block = InvUtils.findInHotbar(stack -> blocks.get().contains(Block.byItem(stack.getItem())));
         boolean logoutWork = logoutTrap.get() && runLogoutTraps(block);
@@ -408,6 +441,7 @@ public class AutoTrapPlus extends Module {
         HeightMode height = heightMode.get();
         Set<BlockPos> shape = plan(body, eyeY, height, topPlacement.get(), antiStep.get());
         shape.remove(gap);
+        shapeNow.addAll(shape);
         boolean unfinished = false;
         List<BlockPos> candidates = new ArrayList<>();
         for (BlockPos pos : shape) {
@@ -430,13 +464,13 @@ public class AutoTrapPlus extends Module {
             if (scheduled.size() >= batchLimit) break;
             Direction side = PlacementUtils.getPlaceSide(pos);
             if (side == null && !air) unsupported.add(pos);
-            else placeBlock(pos, side, block);
+            else placeBlock(pos, side, block, false);
         }
         for (BlockPos pos : unsupported) {
             if (scheduled.size() >= batchLimit) break;
             Direction side = PlacementUtils.getPlaceSide(pos);
             if (side != null) {
-                placeBlock(pos, side, block);
+                placeBlock(pos, side, block, false);
                 continue;
             }
             Vec3 center = body.getCenter();
@@ -450,7 +484,7 @@ public class AutoTrapPlus extends Module {
                     Direction supportSide = PlacementUtils.getPlaceSide(next);
                     return supportSide != null && inRange(PlacementUtils.packetPlacementHit(next, supportSide).getLocation());
                 });
-            if (support != null) placeBlock(support, PlacementUtils.getPlaceSide(support), block);
+            if (support != null) placeBlock(support, PlacementUtils.getPlaceSide(support), block, false);
         }
         return unfinished;
     }
@@ -460,11 +494,13 @@ public class AutoTrapPlus extends Module {
             && BlockUtils.canPlace(pos);
     }
 
-    private void placeBlock(BlockPos pos, Direction side, FindItemResult block) {
+    private void placeBlock(BlockPos pos, Direction side, FindItemResult block, boolean immediate) {
         var mode = packet.mode();
         boolean packetOnly = mode.isPacket();
         if (packetOnly && packetOnce.get() && !PacketPlaceTracker.canSend(pos)) return;
-        BlockHitResult hit = PlacementUtils.packetPlacementHit(pos, side);
+        // Clicking toward the target puts a duplicate block into its own space, which is blocked.
+        BlockHitResult hit = side == null && predict.get() && target != null
+            ? PlacementUtils.towardHit(pos, target.getBoundingBox().getCenter()) : PlacementUtils.packetPlacementHit(pos, side);
         if (!inRange(hit.getLocation()) || !scheduled.add(pos)) return;
 
         var player = mc.player;
@@ -499,8 +535,59 @@ public class AutoTrapPlus extends Module {
                 if (!sent[0] && queuedTick == tick) scheduled.remove(pos);
             }
         };
-        if (rotate.get()) Rotations.rotate(Rotations.getYaw(hit.getLocation()), Rotations.getPitch(hit.getLocation()), 50, action);
-        else action.run();
+        if (rotate.get() && !immediate) Rotations.rotate(Rotations.getYaw(hit.getLocation()), Rotations.getPitch(hit.getLocation()), 50, action);
+        else {
+            if (rotate.get()) {
+                // Queued rotations run after the speculative air is restored.
+                float yaw = (float) Rotations.getYaw(hit.getLocation()), pitch = (float) Rotations.getPitch(hit.getLocation());
+                player.connection.send(new ServerboundMovePlayerPacket.Rot(yaw, pitch, player.onGround(), player.horizontalCollision));
+                Rotations.setCamRotation(yaw, pitch);
+            }
+            action.run();
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    private void onReceive(PacketEvent.Receive event) {
+        if (!predict.get() || event.isCancelled()) return;
+        if (event.packet instanceof ClientboundBlockDestructionPacket crack) {
+            BlockPos pos = crack.getPos().immutable();
+            int stage = crack.getProgress();
+            long now = System.nanoTime();
+            mc.execute(() -> { if (isActive() && shapeLast.contains(pos)) breaks.stage(pos, stage, now); });
+        } else if (Surround.isBreakEffect(event.packet)) {
+            var effect = (ClientboundLevelEventPacket) event.packet;
+            BlockPos pos = effect.getPos().immutable();
+            BlockState broken = Block.stateById(effect.getData());
+            mc.execute(() -> {
+                if (!preplace(pos, broken, false)) return;
+                // Instant rebreak gives no progress packets, so keep a placement queued at the server.
+                breaks.broken(pos, System.nanoTime(), lead());
+            });
+        }
+    }
+
+    private long lead() {
+        return BreakPredictor.lead(PingTracker.rtt(), predictLead.get());
+    }
+
+    /** Places into {@code pos} as if it were already air; returns whether it was a trap block. */
+    private boolean preplace(BlockPos pos, BlockState broken, boolean resend) {
+        if (!isActive() || level == null || level != mc.level || mc.player == null || !shapeLast.contains(pos)) return false;
+        if (scheduled.contains(pos)) return true;
+        BlockState original = level.getBlockState(pos);
+        if (broken.canBeReplaced() || (!original.canBeReplaced() && original.getBlock() != broken.getBlock())) return true;
+        FindItemResult block = InvUtils.findInHotbar(stack -> blocks.get().contains(Block.byItem(stack.getItem())));
+        if (!block.found()) return true;
+        // An early send is rejected harmlessly; resend each tick instead of waiting a round trip.
+        if (resend) PacketPlaceTracker.forget(pos);
+        level.setBlock(pos, Blocks.AIR.defaultBlockState(), 19);
+        try {
+            if (canPlace(pos) && inRange(Vec3.atCenterOf(pos))) placeBlock(pos, PlacementUtils.getPlaceSide(pos), block, true);
+        } finally {
+            if (level.getBlockState(pos).isAir()) level.setBlock(pos, original, 19);
+        }
+        return true;
     }
 
     static Comparator<BlockPos> placementOrder(Vec3 eye, BuildOrder order, boolean air, int headWallY, int roofY) {

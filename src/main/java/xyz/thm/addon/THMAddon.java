@@ -158,6 +158,7 @@ public class THMAddon extends MeteorAddon implements ClientModInitializer {
         TotemTracker.initialize();
         ChunkResync.init();
         PacketPlaceTracker.init();
+        PingTracker.init();
         InventoryManager.getInstance();
         SwapManager.get();
         DeepSwapManager.get();

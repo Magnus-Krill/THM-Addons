@@ -58,6 +58,8 @@ import xyz.thm.addon.mixin.accessor.ClientLevelPredictionAccessor;
 import xyz.thm.addon.settings.DescribedOption;
 import xyz.thm.addon.utils.InventoryManager;
 import xyz.thm.addon.utils.PacketPlaceTracker;
+import xyz.thm.addon.utils.BreakPredictor;
+import xyz.thm.addon.utils.PingTracker;
 import xyz.thm.addon.utils.PlacementUtils;
 import xyz.thm.addon.utils.RenderUtilsTHM;
 
@@ -167,7 +169,16 @@ public class Surround extends Module {
         .name("confirmation-timeout").description("Ticks before clearing an unconfirmed placement.")
         .defaultValue(20).min(1).max(200).sliderMax(100).build());
 
-    private final Setting<Boolean> tagSwitch = sgAdvanced.add(new BoolSetting.Builder()
+    private final Setting<Boolean> predict = sgAdvanced.add(new BoolSetting.Builder()
+        .name("predict-break").description("Keep placements arriving as a block breaks, timed to your ping.")
+        .defaultValue(false).visible(() -> replaceTrigger.get() == ReplaceTrigger.onPacket).build());
+
+    private final Setting<Integer> predictLead = sgAdvanced.add(new IntSetting.Builder()
+        .name("predict-lead").description("Extra lead time in milliseconds.")
+        .defaultValue(0).min(-100).sliderRange(-50, 100)
+        .visible(() -> predict.get() && replaceTrigger.get() == ReplaceTrigger.onPacket).build());
+
+    private final Setting<Boolean> tagSwitch =sgAdvanced.add(new BoolSetting.Builder()
         .name("auto-disable").description("Disable once the surround is confirmed.")
         .defaultValue(false).build());
 
@@ -194,6 +205,7 @@ public class Surround extends Module {
     private final Map<BlockPos, Placement> pending = new HashMap<>();
     private final Map<BlockPos, Long> lastAttempt = new HashMap<>();
     private final Map<BlockPos, Long> mining = new HashMap<>();
+    private final BreakPredictor breaks = new BreakPredictor();
     private final Map<BlockPos, Long> renderMap = new HashMap<>();
     private final PlacementBudget budget = new PlacementBudget();
     private Set<BlockPos> targets = Set.of();
@@ -325,6 +337,7 @@ public class Surround extends Module {
         pending.clear();
         lastAttempt.clear();
         mining.clear();
+        breaks.clear();
         renderMap.clear();
         targets = Set.of();
         budget.reset();
@@ -352,6 +365,7 @@ public class Surround extends Module {
         if (centerMode.get() == CenterMode.NCP) center();
         rebuildTargets();
         if (!canAct()) return;
+        predictBreaks();
         fill();
         if (tagSwitch.get() && !targets.isEmpty() && targets.stream().allMatch(pos ->
             !world.getBlockState(pos).canBeReplaced() && !pending.containsKey(pos))) toggle();
@@ -409,6 +423,24 @@ public class Surround extends Module {
         }
         if (roof) for (BlockPos pos : feet) result.add(pos.above(2));
         return result;
+    }
+
+    private void predictBreaks() {
+        if (!predict.get()) { breaks.clear(); return; }
+        for (BlockPos pos : breaks.due(System.nanoTime(), lead())) {
+            Placement old = pending.get(pos);
+            // An early send is rejected harmlessly; resend each tick instead of waiting a round trip.
+            if (old != null) {
+                if (!old.speculative) continue;
+                pending.remove(pos);
+            }
+            PacketPlaceTracker.forget(pos);
+            speculate(pos, world.getBlockState(pos));
+        }
+    }
+
+    private long lead() {
+        return BreakPredictor.lead(PingTracker.rtt(), predictLead.get());
     }
 
     private void fill() {
@@ -512,7 +544,7 @@ public class Surround extends Module {
         BlockHitResult hit = PlacementUtils.findSupportHit(pos, strict.get());
         if (hit != null) return hit;
         return airplace.get() && !strict.get()
-            ? new BlockHitResult(Vec3.atCenterOf(pos), Direction.UP, pos, false) : null;
+            ? PlacementUtils.towardHit(pos, mc.player.getBoundingBox().getCenter()) : null;
     }
 
     private int findBlock() {
@@ -649,10 +681,15 @@ public class Surround extends Module {
     private void onAuxiliaryPacket(Packet<?> received) {
         if (isBreakEffect(received)) {
             preplaceBreak((ClientboundLevelEventPacket) received);
-        } else if (received instanceof ClientboundBlockDestructionPacket crack && expansion.get().mining) {
-            if (targets.contains(crack.getPos())) {
-                if (crack.getProgress() >= 0 && crack.getProgress() <= 9) mining.put(crack.getPos().immutable(), System.nanoTime());
-                else mining.remove(crack.getPos());
+        } else if (received instanceof ClientboundBlockDestructionPacket crack && (expansion.get().mining || predict.get())) {
+            BlockPos pos = crack.getPos().immutable();
+            if (targets.contains(pos)) {
+                boolean active = crack.getProgress() >= 0 && crack.getProgress() <= 9;
+                if (expansion.get().mining) {
+                    if (active) mining.put(pos, System.nanoTime());
+                    else mining.remove(pos);
+                }
+                if (predict.get()) breaks.stage(pos, crack.getProgress(), System.nanoTime());
             }
         } else if (received instanceof ClientboundAddEntityPacket spawn && spawn.getType() == EntityTypes.END_CRYSTAL) {
             if (crystalHandling.get().desync) {
@@ -669,11 +706,18 @@ public class Surround extends Module {
     }
 
     private void preplaceBreak(ClientboundLevelEventPacket effect) {
+        BlockPos pos = effect.getPos().immutable();
+        speculate(pos, Block.stateById(effect.getData()));
+        // Instant rebreak gives no progress packets, so keep a placement queued at the server.
+        if (predict.get() && targets.contains(pos) && canAct()) breaks.broken(pos, System.nanoTime(), lead());
+    }
+
+    /** Places into {@code pos} as if it were already air, keeping the real state for rollback. */
+    private void speculate(BlockPos pos, BlockState broken) {
         if (replaceTrigger.get() != ReplaceTrigger.onPacket || !canAct()) return;
         rebuildTargets();
-        BlockPos pos = effect.getPos().immutable();
         if (!targets.contains(pos) || pending.containsKey(pos)) return;
-        BlockState broken = Block.stateById(effect.getData()), original = world.getBlockState(pos);
+        BlockState original = world.getBlockState(pos);
         if (broken.canBeReplaced() || (!original.canBeReplaced() && original.getBlock() != broken.getBlock())) return;
         Placement placed = null;
         try {

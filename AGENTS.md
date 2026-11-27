@@ -308,6 +308,7 @@ Only Advanced starts collapsed; later layout changes remain saved.
 **AutoTrap and Self Trap:** AutoTrap plans around the target's current footprint and can build vertical supports for the roof.
 Air Place prioritizes head-height walls, then the roof.
 Logout traps use Meteor's recorded logout spots and share the live-trap placement budget. Surround's Self Trap adds head-height walls and an optional roof.
+Both have a default-off predict toggle. `utils/BreakPredictor` resends one speculative placement per tick, shifted by ping, from 70% broadcast mining progress (vanilla's STOP floor) past full progress, and for a short window after each break effect to handle instant rebreak. Airplace clicks face the player or target so that a filled position spills into blocked entity space.
 
 **PvP placement tracking:** Crystal Aura and Surround advance placement state only after `PacketEvent.Sent` matches the current use-on-block action. Roll back normal client prediction when sending fails.
 
@@ -321,6 +322,10 @@ Cache JSON and ETags under `thm/kitbot-kits`, using a separate file per token an
 refresh on demand after six hours, retry failures after five minutes, and clear rejected tokens.
 Keep requests in `TrustedHttp` and the endpoint in `APIUtils`. Kit menus
 update while open; existing saved kit strings remain readable. Restock keeps its fixed kit choices.
+
+**GUI sounds:** `settings/GuiSoundSettings` lives in `THMSystem.guiSettings` (Meteor's GUI tab). `WWidgetSoundMixin` plays hover and click sounds; `ModuleMixin` plays toggle sounds while a Meteor `WidgetScreen` is open. Module buttons are detected by their `Module` field, so third-party themes work too.
+
+**Ping:** `PingTracker` sends vanilla ping requests on demand and keeps the median of raw round trips from pongs on the network thread. It falls back to the tab-list latency.
 
 **Main-menu diagnostics:** `[THM/Init]` logs addon registration stages; `[THM/Menu]` logs screen and shader hooks. Menu setup runs after outer `Screen.init`, resize, and widget rebuild, since other clients can cancel inner `TitleScreen.init`. Keep setup idempotent and render logging limited to first use or state changes.
 
