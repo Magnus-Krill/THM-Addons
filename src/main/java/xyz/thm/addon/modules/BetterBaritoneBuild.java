@@ -16,7 +16,9 @@ package xyz.thm.addon.modules;
 
 import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
+import baritone.api.pathing.goals.Goal;
 import baritone.api.pathing.goals.GoalGetToBlock;
+import baritone.api.pathing.goals.GoalNear;
 import baritone.api.process.IBaritoneProcess;
 import baritone.api.process.IBuilderProcess;
 import baritone.api.process.PathingCommand;
@@ -33,10 +35,13 @@ import meteordevelopment.meteorclient.gui.widgets.pressable.WButton;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
+import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.Vec3i;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.HashedStack;
@@ -48,12 +53,14 @@ import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.ShulkerBoxMenu;
 import net.minecraft.world.item.AxeItem;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.BarrelBlock;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.ShulkerBoxBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -61,15 +68,19 @@ import net.minecraft.world.level.block.state.properties.ChestType;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 import xyz.thm.addon.THMAddon;
 import xyz.thm.addon.gui.BaritoneBuildScreen;
 import xyz.thm.addon.utils.BuildMaterialIndex;
 import xyz.thm.addon.utils.BuildSchematic;
 import xyz.thm.addon.utils.InventoryManager;
+import xyz.thm.addon.utils.SwapManager;
+import xyz.thm.addon.utils.THMUtils;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.stream.IntStream;
 
 public class BetterBaritoneBuild extends Module {
     private final SettingGroup general = settings.getDefaultGroup();
@@ -126,11 +137,17 @@ public class BetterBaritoneBuild extends Module {
     private final Map<Item, Integer> wanted = new LinkedHashMap<>();
     private final Set<BlockPos> visited = new HashSet<>();
     private BuildMaterialIndex.Storage target;
-    private GoalGetToBlock goal;
+    private Goal goal;
     private boolean fetching, opening, receivedItems;
     private int targetSince, openedAt, nextClick, clickedAt;
     private Item clickedItem;
     private int countBeforeClick;
+    private enum Unpack { NONE, PLACE, PLACED, LOOT, BREAK }
+    private Unpack unpack = Unpack.NONE;
+    private BlockPos placed;
+    private int unpackAt, tossUntil, tossBaseline;
+    private Map<String, Integer> placedItems = Map.of();
+    private boolean inventoryFull, placedEmpty;
     private BlockPos stripPos;
     private int stripAt, stripAttempts;
     private String status = "Ready";
@@ -236,6 +253,7 @@ public class BetterBaritoneBuild extends Module {
     }
 
     @EventHandler private void onLeft(GameLeftEvent event) {
+        tossUntil = 0;
         stopFetching("Disconnected");
         saveIndex();
         level = null;
@@ -313,16 +331,25 @@ public class BetterBaritoneBuild extends Module {
                 observedMenu = -1;
             } else snapshot(menu);
         }
+        if (tick < tossUntil && mc.player.containerMenu == mc.player.inventoryMenu && emptyShulkerCount() > tossBaseline)
+            IntStream.range(0, 36).filter(slot -> emptyShulker(mc.player.getInventory().getItem(slot))).findFirst().ifPresent(slot -> InvUtils.drop().slot(slot));
         if (dirty && tick - lastSave >= 40) saveIndex();
         if (!fetching && pendingMaterials != null) startFetching();
     }
 
-    private void snapshot(AbstractContainerMenu menu) {
+    private static Map<String, Integer> count(List<ItemStack> stacks) {
         Map<String, Integer> items = new LinkedHashMap<>();
-        for (int slot = 0; slot < containerSize(menu); slot++) {
-            ItemStack stack = menu.getSlot(slot).getItem();
+        for (ItemStack stack : stacks) {
             if (!stack.isEmpty()) items.merge(itemId(stack.getItem()), stack.getCount(), Integer::sum);
+            // Shulker contents count as the container's own, so routing finds packed materials.
+            for (ItemStack packed : THMUtils.getContainerContents(stack)) items.merge(itemId(packed.getItem()), packed.getCount(), Integer::sum);
         }
+        return items;
+    }
+
+    private void snapshot(AbstractContainerMenu menu) {
+        if (observedPos.equals(placed)) return;
+        Map<String, Integer> items = count(menu.getItems().subList(0, containerSize(menu)));
         try {
             dirty |= index.update(observedPos, blockId(mc.level.getBlockState(observedPos).getBlock()), items);
         } catch (IllegalStateException e) {
@@ -358,8 +385,29 @@ public class BetterBaritoneBuild extends Module {
     }
 
     private void chooseStorage() {
+        target = null;
+        if (placed != null) {
+            if (placedEmpty) {
+                unpack = Unpack.BREAK;
+                unpackAt = tick;
+                status = "Breaking empty shulker";
+                return;
+            }
+            leavePlaced();
+        }
+        unpack = Unpack.NONE;
         Set<String> needed = neededIds();
         if (needed.isEmpty()) { finishFetching(); return; }
+        if (inventoryFull) {
+            if (receivedItems) finishFetching();
+            else fail("Inventory is full");
+            return;
+        }
+        if (packedShulker() != -1) {
+            unpack = Unpack.PLACE;
+            status = "Unpacking shulker";
+            return;
+        }
         target = index.nearest(mc.player.blockPosition(), needed, visited);
         if (target == null) {
             if (receivedItems) finishFetching();
@@ -367,11 +415,26 @@ public class BetterBaritoneBuild extends Module {
             return;
         }
         visited.add(target.pos());
-        goal = new GoalGetToBlock(target.pos());
+        // Owned shulkers hang under the build, where no adjacent standing spot exists.
+        goal = target.owned() ? new GoalNear(target.pos(), 3) : new GoalGetToBlock(target.pos());
         targetSince = tick;
         opening = false;
         clickedItem = null;
         status = "Fetching from " + target.pos().toShortString();
+    }
+
+    /** Index a non-empty placed shulker so later trips take the rest. */
+    private void leavePlaced() {
+        BlockState state = mc.level.getBlockState(placed);
+        if (state.getBlock() instanceof ShulkerBoxBlock) {
+            try {
+                dirty |= index.update(placed, blockId(state.getBlock()), placedItems, true);
+            } catch (IllegalStateException e) {
+                warning("Left a shulker at %s: %s", placed.toShortString(), e.getMessage());
+            }
+            visited.add(placed);
+        }
+        placed = null;
     }
 
     private void finishFetching() {
@@ -382,6 +445,10 @@ public class BetterBaritoneBuild extends Module {
 
     private void stopFetching(String message) {
         closeOwnedMenu();
+        if (placed != null && mc.level != null && mc.level == level) leavePlaced();
+        placed = null;
+        unpack = Unpack.NONE;
+        inventoryFull = false;
         fetching = false;
         pendingMaterials = null;
         wanted.clear();
@@ -438,7 +505,14 @@ public class BetterBaritoneBuild extends Module {
         if (!mc.player.isWithinBlockInteractionRange(pos, 0)) return null;
         BlockHitResult hit = mc.level.clip(new ClipContext(mc.player.getEyePosition(), Vec3.atCenterOf(pos),
             ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, mc.player));
-        return hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(pos) ? hit : null;
+        if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(pos)) return hit;
+        // A shulker hanging under the build is hidden by the block it hangs from.
+        boolean owned = pos.equals(placed) || (target != null && target.owned() && pos.equals(target.pos()));
+        return owned ? faceHit(pos, Direction.getApproximateNearest(mc.player.getEyePosition().subtract(Vec3.atCenterOf(pos)))) : null;
+    }
+
+    private static BlockHitResult faceHit(BlockPos pos, Direction face) {
+        return new BlockHitResult(Vec3.atCenterOf(pos).relative(face, 0.5), face, pos, false);
     }
 
     private int inventoryCount(Item item) {
@@ -448,6 +522,135 @@ public class BetterBaritoneBuild extends Module {
             if (stack.is(item)) count += stack.getCount();
         }
         return count;
+    }
+
+    private int packedCount(Item item) {
+        int count = 0;
+        for (int slot = 0; slot < 36; slot++) {
+            for (ItemStack packed : THMUtils.getContainerContents(mc.player.getInventory().getItem(slot)))
+                if (packed.is(item)) count += packed.getCount();
+        }
+        return count;
+    }
+
+    private boolean shortOf(Item item) {
+        // While unpacking, other inventory shulkers must not count against the placed one.
+        return inventoryCount(item) + (placed == null ? packedCount(item) : 0) < wanted.getOrDefault(item, 0);
+    }
+
+    private static boolean isShulker(ItemStack stack) {
+        return stack.getItem() instanceof BlockItem block && block.getBlock() instanceof ShulkerBoxBlock;
+    }
+
+    /** Inventory shulker holding a material still missing from the loose inventory, or -1. */
+    private int packedShulker() {
+        for (int slot = 0; slot < 36; slot++) {
+            ItemStack stack = mc.player.getInventory().getItem(slot);
+            if (isShulker(stack) && THMUtils.getContainerContents(stack).stream()
+                .anyMatch(packed -> inventoryCount(packed.getItem()) < wanted.getOrDefault(packed.getItem(), 0))) return slot;
+        }
+        return -1;
+    }
+
+    private static boolean emptyShulker(ItemStack stack) {
+        return isShulker(stack) && THMUtils.getContainerContents(stack).isEmpty();
+    }
+
+    private int emptyShulkerCount() {
+        return (int) IntStream.range(0, 36).filter(slot -> emptyShulker(mc.player.getInventory().getItem(slot))).count();
+    }
+
+    /** Face to hang a shulker from, preferring undersides so it opens downward out of the build's way. */
+    private BlockHitResult placementHit() {
+        BlockPos feet = mc.player.blockPosition();
+        Vec3 eye = mc.player.getEyePosition();
+        BlockHitResult best = null;
+        for (BlockPos pos : BlockPos.betweenClosed(feet.offset(-3, -3, -3), feet.offset(3, 2, 3))) {
+            if (mc.level.isOutsideBuildHeight(pos) || !mc.level.getBlockState(pos).isAir()
+                || !mc.level.isUnobstructed(Blocks.SHULKER_BOX.defaultBlockState(), pos, CollisionContext.empty())) continue;
+            for (Direction face : Direction.values()) {
+                BlockPos support = pos.relative(face.getOpposite());
+                BlockState supportState = mc.level.getBlockState(support);
+                if (!mc.level.getBlockState(pos.relative(face)).isAir() || !supportState.isFaceSturdy(mc.level, support, face)
+                    || BlockUtils.isClickable(supportState.getBlock()) || !mc.player.isWithinBlockInteractionRange(support, 0)) continue;
+                BlockHitResult hit;
+                if (face == Direction.DOWN) hit = faceHit(support, face);
+                else {
+                    hit = mc.level.clip(new ClipContext(eye, Vec3.atCenterOf(support),
+                        ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, mc.player));
+                    if (hit.getType() != HitResult.Type.BLOCK || !hit.getBlockPos().equals(support) || hit.getDirection() != face) continue;
+                }
+                boolean down = face == Direction.DOWN;
+                if (best == null || (down != (best.getDirection() == Direction.DOWN) ? down
+                    : hit.getLocation().distanceToSqr(eye) < best.getLocation().distanceToSqr(eye))) best = hit;
+            }
+        }
+        return best;
+    }
+
+    private boolean busy(boolean safeToCancel) {
+        return !safeToCancel || mc.player.isUsingItem() || mc.player.isShiftKeyDown()
+            || InventoryManager.getInstance().getCurrentPriority() > InventoryManager.Priority.NORMAL;
+    }
+
+    private PathingCommand unpackTick(boolean safeToCancel) {
+        PathingCommand pause = new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
+        switch (unpack) {
+            case PLACE -> {
+                if (busy(safeToCancel)) return pause;
+                int slot = packedShulker();
+                if (slot == -1) { chooseStorage(); return pause; }
+                BlockHitResult hit = placementHit();
+                if (hit == null) { fail("No free spot to place a shulker"); return pause; }
+                placed = hit.getBlockPos().relative(hit.getDirection()).immutable();
+                placedItems = count(THMUtils.getContainerContents(mc.player.getInventory().getItem(slot)));
+                unpack = Unpack.PLACED;
+                unpackAt = tick;
+                BlockPos placing = placed;
+                Rotations.rotate(Rotations.getYaw(hit.getLocation()), Rotations.getPitch(hit.getLocation()), () -> {
+                    if (!fetching || unpack != Unpack.PLACED || !placing.equals(placed) || mc.level != level
+                        || !isShulker(mc.player.getInventory().getItem(slot))) return;
+                    InventoryManager.withItem(this, slot, false, SwapManager.MINING,
+                        () -> mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND, hit));
+                });
+            }
+            case PLACED -> {
+                BlockState state = mc.level.getBlockState(placed);
+                if (state.getBlock() instanceof ShulkerBoxBlock) {
+                    unpack = Unpack.LOOT;
+                    placedEmpty = false;
+                    target = new BuildMaterialIndex.Storage(placed, blockId(state.getBlock()), placedItems, true);
+                    goal = new GoalNear(placed, 3);
+                    targetSince = tick;
+                    opening = false;
+                    clickedItem = null;
+                } else if (tick - unpackAt > 40) {
+                    placed = null;
+                    fail("Shulker placement was not confirmed");
+                }
+            }
+            case BREAK -> {
+                BlockState state = mc.level.getBlockState(placed);
+                if (!(state.getBlock() instanceof ShulkerBoxBlock)) {
+                    // Leave the empty drop to despawn; toss it if picked up within its lifetime.
+                    placed = null;
+                    tossBaseline = emptyShulkerCount();
+                    tossUntil = tick + 6000;
+                    chooseStorage();
+                } else if (tick - unpackAt > 200) {
+                    fail("Cannot break the shulker at " + placed.toShortString());
+                } else if (!busy(safeToCancel)) {
+                    BlockPos breaking = placed;
+                    Vec3 center = Vec3.atCenterOf(breaking);
+                    Rotations.rotate(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
+                        if (fetching && unpack == Unpack.BREAK && breaking.equals(placed))
+                            InventoryManager.getInstance().withSilentTool(state, () -> BlockUtils.breakBlock(breaking, true));
+                    });
+                }
+            }
+            default -> { }
+        }
+        return pause;
     }
 
     private boolean hasRoom(ItemStack source) {
@@ -474,6 +677,8 @@ public class BetterBaritoneBuild extends Module {
                 stopFetching("Build changed; restock cancelled");
                 return null;
             }
+            if (unpack != Unpack.NONE && unpack != Unpack.LOOT && mc.player.containerMenu == mc.player.inventoryMenu)
+                return unpackTick(safeToCancel);
             if (target == null) return pause;
             if (mc.player.containerMenu != mc.player.inventoryMenu) {
                 if (!target.pos().equals(observedPos) || mc.player.containerMenu.containerId != observedMenu) {
@@ -512,8 +717,7 @@ public class BetterBaritoneBuild extends Module {
                 }
                 return new PathingCommand(goal, PathingCommandType.REVALIDATE_GOAL_AND_PATH);
             }
-            if (!safeToCancel || mc.player.isUsingItem() || mc.player.isShiftKeyDown()
-                || InventoryManager.getInstance().getCurrentPriority() > InventoryManager.Priority.NORMAL) return pause;
+            if (busy(safeToCancel)) return pause;
             opening = true;
             openedAt = tick;
             nextClick = tick + clickDelay.get();
@@ -542,26 +746,37 @@ public class BetterBaritoneBuild extends Module {
             return;
         }
         if (tick < nextClick) return;
-        if (neededIds().isEmpty()) { finishFetching(); return; }
         boolean full = false;
-        for (int slot = 0; slot < containerSize(menu); slot++) {
+        int click = -1, shulker = -1;
+        for (int slot = 0; slot < containerSize(menu) && click == -1 && !neededIds().isEmpty(); slot++) {
             ItemStack stack = menu.getSlot(slot).getItem();
-            if (stack.isEmpty() || inventoryCount(stack.getItem()) >= wanted.getOrDefault(stack.getItem(), 0)) continue;
+            boolean loose = !stack.isEmpty() && shortOf(stack.getItem());
+            boolean packed = !loose && placed == null && shulker == -1 && isShulker(stack)
+                && THMUtils.getContainerContents(stack).stream().anyMatch(item -> shortOf(item.getItem()));
+            if (!loose && !packed) continue;
             if (!hasRoom(stack)) { full = true; continue; }
-            clickedItem = stack.getItem();
+            if (loose) click = slot;
+            else shulker = slot;
+        }
+        if (click == -1) click = shulker;
+        if (click != -1) {
+            clickedItem = menu.getSlot(click).getItem().getItem();
             countBeforeClick = inventoryCount(clickedItem);
             clickedAt = tick;
             // No local prediction: empty change hashes make the server send authoritative slot updates.
             mc.getConnection().send(new ServerboundContainerClickPacket(menu.containerId, menu.getStateId(),
-                (short) slot, (byte) 0, ContainerInput.QUICK_MOVE, new Int2ObjectOpenHashMap<>(), HashedStack.EMPTY));
+                (short) click, (byte) 0, ContainerInput.QUICK_MOVE, new Int2ObjectOpenHashMap<>(), HashedStack.EMPTY));
             return;
         }
-        if (full) {
-            if (receivedItems) finishFetching();
-            else fail("Inventory is full");
-            return;
-        }
-        snapshot(menu);
+        inventoryFull |= full;
+        Map<String, Integer> left = count(menu.getItems().subList(0, containerSize(menu)));
+        // A shulker left on an earlier trip is broken once used up.
+        if (placed == null && target.owned() && left.isEmpty()) placed = target.pos();
+        if (placed != null) {
+            placedItems = left;
+            placedEmpty = left.isEmpty();
+            if (placedEmpty) { index.remove(placed); dirty = true; }
+        } else snapshot(menu);
         closeOwnedMenu();
         chooseStorage();
     }

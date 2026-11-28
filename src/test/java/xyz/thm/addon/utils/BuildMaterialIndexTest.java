@@ -66,6 +66,19 @@ class BuildMaterialIndexTest {
         assertTrue(index.entries().isEmpty());
     }
 
+    @Test void keepsOwnedShulkersAcrossRefreshesAndRestartsUntilReplaced() throws IOException {
+        Path path = temporary.resolve("owned.json");
+        BlockPos pos = new BlockPos(0, 318, 0);
+        BuildMaterialIndex index = new BuildMaterialIndex();
+        index.update(pos, "minecraft:shulker_box", Map.of("minecraft:black_concrete", 640), true);
+        index.update(pos, "minecraft:shulker_box", Map.of("minecraft:black_concrete", 64));
+        index.save(path);
+        index.load(path);
+        assertTrue(index.get(pos).owned());
+        index.update(pos, "minecraft:chest", Map.of());
+        assertFalse(index.get(pos).owned());
+    }
+
     @Test void neverPartiallyLoadsCorruptSnapshots() throws IOException {
         Path path = temporary.resolve("broken.json");
         Files.writeString(path, """

@@ -32,7 +32,8 @@ public final class BuildMaterialIndex {
     public static final int MAX_CONTAINERS = 2048;
     private final Map<BlockPos, Storage> entries = new LinkedHashMap<>();
 
-    public record Storage(BlockPos pos, String block, Map<String, Integer> items) {
+    /** `owned` marks a shulker this addon placed and may break once emptied. */
+    public record Storage(BlockPos pos, String block, Map<String, Integer> items, boolean owned) {
         public Storage {
             pos = pos.immutable();
             items = Map.copyOf(items);
@@ -45,7 +46,12 @@ public final class BuildMaterialIndex {
     public void clear() { entries.clear(); }
 
     public boolean update(BlockPos pos, String block, Map<String, Integer> items) {
-        Storage next = new Storage(pos, block, items);
+        Storage previous = entries.get(pos);
+        return update(pos, block, items, previous != null && previous.owned() && previous.block().equals(block));
+    }
+
+    public boolean update(BlockPos pos, String block, Map<String, Integer> items, boolean owned) {
+        Storage next = new Storage(pos, block, items, owned);
         if (next.equals(entries.get(pos))) return false;
         if (!entries.containsKey(pos) && entries.size() >= MAX_CONTAINERS)
             throw new IllegalStateException("Storage index is full; remove unused containers.");
@@ -76,10 +82,11 @@ public final class BuildMaterialIndex {
                 Map<String, Integer> items = new LinkedHashMap<>();
                 for (var entry : container.getAsJsonObject("items").entrySet()) {
                     int count = entry.getValue().getAsInt();
-                    if (count < 1 || count > 54 * 99) throw new IOException("Invalid storage item count.");
+                    if (count < 1 || count > 54 * 27 * 99) throw new IOException("Invalid storage item count.");
                     items.put(entry.getKey(), count);
                 }
-                loaded.put(pos, new Storage(pos, container.get("block").getAsString(), items));
+                loaded.put(pos, new Storage(pos, container.get("block").getAsString(), items,
+                    container.has("owned") && container.get("owned").getAsBoolean()));
             }
         } catch (RuntimeException e) {
             throw new IOException("Invalid storage index.", e);
@@ -98,6 +105,7 @@ public final class BuildMaterialIndex {
             container.addProperty("z", storage.pos().getZ());
             container.addProperty("block", storage.block());
             container.add("items", new Gson().toJsonTree(storage.items()));
+            if (storage.owned()) container.addProperty("owned", true);
             containers.add(container);
         }
         root.add("containers", containers);
