@@ -73,6 +73,7 @@ import net.minecraft.client.gui.screens.inventory.ShulkerBoxScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
+import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.client.player.ClientInput;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -12361,7 +12362,7 @@ public class HighwayBuilderTHM extends Module {
                             reason + "-api-commit"
                         );
                         if (committed != null) {
-                            String server = mc.getCurrentServer() != null ? mc.getCurrentServer().ip : "singleplayer";
+                            String server = mc.getCurrentServer() != null ? ServerAddress.parseString(mc.getCurrentServer().ip).getHost() : "singleplayer"; // ":port" would shift the report fields
                             String dimension = manualPause != null ? manualPause.dimension()
                                 : continuity != null ? continuity.dimension() : mc.level.dimension().identifier().toString();
                             String route = AxisViewer.highwayRoute(start, end, dimension.equals("minecraft:the_nether"), dir);
